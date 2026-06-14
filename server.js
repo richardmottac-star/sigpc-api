@@ -56,12 +56,17 @@ function buildWhere(filters) {
 app.get('/usuarios', async (req, res) => {
   try {
     const { cpf, setorial_id, perfil, ativo } = req.query;
-    const filters = {};
-    if (cpf) filters.cpf = cpf;
-    if (setorial_id) filters.setorial_id = setorial_id;
-    if (perfil) filters.perfil = perfil;
-    if (ativo !== undefined) filters.ativo = ativo === 'true';
-    const { where, values } = buildWhere(filters);
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (cpf) { conditions.push(`cpf = $${i++}`); values.push(cpf); }
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    if (perfil) { conditions.push(`perfil = $${i++}`); values.push(perfil); }
+    if (ativo !== undefined) { conditions.push(`ativo = $${i++}`); values.push(ativo === 'true'); }
+    // Suporte a _gte_ultimo_acesso para "online agora"
+    const gteUltimoAcesso = req.query['_gte_ultimo_acesso'];
+    if (gteUltimoAcesso) { conditions.push(`ultimo_acesso >= $${i++}`); values.push(gteUltimoAcesso); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(`SELECT * FROM usuarios ${where} ORDER BY nome`, values);
     res.json({ data: rows, error: null });
   } catch (e) {
@@ -130,7 +135,7 @@ app.get('/setoriais', async (req, res) => {
 // ══════════════════════════════════════
 app.get('/estoque', async (req, res) => {
   try {
-    const { setorial_id, status, busca, limit = 20, offset = 0 } = req.query;
+    const { setorial_id, status, busca, limit = 9999, offset = 0 } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
@@ -189,11 +194,12 @@ app.patch('/estoque/:id', async (req, res) => {
 // ══════════════════════════════════════
 app.get('/planilha_analista', async (req, res) => {
   try {
-    const { analista, situacao, busca, limit = 20, offset = 0 } = req.query;
+    const { analista, setorial_id, situacao, busca, limit = 9999, offset = 0 } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
 
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     if (analista) { conditions.push(`analista ILIKE $${i++}`); values.push(`${analista}%`); }
     if (situacao) { conditions.push(`situacao = $${i++}`); values.push(situacao); }
     if (busca) {
@@ -204,7 +210,7 @@ app.get('/planilha_analista', async (req, res) => {
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const countRes = await pool.query(`SELECT COUNT(*) FROM planilha_analista ${where}`, values);
     const { rows } = await pool.query(
-      `SELECT * FROM planilha_analista ${where} ORDER BY tr LIMIT $${i++} OFFSET $${i++}`,
+      `SELECT * FROM planilha_analista ${where} ORDER BY analista, tr LIMIT $${i++} OFFSET $${i++}`,
       [...values, parseInt(limit), parseInt(offset)]
     );
     res.json({ data: rows, count: parseInt(countRes.rows[0].count), error: null });

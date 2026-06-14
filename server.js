@@ -240,6 +240,24 @@ app.patch('/planilha_analista/:id', async (req, res) => {
   }
 });
 
+
+// POST /planilha_analista — inserir registro (usado ao assumir TR)
+app.post('/planilha_analista', async (req, res) => {
+  try {
+    const b = req.body;
+    const cols = Object.keys(b);
+    const vals = cols.map((_, i) => `$${i + 1}`);
+    const values = cols.map(k => b[k]);
+    const { rows } = await pool.query(
+      `INSERT INTO planilha_analista (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING *`,
+      values
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // Rota dedicada: grupos por analista (para produtividade)
 app.get('/estoque/grupos-analistas', async (req, res) => {
   try {

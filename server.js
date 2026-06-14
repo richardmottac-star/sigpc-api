@@ -240,6 +240,56 @@ app.patch('/planilha_analista/:id', async (req, res) => {
   }
 });
 
+// Rota dedicada: grupos por analista (para produtividade)
+app.get('/estoque/grupos-analistas', async (req, res) => {
+  try {
+    const { setorial_id } = req.query;
+    const where = setorial_id ? 'WHERE setorial_id = $1 AND tecnico_nome IS NOT NULL' : 'WHERE tecnico_nome IS NOT NULL';
+    const values = setorial_id ? [setorial_id] : [];
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (tecnico_nome) tecnico_nome, grupo FROM estoque ${where} ORDER BY tecnico_nome, grupo`,
+      values
+    );
+    res.json({ data: rows, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// Rota planilha com JOIN no estoque (para Minha Planilha completa)
+app.get('/planilha_analista/completa', async (req, res) => {
+  try {
+    const { analista, setorial_id, situacao, limit = 9999, offset = 0 } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (setorial_id) { conditions.push(`p.setorial_id = $${i++}`); values.push(setorial_id); }
+    if (analista) { conditions.push(`p.analista ILIKE $${i++}`); values.push(`${analista}%`); }
+    if (situacao) { conditions.push(`p.situacao = $${i++}`); values.push(situacao); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM planilha_analista p ${where}`, values
+    );
+    const { rows } = await pool.query(
+      `SELECT p.*, 
+        e.beneficiario AS entidade,
+        e.processo_sgp AS sgpe,
+        e.processo_mae,
+        e.valor_repasse,
+        e.grupo
+       FROM planilha_analista p
+       LEFT JOIN estoque e ON e.tr = p.tr AND e.parcela = p.parcela AND e.setorial_id = p.setorial_id
+       ${where}
+       ORDER BY p.tr, p.parcela
+       LIMIT $${i++} OFFSET $${i++}`,
+      [...values, parseInt(limit), parseInt(offset)]
+    );
+    res.json({ data: rows, count: parseInt(countRes.rows[0].count), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // Contagem para produtividade
 app.get('/planilha_analista/baixadas/:analista', async (req, res) => {
   try {

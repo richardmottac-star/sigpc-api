@@ -325,6 +325,67 @@ app.get('/contadores', async (req, res) => {
   }
 });
 
+
+// ══════════════════════════════════════
+//  MIGRAÇÃO DE DADOS
+// ══════════════════════════════════════
+
+app.delete('/migracao/limpar-estoque', async (req, res) => {
+  try {
+    await pool.query("DELETE FROM estoque WHERE setorial_id = 'FCEE'");
+    res.json({ ok: true, msg: 'Estoque FCEE removido' });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.delete('/migracao/limpar-planilha', async (req, res) => {
+  try {
+    await pool.query("DELETE FROM planilha_analista WHERE setorial_id = 'FCEE'");
+    res.json({ ok: true, msg: 'Planilha FCEE removida' });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.post('/migracao/estoque', async (req, res) => {
+  const registros = req.body;
+  if (!Array.isArray(registros) || registros.length === 0)
+    return res.status(400).json({ erro: 'Body deve ser array' });
+  try {
+    const cols = ['tr','beneficiario','cnpj_cpf','parcela','processo_sgp','processo_mae',
+                  'valor_repasse','data_limite_pc','prazo_analise','situacao',
+                  'status','tecnico_nome','setorial_id','atualizado_em'];
+    const vals = registros.map((r, i) => {
+      const base = i * cols.length;
+      return `(${cols.map((_,j) => `$${base+j+1}`).join(',')})`;
+    });
+    const params = registros.flatMap(r => [
+      r.tr, r.beneficiario, r.cnpj_cpf, r.parcela, r.processo_sgp, r.processo_mae,
+      r.valor_repasse, r.data_limite_pc, r.prazo_analise, r.situacao,
+      r.status, r.tecnico_nome, r.setorial_id, new Date().toISOString(),
+    ]);
+    await pool.query(`INSERT INTO estoque (${cols.join(',')}) VALUES ${vals.join(',')}`, params);
+    res.json({ ok: true, inseridos: registros.length });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+app.post('/migracao/planilha-analista', async (req, res) => {
+  const registros = req.body;
+  if (!Array.isArray(registros) || registros.length === 0)
+    return res.status(400).json({ erro: 'Body deve ser array' });
+  try {
+    const cols = ['analista','setorial_id','tr','parcela','beneficiario',
+                  'processo_sgp','situacao','baixada','atualizado_em'];
+    const vals = registros.map((r, i) => {
+      const base = i * cols.length;
+      return `(${cols.map((_,j) => `$${base+j+1}`).join(',')})`;
+    });
+    const params = registros.flatMap(r => [
+      r.analista, r.setorial_id, r.tr, r.parcela, r.beneficiario,
+      r.processo_sgp, r.situacao, r.baixada, new Date().toISOString(),
+    ]);
+    await pool.query(`INSERT INTO planilha_analista (${cols.join(',')}) VALUES ${vals.join(',')}`, params);
+    res.json({ ok: true, inseridos: registros.length });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // ══════════════════════════════════════
 //  START
 // ══════════════════════════════════════

@@ -1,7 +1,7 @@
 {
   "name": "sigpc-api",
   "version": "1.0.0",
-  "description": "API SIGPC-GT - Sistema de Gestão de Prestações de Contas",
+  "description": "API SIGPC-GT",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

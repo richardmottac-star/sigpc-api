@@ -325,28 +325,73 @@ app.get('/planilha_analista/baixadas/:analista', async (req, res) => {
 // ══════════════════════════════════════
 //  NOTAS_LIQUIDACAO
 // ══════════════════════════════════════
+// GET /notas_liquidacao?tr=X&parcela=Y&baixada=true&limit=1&setorial_id=FCEE&trs=A,B,C
 app.get('/notas_liquidacao', async (req, res) => {
   try {
-    const { tr, parcela, trs } = req.query;
-    let rows;
+    const { tr, parcela, trs, baixada, limit, setorial_id } = req.query;
     if (trs) {
       const lista = trs.split(',');
-      const res2 = await pool.query(
+      const { rows } = await pool.query(
         `SELECT * FROM notas_liquidacao WHERE tr = ANY($1) ORDER BY tr`,
         [lista]
       );
-      rows = res2.rows;
-    } else {
-      const conditions = [];
-      const values = [];
-      let i = 1;
-      if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
-      if (parcela) { conditions.push(`parcela = $${i++}`); values.push(parcela); }
-      const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-      const res2 = await pool.query(`SELECT * FROM notas_liquidacao ${where}`, values);
-      rows = res2.rows;
+      return res.json({ data: rows, count: rows.length, error: null });
     }
-    res.json({ data: rows, error: null });
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
+    if (parcela) { conditions.push(`parcela = $${i++}`); values.push(parseInt(parcela)); }
+    if (baixada !== undefined) { conditions.push(`baixada = $${i++}`); values.push(baixada === 'true'); }
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    let sql = `SELECT * FROM notas_liquidacao ${where} ORDER BY parcela, codigo_nl`;
+    if (limit) { sql += ` LIMIT $${i++}`; values.push(parseInt(limit)); }
+    const { rows } = await pool.query(sql, values);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, count: 0, error: { message: e.message } });
+  }
+});
+
+// PATCH /notas_liquidacao/baixar-parcela — baixa TODAS NLs de um TR+PARCELA
+// (precisa vir antes de /:id, senão "baixar-parcela" seria capturado como id)
+app.patch('/notas_liquidacao/baixar-parcela', async (req, res) => {
+  try {
+    const { tr, parcela, baixada } = req.body;
+    if (!tr || parcela === undefined)
+      return res.status(400).json({ error: { message: 'tr e parcela são obrigatórios' } });
+    const { rows, rowCount } = await pool.query(
+      `UPDATE notas_liquidacao SET baixada = $1, atualizado_em = NOW()
+       WHERE tr = $2 AND parcela = $3 RETURNING *`,
+      [baixada !== false, tr, parseInt(parcela)]
+    );
+    res.json({ data: rows, count: rowCount, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /notas_liquidacao/:id
+app.patch('/notas_liquidacao/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const campos = req.body;
+    const sets = [];
+    const params = [];
+    let p = 1;
+    const permitidos = ['baixada', 'situacao_pc', 'setorial_id'];
+    permitidos.forEach(c => {
+      if (campos[c] !== undefined) {
+        sets.push(`${c} = $${p++}`);
+        params.push(campos[c]);
+      }
+    });
+    sets.push(`atualizado_em = NOW()`);
+    params.push(parseInt(id));
+    const sql = `UPDATE notas_liquidacao SET ${sets.join(', ')} WHERE id = $${p} RETURNING *`;
+    const { rows } = await pool.query(sql, params);
+    res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }

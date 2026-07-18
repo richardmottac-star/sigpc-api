@@ -544,17 +544,22 @@ app.get('/prestacoes_contas', async (req, res) => {
   }
 });
 
-// GET /prestacoes_contas/resumo_tr?analista_id=X — agrupado por TR
+// GET /prestacoes_contas/resumo_tr?analista_id=X&setorial_id=X&busca=X — agrupado por TR
 app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
   try {
-    const { analista_id } = req.query;
+    const { analista_id, setorial_id, busca } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
     if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    if (busca) {
+      conditions.push(`(tr ILIKE $${i} OR entidade ILIKE $${i})`);
+      values.push(`%${busca}%`); i++;
+    }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(
-      `SELECT tr, MAX(entidade) AS entidade,
+      `SELECT tr, MAX(entidade) AS entidade, MAX(analista_nome) AS analista_nome,
               COUNT(*) AS total_pcs,
               COUNT(DISTINCT codigo_nl) AS total_nls,
               COUNT(*) FILTER (WHERE baixada) AS baixadas,
@@ -664,6 +669,35 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
       params
     );
     res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /prestacoes_contas/:codigo_pc — atualização pontual (ex: assumir TR)
+// precisa vir depois de /baixar e /estornar, senão "baixar"/"estornar" seriam capturados como codigo_pc
+app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
+  try {
+    const campos = req.body;
+    const sets = [];
+    const values = [];
+    let i = 1;
+    const permitidos = ['analista_nome', 'analista_id', 'status'];
+    permitidos.forEach(c => {
+      if (campos[c] !== undefined) {
+        sets.push(`${c} = $${i++}`);
+        values.push(campos[c]);
+      }
+    });
+    if (sets.length === 0)
+      return res.status(400).json({ data: null, error: { message: 'nenhum campo permitido informado' } });
+    sets.push(`atualizado_em = NOW()`);
+    values.push(req.params.codigo_pc);
+    const { rows } = await pool.query(
+      `UPDATE prestacoes_contas SET ${sets.join(', ')} WHERE codigo_pc = $${i} RETURNING *`,
+      values
+    );
+    res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }

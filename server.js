@@ -135,13 +135,15 @@ app.get('/setoriais', async (req, res) => {
 // ══════════════════════════════════════
 app.get('/estoque', async (req, res) => {
   try {
-    const { setorial_id, status, busca, limit = 9999, offset = 0 } = req.query;
+    const { setorial_id, status, busca, tr, parcela, limit = 9999, offset = 0 } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
 
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     if (status) { conditions.push(`status = $${i++}`); values.push(status); }
+    if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
+    if (parcela) { conditions.push(`parcela = $${i++}`); values.push(parcela); }
     if (busca) {
       conditions.push(`(tr ILIKE $${i} OR beneficiario ILIKE $${i})`);
       values.push(`%${busca}%`); i++;

@@ -584,19 +584,25 @@ app.get('/prestacoes_contas/nl_compartilhada', async (req, res) => {
   }
 });
 
-// PATCH /prestacoes_contas/baixar — body { codigos_pc: [], parecer_tipo, analista_id, registrado_por }
+// PATCH /prestacoes_contas/baixar — body { codigos_pc: [], parecer_tipo, analista_id, registrado_por, override }
 app.patch('/prestacoes_contas/baixar', async (req, res) => {
   try {
-    const { codigos_pc, parecer_tipo, analista_id, registrado_por } = req.body;
+    const { codigos_pc, parecer_tipo, analista_id, registrado_por, override } = req.body;
     if (!Array.isArray(codigos_pc) || codigos_pc.length === 0)
       return res.status(400).json({ data: null, error: { message: 'codigos_pc é obrigatório' } });
+    const params = [parecer_tipo, registrado_por, codigos_pc];
+    let where = 'codigo_pc = ANY($3)';
+    if (override !== true) {
+      params.push(analista_id);
+      where += ' AND analista_id = $4';
+    }
     const { rows } = await pool.query(
       `UPDATE prestacoes_contas
        SET baixada = true, data_baixa = NOW(), origem_baixa = 'sistema', status = 'baixada',
            parecer_tipo = $1, registrado_por = $2, atualizado_em = NOW()
-       WHERE codigo_pc = ANY($3) AND analista_id = $4
+       WHERE ${where}
        RETURNING codigo_pc`,
-      [parecer_tipo, registrado_por, codigos_pc, analista_id]
+      params
     );
     res.json({ data: rows, count: rows.length, error: null });
   } catch (e) {

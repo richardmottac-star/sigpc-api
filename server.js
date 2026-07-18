@@ -506,6 +506,156 @@ app.post('/migracao/planilha-analista', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  PRESTACOES_CONTAS (SIGPC-GT)
+// ══════════════════════════════════════
+app.get('/prestacoes_contas', async (req, res) => {
+  try {
+    const {
+      tr, codigo_pc, codigo_nl, analista_id, analista_nome, grupo,
+      status, baixada, setorial_id, conflito, limit = 9999, offset = 0
+    } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+
+    if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
+    if (codigo_pc) { conditions.push(`codigo_pc = $${i++}`); values.push(codigo_pc); }
+    if (codigo_nl) { conditions.push(`codigo_nl = $${i++}`); values.push(codigo_nl); }
+    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    if (analista_nome) { conditions.push(`analista_nome = $${i++}`); values.push(analista_nome); }
+    if (grupo) { conditions.push(`grupo = $${i++}`); values.push(parseInt(grupo)); }
+    if (status) { conditions.push(`status = $${i++}`); values.push(status); }
+    if (baixada !== undefined) { conditions.push(`baixada = $${i++}`); values.push(baixada === 'true'); }
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    if (conflito !== undefined) { conditions.push(`conflito = $${i++}`); values.push(conflito === 'true'); }
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas ${where}`, values);
+    const { rows } = await pool.query(
+      `SELECT * FROM prestacoes_contas ${where} ORDER BY tr LIMIT $${i++} OFFSET $${i++}`,
+      [...values, parseInt(limit), parseInt(offset)]
+    );
+    res.json({ data: rows, count: parseInt(countRes.rows[0].count), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /prestacoes_contas/resumo_tr?analista_id=X — agrupado por TR
+app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
+  try {
+    const { analista_id } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT tr, MAX(entidade) AS entidade,
+              COUNT(*) AS total_pcs,
+              COUNT(DISTINCT codigo_nl) AS total_nls,
+              COUNT(*) FILTER (WHERE baixada) AS baixadas,
+              array_agg(DISTINCT status) AS status
+       FROM prestacoes_contas
+       ${where}
+       GROUP BY tr
+       ORDER BY tr`,
+      values
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /prestacoes_contas/nl_compartilhada?codigo_nl=X — PCs que compartilham a NL
+app.get('/prestacoes_contas/nl_compartilhada', async (req, res) => {
+  try {
+    const { codigo_nl } = req.query;
+    if (!codigo_nl)
+      return res.status(400).json({ data: null, error: { message: 'codigo_nl é obrigatório' } });
+    const { rows } = await pool.query(
+      `SELECT * FROM prestacoes_contas WHERE codigo_nl = $1 ORDER BY tr`,
+      [codigo_nl]
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /prestacoes_contas/baixar — body { codigos_pc: [], parecer_tipo, analista_id, registrado_por }
+app.patch('/prestacoes_contas/baixar', async (req, res) => {
+  try {
+    const { codigos_pc, parecer_tipo, analista_id, registrado_por } = req.body;
+    if (!Array.isArray(codigos_pc) || codigos_pc.length === 0)
+      return res.status(400).json({ data: null, error: { message: 'codigos_pc é obrigatório' } });
+    const { rows } = await pool.query(
+      `UPDATE prestacoes_contas
+       SET baixada = true, data_baixa = NOW(), origem_baixa = 'sistema', status = 'baixada',
+           parecer_tipo = $1, registrado_por = $2, atualizado_em = NOW()
+       WHERE codigo_pc = ANY($3) AND analista_id = $4
+       RETURNING codigo_pc`,
+      [parecer_tipo, registrado_por, codigos_pc, analista_id]
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
+//  ANOTACOES_TR
+// ══════════════════════════════════════
+app.get('/anotacoes_tr', async (req, res) => {
+  try {
+    const { tr } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT * FROM anotacoes_tr ${where} ORDER BY criado_em DESC`,
+      values
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.post('/anotacoes_tr', async (req, res) => {
+  try {
+    const { tr, analista_id, analista_nome, texto } = req.body;
+    const { rows } = await pool.query(
+      `INSERT INTO anotacoes_tr (tr, analista_id, analista_nome, texto)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [tr, analista_id, analista_nome, texto]
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// DELETE /anotacoes_tr/:id — só apaga se analista_id do body bater com o do registro
+app.delete('/anotacoes_tr/:id', async (req, res) => {
+  try {
+    const { analista_id } = req.body;
+    const { rows } = await pool.query(
+      `DELETE FROM anotacoes_tr WHERE id = $1 AND analista_id = $2 RETURNING *`,
+      [req.params.id, analista_id]
+    );
+    if (rows.length === 0)
+      return res.status(403).json({ data: null, error: { message: 'Não autorizado ou anotação não encontrada' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  START
 // ══════════════════════════════════════
 const PORT = process.env.PORT || 3000;

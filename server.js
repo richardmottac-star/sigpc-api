@@ -577,11 +577,27 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
 });
 
 // GET /prestacoes_contas/nl_compartilhada?codigo_nl=X — PCs que compartilham a NL
+// GET /prestacoes_contas/nl_compartilhada?codigo_pc=X — quantas outras PCs da mesma NL ainda não foram baixadas
 app.get('/prestacoes_contas/nl_compartilhada', async (req, res) => {
   try {
-    const { codigo_nl } = req.query;
+    const { codigo_nl, codigo_pc } = req.query;
+
+    if (codigo_pc) {
+      const pcRes = await pool.query('SELECT codigo_nl FROM prestacoes_contas WHERE codigo_pc = $1', [codigo_pc]);
+      if (pcRes.rows.length === 0)
+        return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } });
+      const nl = pcRes.rows[0].codigo_nl;
+      if (!nl)
+        return res.json({ data: { codigo_nl: null, outras_nao_baixadas: 0 }, error: null });
+      const outrasRes = await pool.query(
+        `SELECT COUNT(*) FROM prestacoes_contas WHERE codigo_nl = $1 AND codigo_pc != $2 AND baixada = false`,
+        [nl, codigo_pc]
+      );
+      return res.json({ data: { codigo_nl: nl, outras_nao_baixadas: parseInt(outrasRes.rows[0].count) }, error: null });
+    }
+
     if (!codigo_nl)
-      return res.status(400).json({ data: null, error: { message: 'codigo_nl é obrigatório' } });
+      return res.status(400).json({ data: null, error: { message: 'codigo_nl ou codigo_pc é obrigatório' } });
     const { rows } = await pool.query(
       `SELECT * FROM prestacoes_contas WHERE codigo_nl = $1 ORDER BY tr`,
       [codigo_nl]
@@ -698,6 +714,43 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
       values
     );
     res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /prestacoes_contas/registrar_parecer — body { codigo_pc, parecer_tipo, analista_nome, analista_id, baixar_nl_completa }
+app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
+  try {
+    const { codigo_pc, parecer_tipo, analista_nome, baixar_nl_completa } = req.body;
+    if (!codigo_pc)
+      return res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório' } });
+
+    const pcRes = await pool.query('SELECT codigo_nl FROM prestacoes_contas WHERE codigo_pc = $1', [codigo_pc]);
+    if (pcRes.rows.length === 0)
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } });
+    const { codigo_nl } = pcRes.rows[0];
+
+    const params = [parecer_tipo, analista_nome];
+    let where;
+    if (baixar_nl_completa === true && codigo_nl) {
+      params.push(codigo_nl);
+      where = `codigo_nl = $3 AND status != 'baixada'`;
+    } else {
+      params.push(codigo_pc);
+      where = `codigo_pc = $3`;
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE prestacoes_contas
+       SET baixada = true, status = 'baixada', parecer_tipo = $1,
+           data_baixa = NOW(), origem_baixa = 'sistema', registrado_por = $2,
+           atualizado_em = NOW()
+       WHERE ${where}
+       RETURNING codigo_pc`,
+      params
+    );
+    res.json({ data: rows.map(r => r.codigo_pc), count: rows.length, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }

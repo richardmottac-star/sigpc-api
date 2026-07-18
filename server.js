@@ -514,7 +514,7 @@ app.get('/prestacoes_contas', async (req, res) => {
   try {
     const {
       tr, codigo_pc, codigo_nl, analista_id, analista_nome, grupo,
-      status, baixada, setorial_id, conflito, limit = 9999, offset = 0
+      status, baixada, setorial_id, conflito, estornada, limit = 9999, offset = 0
     } = req.query;
     const conditions = [];
     const values = [];
@@ -530,6 +530,7 @@ app.get('/prestacoes_contas', async (req, res) => {
     if (baixada !== undefined) { conditions.push(`baixada = $${i++}`); values.push(baixada === 'true'); }
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     if (conflito !== undefined) { conditions.push(`conflito = $${i++}`); values.push(conflito === 'true'); }
+    if (estornada !== undefined) { conditions.push(`estornada = $${i++}`); values.push(estornada === 'true'); }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas ${where}`, values);

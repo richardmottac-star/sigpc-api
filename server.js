@@ -757,6 +757,28 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  METAS_ANALISTAS
+// ══════════════════════════════════════
+// GET /metas_analistas?analista_id=X&grupo=X&periodo=X&vigente=true
+app.get('/metas_analistas', async (req, res) => {
+  try {
+    const { analista_id, grupo, periodo, vigente } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    if (grupo) { conditions.push(`grupo = $${i++}`); values.push(parseInt(grupo)); }
+    if (periodo) { conditions.push(`periodo = $${i++}`); values.push(periodo); }
+    if (vigente !== undefined) { conditions.push(`vigente = $${i++}`); values.push(vigente === 'true'); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const { rows } = await pool.query(`SELECT * FROM metas_analistas ${where} ORDER BY analista_nome`, values);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  ANOTACOES_TR
 // ══════════════════════════════════════
 app.get('/anotacoes_tr', async (req, res) => {

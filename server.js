@@ -584,6 +584,27 @@ app.get('/prestacoes_contas/nl_compartilhada', async (req, res) => {
   }
 });
 
+// GET /prestacoes_contas/produtividade?corte=YYYY-MM-DD&analista_id=X
+app.get('/prestacoes_contas/produtividade', async (req, res) => {
+  try {
+    const { corte, analista_id } = req.query;
+    if (!corte)
+      return res.status(400).json({ data: null, error: { message: 'corte é obrigatório' } });
+    const conditions = ['data_baixa <= $1', '(estornada = false OR data_estorno > $1)'];
+    const values = [corte];
+    let i = 2;
+    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    const where = 'WHERE ' + conditions.join(' AND ');
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) FROM prestacoes_contas ${where}`,
+      values
+    );
+    res.json({ data: { total: parseInt(rows[0].count) }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // PATCH /prestacoes_contas/baixar — body { codigos_pc: [], parecer_tipo, analista_id, registrado_por, override }
 app.patch('/prestacoes_contas/baixar', async (req, res) => {
   try {
@@ -600,6 +621,41 @@ app.patch('/prestacoes_contas/baixar', async (req, res) => {
       `UPDATE prestacoes_contas
        SET baixada = true, data_baixa = NOW(), origem_baixa = 'sistema', status = 'baixada',
            parecer_tipo = $1, registrado_por = $2, atualizado_em = NOW()
+       WHERE ${where}
+       RETURNING codigo_pc`,
+      params
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /prestacoes_contas/estornar — body { codigos_pc: [], motivo, usuario_id, usuario_nome, perfil, grupo }
+app.patch('/prestacoes_contas/estornar', async (req, res) => {
+  try {
+    const { codigos_pc, motivo, usuario_id, usuario_nome, perfil, grupo } = req.body;
+    if (!Array.isArray(codigos_pc) || codigos_pc.length === 0)
+      return res.status(400).json({ data: null, error: { message: 'codigos_pc é obrigatório' } });
+    if (!motivo || motivo.trim().length < 15)
+      return res.status(400).json({ data: null, error: { message: 'motivo deve ter no mínimo 15 caracteres' } });
+
+    const params = [motivo, usuario_nome, codigos_pc];
+    let where = 'codigo_pc = ANY($3)';
+    if (perfil === 'analista') {
+      params.push(usuario_id);
+      where += ` AND analista_id = $${params.length}`;
+    } else if (perfil === 'coordenador') {
+      params.push(parseInt(grupo));
+      where += ` AND grupo = $${params.length}`;
+    } else if (perfil !== 'master') {
+      return res.status(403).json({ data: null, error: { message: 'perfil não autorizado a estornar' } });
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE prestacoes_contas
+       SET estornada = true, data_estorno = NOW(), status = 'analise', baixada = false,
+           motivo_estorno = $1, estornado_por = $2, atualizado_em = NOW()
        WHERE ${where}
        RETURNING codigo_pc`,
       params

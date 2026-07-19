@@ -556,12 +556,13 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
     if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     if (busca) {
-      conditions.push(`(tr ILIKE $${i} OR entidade ILIKE $${i})`);
+      conditions.push(`(tr ILIKE $${i} OR entidade ILIKE $${i} OR processo_mae ILIKE $${i} OR processo_pc ILIKE $${i})`);
       values.push(`%${busca}%`); i++;
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(
       `SELECT tr, MAX(entidade) AS entidade, MAX(analista_nome) AS analista_nome,
+              MAX(processo_mae) AS processo_mae,
               COUNT(*) AS total_pcs,
               COUNT(DISTINCT codigo_nl) AS total_nls,
               COUNT(*) FILTER (WHERE baixada) AS baixadas,
@@ -586,7 +587,7 @@ app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
     if (!analista_id)
       return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
     const { rows } = await pool.query(
-      `SELECT tr, entidade, codigo_pc, dt_limite_pc,
+      `SELECT tr, entidade, codigo_pc, processo_pc, dt_limite_pc,
               (CURRENT_DATE - dt_limite_pc) AS dias
        FROM prestacoes_contas
        WHERE analista_id = $1 AND status <> 'baixada' AND dt_limite_pc IS NOT NULL

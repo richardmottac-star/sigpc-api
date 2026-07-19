@@ -55,13 +55,14 @@ function buildWhere(filters) {
 // ══════════════════════════════════════
 app.get('/usuarios', async (req, res) => {
   try {
-    const { cpf, setorial_id, perfil, ativo } = req.query;
+    const { cpf, setorial_id, perfil, grupo, ativo } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
     if (cpf) { conditions.push(`cpf = $${i++}`); values.push(cpf); }
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     if (perfil) { conditions.push(`perfil = $${i++}`); values.push(perfil); }
+    if (grupo) { conditions.push(`grupo = $${i++}`); values.push(grupo); }
     if (ativo !== undefined) { conditions.push(`ativo = $${i++}`); values.push(ativo === 'true'); }
     // Suporte a _gte_ultimo_acesso para "online agora"
     const gteUltimoAcesso = req.query['_gte_ultimo_acesso'];
@@ -87,9 +88,9 @@ app.post('/usuarios', async (req, res) => {
   try {
     const b = req.body;
     const { rows } = await pool.query(
-      `INSERT INTO usuarios (nome, cpf, senha_hash, perfil, setorial_id, ativo, criado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,NOW()) RETURNING *`,
-      [b.nome, b.cpf, b.senha_hash, b.perfil, b.setorial_id, b.ativo ?? true]
+      `INSERT INTO usuarios (nome, cpf, senha_hash, perfil, setorial_id, grupo, ativo, criado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING *`,
+      [b.nome, b.cpf, b.senha_hash, b.perfil, b.setorial_id, b.grupo ?? null, b.ativo ?? true]
     );
     res.json({ data: rows[0], error: null });
   } catch (e) {
@@ -514,7 +515,7 @@ app.get('/prestacoes_contas', async (req, res) => {
   try {
     const {
       tr, codigo_pc, codigo_nl, analista_id, analista_nome, grupo,
-      status, baixada, setorial_id, conflito, estornada, limit = 9999, offset = 0
+      status, baixada, setorial_id, conflito, estornada, enviado_ci, limit = 9999, offset = 0
     } = req.query;
     const conditions = [];
     const values = [];
@@ -531,6 +532,7 @@ app.get('/prestacoes_contas', async (req, res) => {
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     if (conflito !== undefined) { conditions.push(`conflito = $${i++}`); values.push(conflito === 'true'); }
     if (estornada !== undefined) { conditions.push(`estornada = $${i++}`); values.push(estornada === 'true'); }
+    if (enviado_ci !== undefined) { conditions.push(`enviado_ci = $${i++}`); values.push(enviado_ci === 'true'); }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas ${where}`, values);
@@ -571,6 +573,37 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
       values
     );
     res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /prestacoes_contas/alertas_prazo?analista_id=X — alertas de prazo do analista, calculados em tempo real
+// (dias = CURRENT_DATE - dt_limite_pc: positivo = vencida, negativo = a vencer)
+app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
+  try {
+    const { analista_id } = req.query;
+    if (!analista_id)
+      return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+    const { rows } = await pool.query(
+      `SELECT tr, entidade, codigo_pc, dt_limite_pc,
+              (CURRENT_DATE - dt_limite_pc) AS dias
+       FROM prestacoes_contas
+       WHERE analista_id = $1 AND status <> 'baixada' AND dt_limite_pc IS NOT NULL
+         AND (CURRENT_DATE - dt_limite_pc) >= -30
+       ORDER BY dias DESC`,
+      [parseInt(analista_id)]
+    );
+    const vencida365 = rows.filter(r => r.dias > 365);
+    const vencidaMenos365 = rows.filter(r => r.dias > 0 && r.dias <= 365);
+    const aVencer30 = rows.filter(r => r.dias <= 0);
+    res.json({
+      data: {
+        contagem: { vencida365: vencida365.length, vencidaMenos365: vencidaMenos365.length, aVencer30: aVencer30.length },
+        top10: rows.slice(0, 10)
+      },
+      error: null
+    });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -698,7 +731,7 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
     const sets = [];
     const values = [];
     let i = 1;
-    const permitidos = ['analista_nome', 'analista_id', 'status'];
+    const permitidos = ['analista_nome', 'analista_id', 'status', 'enviado_ci', 'dt_envio_ci'];
     permitidos.forEach(c => {
       if (campos[c] !== undefined) {
         sets.push(`${c} = $${i++}`);

@@ -55,7 +55,7 @@ function buildWhere(filters) {
 // ══════════════════════════════════════
 app.get('/usuarios', async (req, res) => {
   try {
-    const { cpf, setorial_id, perfil, grupo, ativo } = req.query;
+    const { cpf, setorial_id, perfil, grupo, ativo, aguardando_aprovacao } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
@@ -64,6 +64,7 @@ app.get('/usuarios', async (req, res) => {
     if (perfil) { conditions.push(`perfil = $${i++}`); values.push(perfil); }
     if (grupo) { conditions.push(`grupo = $${i++}`); values.push(grupo); }
     if (ativo !== undefined) { conditions.push(`ativo = $${i++}`); values.push(ativo === 'true'); }
+    if (aguardando_aprovacao !== undefined) { conditions.push(`aguardando_aprovacao = $${i++}`); values.push(aguardando_aprovacao === 'true'); }
     // Suporte a _gte_ultimo_acesso para "online agora"
     const gteUltimoAcesso = req.query['_gte_ultimo_acesso'];
     if (gteUltimoAcesso) { conditions.push(`ultimo_acesso >= $${i++}`); values.push(gteUltimoAcesso); }
@@ -98,6 +99,12 @@ app.post('/usuarios', async (req, res) => {
   }
 });
 
+// Campos que podem ser alterados via PATCH /usuarios/:id
+const USUARIOS_PATCH_PERMITIDOS = [
+  'nome', 'cpf', 'perfil', 'setorial_id', 'grupo', 'ativo', 'senha_hash', 'ultimo_acesso',
+  'regiao', 'municipio', 'telefone', 'email', 'nucleo', 'foto_base64', 'aprovado', 'aguardando_aprovacao'
+];
+
 app.patch('/usuarios/:id', async (req, res) => {
   try {
     const b = req.body;
@@ -105,14 +112,92 @@ app.patch('/usuarios/:id', async (req, res) => {
     const values = [];
     let i = 1;
     for (const [k, v] of Object.entries(b)) {
+      if (!USUARIOS_PATCH_PERMITIDOS.includes(k)) continue;
       sets.push(`${k} = $${i++}`);
       values.push(v);
+    }
+    if (sets.length === 0)
+      return res.status(400).json({ data: null, error: { message: 'Nenhum campo permitido informado' } });
+    values.push(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /usuarios/primeiro_acesso — rota pública de autocadastro do analista, fica aguardando aprovação
+app.post('/usuarios/primeiro_acesso', async (req, res) => {
+  try {
+    const { nome, cpf, email, telefone, regiao, municipio, nucleo, senha_hash, setorial_id } = req.body;
+    if (!nome || !cpf || !senha_hash || !setorial_id)
+      return res.status(400).json({ data: null, error: { message: 'Preencha nome, CPF, senha e setorial.' } });
+
+    const existente = await pool.query(
+      'SELECT id, aprovado, aguardando_aprovacao FROM usuarios WHERE cpf = $1',
+      [cpf]
+    );
+    if (existente.rows.length > 0) {
+      const u = existente.rows[0];
+      if (u.aguardando_aprovacao)
+        return res.status(409).json({ data: null, error: { message: 'Cadastro aguardando aprovação.' } });
+      return res.status(409).json({ data: null, error: { message: 'CPF já cadastrado.' } });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO usuarios
+         (nome, cpf, email, telefone, regiao, municipio, nucleo, senha_hash, setorial_id,
+          perfil, ativo, aprovado, aguardando_aprovacao, grupo, criado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'analista',false,false,true,NULL,NOW())
+       RETURNING id, nome, cpf`,
+      [nome, cpf, email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senha_hash, setorial_id]
+    );
+    res.json({
+      data: rows[0],
+      error: null,
+      message: 'Cadastro realizado! Aguarde a aprovação do seu coordenador para acessar o sistema.'
+    });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /usuarios/:id/aprovar — body opcional { grupo }
+app.patch('/usuarios/:id/aprovar', async (req, res) => {
+  try {
+    const { grupo } = req.body || {};
+    const sets = ['ativo = true', 'aprovado = true', 'aguardando_aprovacao = false'];
+    const values = [];
+    let i = 1;
+    if (grupo !== undefined && grupo !== null && grupo !== '') {
+      sets.push(`grupo = $${i++}`);
+      values.push(parseInt(grupo));
     }
     values.push(req.params.id);
     const { rows } = await pool.query(
       `UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
       values
     );
+    if (!rows.length)
+      return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /usuarios/:id/rejeitar — remove o cadastro pendente (permite que a pessoa se cadastre de novo)
+app.patch('/usuarios/:id/rejeitar', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'DELETE FROM usuarios WHERE id = $1 AND aguardando_aprovacao = true RETURNING id',
+      [req.params.id]
+    );
+    if (!rows.length)
+      return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado ou não está aguardando aprovação' } });
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
@@ -864,9 +949,33 @@ app.delete('/anotacoes_tr/:id', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  MIGRAÇÃO — colunas de usuarios (Primeiro Acesso / Perfil)
+// ══════════════════════════════════════
+async function garantirColunasUsuarios() {
+  try {
+    await pool.query(`
+      ALTER TABLE usuarios
+        ADD COLUMN IF NOT EXISTS regiao VARCHAR(80),
+        ADD COLUMN IF NOT EXISTS municipio VARCHAR(80),
+        ADD COLUMN IF NOT EXISTS telefone VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS email VARCHAR(120),
+        ADD COLUMN IF NOT EXISTS nucleo VARCHAR(80),
+        ADD COLUMN IF NOT EXISTS foto_base64 TEXT,
+        ADD COLUMN IF NOT EXISTS aprovado BOOLEAN DEFAULT false,
+        ADD COLUMN IF NOT EXISTS aguardando_aprovacao BOOLEAN DEFAULT false
+    `);
+    console.log('Colunas de usuarios (Primeiro Acesso / Perfil) verificadas.');
+  } catch (e) {
+    console.error('Erro ao garantir colunas de usuarios:', e.message);
+  }
+}
+
+// ══════════════════════════════════════
 //  START
 // ══════════════════════════════════════
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`SIGPC-GT API rodando na porta ${PORT}`);
+garantirColunasUsuarios().finally(() => {
+  app.listen(PORT, () => {
+    console.log(`SIGPC-GT API rodando na porta ${PORT}`);
+  });
 });

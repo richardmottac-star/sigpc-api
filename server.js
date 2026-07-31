@@ -952,6 +952,86 @@ app.delete('/anotacoes_tr/:id', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  AFASTAMENTOS
+// ══════════════════════════════════════
+app.get('/afastamentos', async (req, res) => {
+  try {
+    const { analista_id, setorial_id, data_inicio_gte, data_fim_lte } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    if (data_inicio_gte) { conditions.push(`data_inicio >= $${i++}`); values.push(data_inicio_gte); }
+    if (data_fim_lte) { conditions.push(`data_fim <= $${i++}`); values.push(data_fim_lte); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT * FROM afastamentos ${where} ORDER BY data_inicio DESC`,
+      values
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.post('/afastamentos', async (req, res) => {
+  try {
+    const { analista_id, analista_nome, data_inicio, data_fim, motivo, observacao, setorial_id, registrado_por } = req.body;
+    if (!analista_id || !data_inicio || !data_fim || !motivo)
+      return res.status(400).json({ data: null, error: { message: 'analista_id, data_inicio, data_fim e motivo são obrigatórios' } });
+    const { rows } = await pool.query(
+      `INSERT INTO afastamentos (analista_id, analista_nome, data_inicio, data_fim, motivo, observacao, setorial_id, registrado_por, criado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW()) RETURNING *`,
+      [analista_id, analista_nome || null, data_inicio, data_fim, motivo, observacao || null, setorial_id || null, registrado_por || null]
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.patch('/afastamentos/:id', async (req, res) => {
+  try {
+    const campos = req.body;
+    const sets = [];
+    const values = [];
+    let i = 1;
+    const permitidos = ['analista_id', 'analista_nome', 'data_inicio', 'data_fim', 'motivo', 'observacao', 'setorial_id'];
+    permitidos.forEach(c => {
+      if (campos[c] !== undefined) {
+        sets.push(`${c} = $${i++}`);
+        values.push(campos[c]);
+      }
+    });
+    if (sets.length === 0)
+      return res.status(400).json({ data: null, error: { message: 'nenhum campo permitido informado' } });
+    values.push(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE afastamentos SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.delete('/afastamentos/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'DELETE FROM afastamentos WHERE id = $1 RETURNING *',
+      [req.params.id]
+    );
+    if (rows.length === 0)
+      return res.status(404).json({ data: null, error: { message: 'Afastamento não encontrado' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — colunas de usuarios (Primeiro Acesso / Perfil)
 // ══════════════════════════════════════
 async function garantirColunasUsuarios() {

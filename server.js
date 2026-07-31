@@ -89,9 +89,11 @@ app.post('/usuarios', async (req, res) => {
   try {
     const b = req.body;
     const { rows } = await pool.query(
-      `INSERT INTO usuarios (nome, cpf, senha_hash, perfil, setorial_id, grupo, ativo, criado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING *`,
-      [b.nome, b.cpf, b.senha_hash, b.perfil, b.setorial_id, b.grupo ?? null, b.ativo ?? true]
+      `INSERT INTO usuarios (nome, cpf, senha_hash, perfil, setorial_id, grupo, ativo,
+                             matricula, portaria, data_ingresso, data_saida, meta_mensal, criado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW()) RETURNING *`,
+      [b.nome, b.cpf, b.senha_hash, b.perfil, b.setorial_id, b.grupo ?? null, b.ativo ?? true,
+       b.matricula ?? null, b.portaria ?? null, b.data_ingresso ?? null, b.data_saida ?? null, b.meta_mensal ?? 10]
     );
     res.json({ data: rows[0], error: null });
   } catch (e) {
@@ -102,7 +104,8 @@ app.post('/usuarios', async (req, res) => {
 // Campos que podem ser alterados via PATCH /usuarios/:id
 const USUARIOS_PATCH_PERMITIDOS = [
   'nome', 'cpf', 'perfil', 'setorial_id', 'grupo', 'ativo', 'senha_hash', 'ultimo_acesso',
-  'regiao', 'municipio', 'telefone', 'email', 'nucleo', 'foto_base64', 'aprovado', 'aguardando_aprovacao'
+  'regiao', 'municipio', 'telefone', 'email', 'nucleo', 'foto_base64', 'aprovado', 'aguardando_aprovacao',
+  'matricula', 'portaria', 'data_ingresso', 'data_saida', 'meta_mensal'
 ];
 
 app.patch('/usuarios/:id', async (req, res) => {

@@ -1032,6 +1032,123 @@ app.delete('/afastamentos/:id', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  RELATÓRIOS CGE
+// ══════════════════════════════════════
+function toJsonb(v) {
+  return (v !== undefined && v !== null && typeof v === 'object') ? JSON.stringify(v) : v;
+}
+
+app.get('/relatorios_cge', async (req, res) => {
+  try {
+    const { setorial_id, status } = req.query;
+    const conditions = [];
+    const values = [];
+    let i = 1;
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    if (status) { conditions.push(`status = $${i++}`); values.push(status); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT * FROM relatorios_cge ${where} ORDER BY criado_em DESC`,
+      values
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.get('/relatorios_cge/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM relatorios_cge WHERE id = $1', [req.params.id]);
+    if (rows.length === 0)
+      return res.status(404).json({ data: null, error: { message: 'Relatório não encontrado' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.post('/relatorios_cge', async (req, res) => {
+  try {
+    const {
+      titulo, periodo, processo, data_corte, contextualizacao,
+      analise_grupo1, analise_grupo2, analise_grupo3,
+      justificativas, quadro3, conclusao, signatarios,
+      estoque_manual, baixas_secretario, status, setorial_id
+    } = req.body;
+
+    const { rows } = await pool.query(
+      `INSERT INTO relatorios_cge
+         (titulo, periodo, processo, data_corte, contextualizacao,
+          analise_grupo1, analise_grupo2, analise_grupo3,
+          justificativas, quadro3, conclusao, signatarios,
+          estoque_manual, baixas_secretario, status, setorial_id,
+          criado_em, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
+       RETURNING *`,
+      [
+        titulo, periodo, processo, data_corte, contextualizacao,
+        analise_grupo1, analise_grupo2, analise_grupo3,
+        toJsonb(justificativas), toJsonb(quadro3), conclusao, toJsonb(signatarios),
+        estoque_manual, baixas_secretario, status, setorial_id
+      ]
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// Campos que podem ser alterados via PATCH /relatorios_cge/:id
+const RELATORIOS_CGE_PATCH_PERMITIDOS = [
+  'titulo', 'periodo', 'processo', 'data_corte', 'contextualizacao',
+  'analise_grupo1', 'analise_grupo2', 'analise_grupo3',
+  'justificativas', 'quadro3', 'conclusao', 'signatarios',
+  'estoque_manual', 'baixas_secretario', 'status', 'setorial_id'
+];
+const RELATORIOS_CGE_CAMPOS_JSONB = ['justificativas', 'quadro3', 'signatarios'];
+
+app.patch('/relatorios_cge/:id', async (req, res) => {
+  try {
+    const campos = req.body;
+    const sets = [];
+    const values = [];
+    let i = 1;
+    RELATORIOS_CGE_PATCH_PERMITIDOS.forEach(c => {
+      if (campos[c] !== undefined) {
+        sets.push(`${c} = $${i++}`);
+        values.push(RELATORIOS_CGE_CAMPOS_JSONB.includes(c) ? toJsonb(campos[c]) : campos[c]);
+      }
+    });
+    if (sets.length === 0)
+      return res.status(400).json({ data: null, error: { message: 'nenhum campo permitido informado' } });
+    sets.push(`atualizado_em = NOW()`);
+    values.push(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE relatorios_cge SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.delete('/relatorios_cge/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'DELETE FROM relatorios_cge WHERE id = $1 RETURNING *',
+      [req.params.id]
+    );
+    if (rows.length === 0)
+      return res.status(404).json({ data: null, error: { message: 'Relatório não encontrado' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — colunas de usuarios (Primeiro Acesso / Perfil)
 // ══════════════════════════════════════
 async function garantirColunasUsuarios() {

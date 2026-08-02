@@ -163,15 +163,38 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
     if (!nome || !cpf || !senha_hash || !setorial_id)
       return res.status(400).json({ data: null, error: { message: 'Preencha nome, CPF, senha e setorial.' } });
 
+    // Compara só os dígitos do CPF — planilha e formulário podem formatar diferente
     const existente = await pool.query(
-      'SELECT id, aprovado, aguardando_aprovacao FROM usuarios WHERE cpf = $1',
+      `SELECT id, senha_hash, ativo, aprovado, aguardando_aprovacao
+       FROM usuarios
+       WHERE regexp_replace(cpf, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')`,
       [cpf]
     );
+
     if (existente.rows.length > 0) {
       const u = existente.rows[0];
-      if (u.aguardando_aprovacao)
-        return res.status(409).json({ data: null, error: { message: 'Cadastro aguardando aprovação.' } });
-      return res.status(409).json({ data: null, error: { message: 'CPF já cadastrado.' } });
+
+      // Já tem cadastro completo e ativo — não recadastra, manda usar o login normal
+      if (u.senha_hash && u.aprovado && u.ativo) {
+        return res.status(409).json({ data: null, error: { message: 'Este CPF já possui cadastro ativo. Use o login normal para acessar o sistema.' } });
+      }
+
+      // Registro já existe (ex.: analista pré-cadastrado com PCs vinculadas) — atualiza só dados
+      // de contato/senha e reabre para aprovação. NÃO mexe em nome, grupo, perfil nem analista_id,
+      // que são o que liga o registro às PCs em prestacoes_contas.
+      const { rows } = await pool.query(
+        `UPDATE usuarios
+           SET email = $1, telefone = $2, regiao = $3, municipio = $4, nucleo = $5,
+               senha_hash = $6, aguardando_aprovacao = true, ativo = false, aprovado = false
+         WHERE id = $7
+         RETURNING id, nome, cpf`,
+        [email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senha_hash, u.id]
+      );
+      return res.json({
+        data: rows[0],
+        error: null,
+        message: 'Cadastro atualizado! Aguarde a aprovação do seu coordenador para acessar o sistema.'
+      });
     }
 
     const { rows } = await pool.query(

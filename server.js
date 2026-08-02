@@ -671,17 +671,20 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
 // (dias = CURRENT_DATE - dt_limite_pc: positivo = vencida, negativo = a vencer)
 app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
   try {
-    const { analista_id } = req.query;
+    const { analista_id, setorial_id } = req.query;
     if (!analista_id)
       return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+    const conditions = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`, `(CURRENT_DATE - dt_limite_pc) >= -30`];
+    const values = [parseInt(analista_id)];
+    let i = 2;
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     const { rows } = await pool.query(
       `SELECT tr, entidade, codigo_pc, processo_pc, dt_limite_pc,
               (CURRENT_DATE - dt_limite_pc) AS dias
        FROM prestacoes_contas
-       WHERE analista_id = $1 AND status <> 'baixada' AND dt_limite_pc IS NOT NULL
-         AND (CURRENT_DATE - dt_limite_pc) >= -30
+       WHERE ${conditions.join(' AND ')}
        ORDER BY dias DESC`,
-      [parseInt(analista_id)]
+      values
     );
     const vencida365 = rows.filter(r => r.dias > 365);
     const vencidaMenos365 = rows.filter(r => r.dias > 0 && r.dias <= 365);
@@ -881,10 +884,10 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
 // ══════════════════════════════════════
 //  METAS_ANALISTAS
 // ══════════════════════════════════════
-// GET /metas_analistas?analista_id=X&grupo=X&periodo=X&vigente=true
+// GET /metas_analistas?analista_id=X&grupo=X&periodo=X&vigente=true&setorial_id=X
 app.get('/metas_analistas', async (req, res) => {
   try {
-    const { analista_id, grupo, periodo, vigente } = req.query;
+    const { analista_id, grupo, periodo, vigente, setorial_id } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
@@ -892,6 +895,7 @@ app.get('/metas_analistas', async (req, res) => {
     if (grupo) { conditions.push(`grupo = $${i++}`); values.push(parseInt(grupo)); }
     if (periodo) { conditions.push(`periodo = $${i++}`); values.push(periodo); }
     if (vigente !== undefined) { conditions.push(`vigente = $${i++}`); values.push(vigente === 'true'); }
+    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(`SELECT * FROM metas_analistas ${where} ORDER BY analista_nome`, values);
     res.json({ data: rows, count: rows.length, error: null });

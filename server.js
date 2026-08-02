@@ -132,6 +132,30 @@ app.patch('/usuarios/:id', async (req, res) => {
   }
 });
 
+// DELETE /usuarios/:id — só exclui se não houver PC vinculada (analista_id) em prestacoes_contas
+// body { perfil } — só superadmin pode excluir
+app.delete('/usuarios/:id', async (req, res) => {
+  try {
+    const { perfil } = req.body || {};
+    if (perfil !== 'superadmin')
+      return res.status(403).json({ data: null, error: { message: 'Apenas superadmin pode excluir usuários' } });
+    const id = parseInt(req.params.id);
+    const vinc = await pool.query('SELECT COUNT(*) FROM prestacoes_contas WHERE analista_id = $1', [id]);
+    const qtd = parseInt(vinc.rows[0].count);
+    if (qtd > 0)
+      return res.status(409).json({
+        data: null,
+        error: { message: `Este usuário tem ${qtd} PC${qtd > 1 ? 's' : ''} vinculada${qtd > 1 ? 's' : ''} e não pode ser excluído. Use Desativar para bloquear o acesso sem perder o histórico.` }
+      });
+    const { rows } = await pool.query('DELETE FROM usuarios WHERE id = $1 RETURNING id', [id]);
+    if (!rows.length)
+      return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // POST /usuarios/primeiro_acesso — rota pública de autocadastro do analista, fica aguardando aprovação
 app.post('/usuarios/primeiro_acesso', async (req, res) => {
   try {

@@ -794,7 +794,7 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
     } else if (perfil === 'coordenador') {
       params.push(parseInt(grupo));
       where += ` AND grupo = $${params.length}`;
-    } else if (perfil !== 'master') {
+    } else if (perfil !== 'superadmin') {
       return res.status(403).json({ data: null, error: { message: 'perfil não autorizado a estornar' } });
     }
 

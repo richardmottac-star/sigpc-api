@@ -561,10 +561,24 @@ app.post('/repositorio', async (req, res) => {
   try {
     const b = req.body;
     const { rows } = await pool.query(
-      `INSERT INTO repositorio (nome, descricao, url, tipo, setorial_id, adicionado_por)
+      `INSERT INTO repositorio (nome, descricao, url, categoria, setorial_id, adicionado_por)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [b.nome, b.descricao, b.url, b.tipo, b.setorial_id, b.adicionado_por]
+      [b.nome, b.descricao, b.url, b.categoria, b.setorial_id, b.adicionado_por]
     );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.delete('/repositorio/:id', async (req, res) => {
+  try {
+    const { perfil } = req.body || {};
+    if (perfil !== 'superadmin' && perfil !== 'coordenador')
+      return res.status(403).json({ data: null, error: { message: 'Apenas superadmin ou coordenador podem excluir itens do repositório' } });
+    const { rows } = await pool.query('DELETE FROM repositorio WHERE id = $1 RETURNING id', [req.params.id]);
+    if (!rows.length)
+      return res.status(404).json({ data: null, error: { message: 'Item não encontrado' } });
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });

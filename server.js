@@ -540,7 +540,17 @@ app.patch('/notas_liquidacao/:id', async (req, res) => {
 // ══════════════════════════════════════
 app.get('/repositorio', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM repositorio ORDER BY id');
+    const { setorial_id } = req.query;
+    const conditions = [];
+    const values = [];
+
+    if (setorial_id) {
+      values.push(setorial_id);
+      conditions.push(`setorial_id = $${values.length}`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await pool.query(`SELECT * FROM repositorio ${where} ORDER BY id`, values);
     res.json({ data: rows, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });

@@ -1149,7 +1149,7 @@ app.post('/relatorios_cge', async (req, res) => {
       titulo, periodo, processo, data_corte, contextualizacao,
       analise_grupo1, analise_grupo2, analise_grupo3,
       justificativas, quadro3, conclusao, signatarios,
-      estoque_manual, baixas_secretario, status, setorial_id
+      estoque_manual, baixas_secretario, status, setorial_id, secoes
     } = req.body;
 
     const { rows } = await pool.query(
@@ -1157,15 +1157,15 @@ app.post('/relatorios_cge', async (req, res) => {
          (titulo, periodo, processo, data_corte, contextualizacao,
           analise_grupo1, analise_grupo2, analise_grupo3,
           justificativas, quadro3, conclusao, signatarios,
-          estoque_manual, baixas_secretario, status, setorial_id,
+          estoque_manual, baixas_secretario, status, setorial_id, secoes,
           criado_em, atualizado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),NOW())
        RETURNING *`,
       [
         titulo, periodo, processo, data_corte, contextualizacao,
         analise_grupo1, analise_grupo2, analise_grupo3,
         toJsonb(justificativas), toJsonb(quadro3), conclusao, toJsonb(signatarios),
-        estoque_manual, baixas_secretario, status, setorial_id
+        estoque_manual, baixas_secretario, status, setorial_id, toJsonb(secoes)
       ]
     );
     res.json({ data: rows[0], error: null });
@@ -1179,9 +1179,9 @@ const RELATORIOS_CGE_PATCH_PERMITIDOS = [
   'titulo', 'periodo', 'processo', 'data_corte', 'contextualizacao',
   'analise_grupo1', 'analise_grupo2', 'analise_grupo3',
   'justificativas', 'quadro3', 'conclusao', 'signatarios',
-  'estoque_manual', 'baixas_secretario', 'status', 'setorial_id'
+  'estoque_manual', 'baixas_secretario', 'status', 'setorial_id', 'secoes'
 ];
-const RELATORIOS_CGE_CAMPOS_JSONB = ['justificativas', 'quadro3', 'signatarios'];
+const RELATORIOS_CGE_CAMPOS_JSONB = ['justificativas', 'quadro3', 'signatarios', 'secoes'];
 
 app.patch('/relatorios_cge/:id', async (req, res) => {
   try {

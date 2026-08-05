@@ -1,2 +1,16 @@
 .claude/settings.local.json
 node_modules/
+
+# CSVs de carga — dados operacionais, nunca versionar (ver CLAUDE.md)
+*_carga.csv
+prestacoes_contas_carga.csv
+notas_liquidacao_import.csv
+
+# ATENCAO: estes scripts tem a senha do banco EM TEXTO PURO na connectionString.
+# Ignorados para nao vazarem no historico do git. A correcao de verdade e trocar
+# a string literal por process.env.DATABASE_URL — depois disso podem ser versionados.
+backfill_grupo_usuarios.js
+carga_metas.js
+carga_prazos.js
+carga_sigpc.js
+importar_nls.js

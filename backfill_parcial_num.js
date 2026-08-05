@@ -6,6 +6,7 @@
 // ATENCAO: a numeracao atribuida aqui NAO vem da planilha do analista; e' derivada
 // de parcela_seq. Pode divergir do numero que o analista conhece. Ver relatorio.
 const GRAVAR = process.argv.includes('--gravar')
+const TAB_BACKUP = '_backup_parcial_num_20260805'
 const { Pool } = require('pg')
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 2 })
 
@@ -13,6 +14,14 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
   const cli = await pool.connect()
   try {
     await cli.query('BEGIN')
+
+    // Backup do estado anterior, para reverter depois do commit se precisar.
+    await cli.query(`
+      CREATE TABLE IF NOT EXISTS ${TAB_BACKUP} AS
+      SELECT id, parcial_num FROM prestacoes_contas WHERE setorial_id='FCEE'
+    `)
+    const { rows: bk } = await cli.query(`SELECT COUNT(*)::int n FROM ${TAB_BACKUP}`)
+    console.log(`backup ${TAB_BACKUP}: ${bk[0].n} linhas\n`)
 
     // toda PC 'final' recebe FINAL, como ja fez a recarga
     const fin = await cli.query(`
@@ -80,14 +89,46 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
          GROUP BY 1,2 HAVING COUNT(DISTINCT processo_pc) > 1) t
     `)
 
-    console.log(`PCs 'final' numeradas como FINAL : ${fin.rowCount}`)
-    console.log(`PCs pendentes numeradas          : ${upd.rowCount}`)
-    console.log(`\nrestam sem parcial_num          : ${chk[0].sem} de ${chk[0].total}`)
-    console.log(`parciais distintas (tr|num)      : ${chk[0].parciais}`)
-    console.log(`parciais juntando >1 SGPE        : ${conf[0].chaves_com_mais_de_um_processo}  (eram 5 antes)`)
+    // TRAVA PRINCIPAL: a numeracao das baixadas veio da planilha do analista.
+    // Se qualquer baixada for renumerada, a produtividade deixa de bater — aborta.
+    const { rows: alt } = await cli.query(`
+      SELECT COUNT(*)::int renumeradas FROM prestacoes_contas p
+        JOIN ${TAB_BACKUP} b ON b.id = p.id
+       WHERE p.setorial_id='FCEE' AND p.baixada
+         AND b.parcial_num IS NOT NULL
+         AND p.parcial_num IS DISTINCT FROM b.parcial_num
+    `)
+    // Nenhuma PC que ja tinha numero pode ter sido alterada, baixada ou nao.
+    const { rows: alt2 } = await cli.query(`
+      SELECT COUNT(*)::int alteradas FROM prestacoes_contas p
+        JOIN ${TAB_BACKUP} b ON b.id = p.id
+       WHERE p.setorial_id='FCEE'
+         AND b.parcial_num IS NOT NULL
+         AND p.parcial_num IS DISTINCT FROM b.parcial_num
+    `)
 
-    if (GRAVAR) { await cli.query('COMMIT'); console.log('\n>> COMMIT.') }
-    else        { await cli.query('ROLLBACK'); console.log('\n>> DRY-RUN: ROLLBACK. Rode com --gravar para aplicar.') }
+    console.log(`PCs que herdaram o numero do processo : ${herd.rowCount}`)
+    console.log(`PCs 'final' numeradas como FINAL      : ${fin.rowCount}`)
+    console.log(`PCs pendentes numeradas               : ${upd.rowCount}`)
+    console.log(`   total numerado                     : ${herd.rowCount + fin.rowCount + upd.rowCount}`)
+
+    console.log('\n── VALIDACAO ──────────────────────────────────────')
+    const checks = [
+      ['PCs sem parcial_num == 0',                chk[0].sem === 0,                                 `${chk[0].sem} de ${chk[0].total}`],
+      ['baixadas renumeradas == 0',               alt[0].renumeradas === 0,                         `${alt[0].renumeradas}`],
+      ['PCs ja numeradas alteradas == 0',         alt2[0].alteradas === 0,                          `${alt2[0].alteradas}`],
+      ['parciais juntando >1 SGPE <= 5 (as pre-existentes)', conf[0].chaves_com_mais_de_um_processo <= 5, `${conf[0].chaves_com_mais_de_um_processo}`]
+    ]
+    let falhou = false
+    for (const [nome, ok, valor] of checks) {
+      if (!ok) falhou = true
+      console.log(`   ${ok ? 'OK  ' : 'FALHA'}  ${nome.padEnd(50)} ${valor}`)
+    }
+    console.log(`\nparciais distintas (tr|num)           : ${chk[0].parciais}`)
+
+    if (falhou)       { await cli.query('ROLLBACK'); console.log('\n>> VALIDACAO FALHOU: ROLLBACK. Nada gravado.'); process.exitCode = 2 }
+    else if (GRAVAR)  { await cli.query('COMMIT');   console.log('\n>> COMMIT.'); console.log(`\nPara reverter:\n  UPDATE prestacoes_contas p SET parcial_num=b.parcial_num\n    FROM ${TAB_BACKUP} b WHERE b.id=p.id;`) }
+    else              { await cli.query('ROLLBACK'); console.log('\n>> DRY-RUN: ROLLBACK. Rode com --gravar para aplicar.') }
   } catch (e) {
     try { await cli.query('ROLLBACK') } catch {}
     console.error('ERRO — ROLLBACK: ' + e.message)

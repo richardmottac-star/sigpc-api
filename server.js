@@ -953,6 +953,355 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  PARCELA — baixa por PARCIAL (uma parcial = PCs do mesmo tr + parcial_num)
+//  Um parecer baixa TODAS as PCs da parcial. NL nao agrupa mais baixa.
+// ══════════════════════════════════════
+
+// Pareceres do TECNICO. "Encaminhado ao CI" NAO entra aqui — CI e campo proprio.
+const PARECERES_VALIDOS = ['Parecer Regular', 'Parecer Regular com Ressalvas', 'Parecer Irregular'];
+
+// Situacoes de acompanhamento: nenhuma baixa a parcial.
+const SITUACOES_VALIDAS = ['Em análise', 'Diligência', 'Reanálise', 'Aguardando documentação'];
+
+// A coluna legada `status` nao tem equivalente para "Aguardando documentação";
+// mapeamos para 'analise' para a PC seguir contando no estoque de trabalho.
+// O valor exato fica em `situacao_atual`.
+const SITUACAO_PARA_STATUS = {
+  'Em análise': 'analise',
+  'Diligência': 'diligencia',
+  'Reanálise': 'reanalise',
+  'Aguardando documentação': 'analise'
+};
+
+function registrarHistorico(cli, h) {
+  return cli.query(
+    `INSERT INTO parcela_historico
+       (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [h.tr, h.parcial_num, h.setorial_id, h.evento,
+     h.valor_anterior ?? null, h.valor_novo ?? null, h.analista_id ?? null, h.observacao ?? null]
+  );
+}
+
+// Carrega as PCs da parcial com lock, para a transacao ser toda-ou-nenhuma.
+async function carregarParcela(cli, tr, parcial_num, setorial_id) {
+  const { rows } = await cli.query(
+    `SELECT * FROM prestacoes_contas
+      WHERE setorial_id = $1 AND tr = $2 AND parcial_num = $3
+      ORDER BY codigo_pc
+      FOR UPDATE`,
+    [setorial_id, tr, String(parcial_num)]
+  );
+  return rows;
+}
+
+function faltaChave(b) {
+  if (!b.tr) return 'tr é obrigatório';
+  if (b.parcial_num === undefined || b.parcial_num === null || b.parcial_num === '')
+    return 'parcial_num é obrigatório';
+  return null;
+}
+
+// GET /parcela/historico?tr=X&parcial_num=Y&setorial_id=FCEE
+app.get('/parcela/historico', async (req, res) => {
+  try {
+    const { tr, parcial_num, setorial_id = 'FCEE' } = req.query;
+    if (!tr) return res.status(400).json({ data: null, error: { message: 'tr é obrigatório' } });
+    const conditions = ['tr = $1', 'setorial_id = $2'];
+    const values = [tr, setorial_id];
+    if (parcial_num !== undefined && parcial_num !== '') {
+      values.push(String(parcial_num));
+      conditions.push(`parcial_num = $${values.length}`);
+    }
+    const { rows } = await pool.query(
+      `SELECT * FROM parcela_historico WHERE ${conditions.join(' AND ')} ORDER BY criado_em DESC, id DESC`,
+      values
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /parcela/parecer — body { tr, parcial_num, parecer_tipo, analista_id, observacao, setorial_id?, override? }
+// Baixa TODAS as PCs da parcial, numa transacao. D1: data_baixa = agora (data real do parecer).
+app.post('/parcela/parecer', async (req, res) => {
+  const b = req.body || {};
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+  if (!PARECERES_VALIDOS.includes(b.parecer_tipo))
+    return res.status(400).json({
+      data: null,
+      error: { message: `parecer_tipo inválido. Use um de: ${PARECERES_VALIDOS.join(', ')}` }
+    });
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
+    if (pcs.length === 0) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada' } });
+    }
+
+    const jaBaixadas = pcs.filter(p => p.baixada === true);
+    if (jaBaixadas.length === pcs.length) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({
+        data: null,
+        error: { message: `Parcial já baixada (${pcs.length} PC${pcs.length > 1 ? 's' : ''}). Estorne antes de registrar novo parecer.` }
+      });
+    }
+
+    // Nao deixa um analista baixar parcial de outro sem override explicito.
+    if (b.override !== true && b.analista_id) {
+      const donoOutro = pcs.find(p => p.analista_id != null && String(p.analista_id) !== String(b.analista_id));
+      if (donoOutro) {
+        await cli.query('ROLLBACK');
+        return res.status(403).json({
+          data: null,
+          error: { message: `Parcial pertence a outro analista (id ${donoOutro.analista_id}). Use override para prosseguir.` }
+        });
+      }
+    }
+
+    const { rows } = await cli.query(
+      `UPDATE prestacoes_contas
+          SET baixada = true,
+              status = 'baixada',
+              data_baixa = NOW(),
+              origem_baixa = 'sistema',
+              parecer_tipo = $1,
+              analista_id = COALESCE($2, analista_id),
+              registrado_por = $3,
+              situacao_atual = NULL,
+              estornada = false,
+              data_estorno = NULL,
+              atualizado_em = NOW()
+        WHERE setorial_id = $4 AND tr = $5 AND parcial_num = $6
+        RETURNING codigo_pc`,
+      [b.parecer_tipo, b.analista_id ?? null, b.registrado_por ?? null,
+       setorial_id, b.tr, String(b.parcial_num)]
+    );
+
+    await registrarHistorico(cli, {
+      tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
+      evento: 'parecer',
+      valor_anterior: pcs[0].situacao_atual || pcs[0].status || null,
+      valor_novo: b.parecer_tipo,
+      analista_id: b.analista_id ?? null,
+      observacao: b.observacao ?? null
+    });
+
+    await cli.query('COMMIT');
+    res.json({
+      data: { codigos_pc: rows.map(r => r.codigo_pc), tr: b.tr, parcial_num: String(b.parcial_num), parecer_tipo: b.parecer_tipo },
+      count: rows.length,
+      error: null
+    });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
+  }
+});
+
+// POST /parcela/situacao — body { tr, parcial_num, situacao, prazo_diligencia?, qtd_diligencias?, observacao?, analista_id?, setorial_id? }
+// Acompanhamento: NAO baixa, nao mexe em baixada/data_baixa. Pode ir e voltar quantas vezes precisar.
+app.post('/parcela/situacao', async (req, res) => {
+  const b = req.body || {};
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+  if (!SITUACOES_VALIDAS.includes(b.situacao))
+    return res.status(400).json({
+      data: null,
+      error: { message: `situacao inválida. Use uma de: ${SITUACOES_VALIDAS.join(', ')}` }
+    });
+  if (b.situacao === 'Diligência' && !b.prazo_diligencia)
+    return res.status(400).json({ data: null, error: { message: 'Diligência exige prazo_diligencia' } });
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
+    if (pcs.length === 0) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada' } });
+    }
+    if (pcs.every(p => p.baixada === true)) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'Parcial já baixada. Estorne antes de alterar a situação.' } });
+    }
+
+    const { rows } = await cli.query(
+      `UPDATE prestacoes_contas
+          SET situacao_atual = $1,
+              status = $2,
+              prazo_diligencia = $3,
+              qtd_diligencias = COALESCE($4, qtd_diligencias),
+              dt_situacao = NOW(),
+              obs_situacao = $5,
+              atualizado_em = NOW()
+        WHERE setorial_id = $6 AND tr = $7 AND parcial_num = $8 AND baixada = false
+        RETURNING codigo_pc`,
+      [b.situacao, SITUACAO_PARA_STATUS[b.situacao],
+       b.situacao === 'Diligência' ? b.prazo_diligencia : null,
+       b.qtd_diligencias ?? null, b.observacao ?? null,
+       setorial_id, b.tr, String(b.parcial_num)]
+    );
+
+    await registrarHistorico(cli, {
+      tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
+      evento: 'situacao',
+      valor_anterior: pcs[0].situacao_atual || pcs[0].status || null,
+      valor_novo: b.situacao,
+      analista_id: b.analista_id ?? null,
+      observacao: b.observacao ?? null
+    });
+
+    await cli.query('COMMIT');
+    res.json({
+      data: { codigos_pc: rows.map(r => r.codigo_pc), tr: b.tr, parcial_num: String(b.parcial_num), situacao: b.situacao },
+      count: rows.length,
+      error: null
+    });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
+  }
+});
+
+// POST /parcela/ci — body { tr, parcial_num, analista_id, observacao, parecer_ci?, setorial_id? }
+// D2: CI e campo proprio. Exige parecer previo e NAO apaga parecer_tipo.
+app.post('/parcela/ci', async (req, res) => {
+  const b = req.body || {};
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
+    if (pcs.length === 0) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada' } });
+    }
+    if (!pcs.some(p => p.parecer_tipo)) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'CI exige parecer prévio' } });
+    }
+    if (pcs.every(p => p.enviado_ci === true)) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'Parcial já encaminhada ao Controle Interno' } });
+    }
+
+    const { rows } = await cli.query(
+      `UPDATE prestacoes_contas
+          SET enviado_ci = true,
+              dt_envio_ci = NOW(),
+              parecer_ci = COALESCE($1, parecer_ci),
+              atualizado_em = NOW()
+        WHERE setorial_id = $2 AND tr = $3 AND parcial_num = $4
+        RETURNING codigo_pc`,
+      [b.parecer_ci ?? null, setorial_id, b.tr, String(b.parcial_num)]
+    );
+
+    await registrarHistorico(cli, {
+      tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
+      evento: 'ci',
+      valor_anterior: pcs.find(p => p.parecer_tipo)?.parecer_tipo || null,
+      valor_novo: 'enviado_ci = true',
+      analista_id: b.analista_id ?? null,
+      observacao: b.observacao ?? null
+    });
+
+    await cli.query('COMMIT');
+    res.json({
+      data: { codigos_pc: rows.map(r => r.codigo_pc), tr: b.tr, parcial_num: String(b.parcial_num) },
+      count: rows.length,
+      error: null
+    });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
+  }
+});
+
+// POST /parcela/estornar — body { tr, parcial_num, motivo, usuario_id, usuario_nome, perfil, setorial_id? }
+// So coordenador/superadmin. Desfaz a parcial inteira.
+app.post('/parcela/estornar', async (req, res) => {
+  const b = req.body || {};
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+  if (b.perfil !== 'coordenador' && b.perfil !== 'superadmin')
+    return res.status(403).json({ data: null, error: { message: 'Apenas coordenador ou superadmin podem estornar' } });
+  if (!b.motivo || b.motivo.trim().length < 15)
+    return res.status(400).json({ data: null, error: { message: 'motivo deve ter no mínimo 15 caracteres' } });
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
+    if (pcs.length === 0) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada' } });
+    }
+    if (!pcs.some(p => p.baixada === true)) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'Parcial não está baixada' } });
+    }
+
+    // data_baixa fica preservada: a produtividade cumulativa usa
+    // (estornada = false OR data_estorno > corte) para saber o que valia em cada data.
+    const { rows } = await cli.query(
+      `UPDATE prestacoes_contas
+          SET baixada = false,
+              status = 'livre',
+              estornada = true,
+              data_estorno = NOW(),
+              motivo_estorno = $1,
+              estornado_por = $2,
+              parecer_tipo = NULL,
+              situacao_atual = NULL,
+              atualizado_em = NOW()
+        WHERE setorial_id = $3 AND tr = $4 AND parcial_num = $5
+        RETURNING codigo_pc`,
+      [b.motivo, b.usuario_nome ?? null, setorial_id, b.tr, String(b.parcial_num)]
+    );
+
+    await registrarHistorico(cli, {
+      tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
+      evento: 'estorno',
+      valor_anterior: pcs.find(p => p.parecer_tipo)?.parecer_tipo || 'baixada',
+      valor_novo: 'livre',
+      analista_id: b.usuario_id ?? null,
+      observacao: b.motivo
+    });
+
+    await cli.query('COMMIT');
+    res.json({
+      data: { codigos_pc: rows.map(r => r.codigo_pc), tr: b.tr, parcial_num: String(b.parcial_num) },
+      count: rows.length,
+      error: null
+    });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
+  }
+});
+
+// ══════════════════════════════════════
 //  METAS_ANALISTAS
 // ══════════════════════════════════════
 // GET /metas_analistas?analista_id=X&grupo=X&periodo=X&vigente=true&setorial_id=X

@@ -1,6 +1,11 @@
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const {
+  normalizarProcesso, formatarProcesso, siglaConhecida, montarUrlSgpe,
+  ProcessoNaoEncontrado, SessaoExpirada,
+} = require('./lib/sgpe-link');
+const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
 
 const app = express();
 app.use(cors());
@@ -1573,6 +1578,91 @@ app.delete('/relatorios_cge/:id', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  SGPe — link direto para o processo
+// ══════════════════════════════════════
+// CACHE PRIMEIRO, SEMPRE. O `nu_processo` interno não sai de conta nenhuma (ver lib/sgpe-link.js)
+// e nunca muda depois do processo autuado — então o que já foi resolvido fica em
+// `sgpe_processo_ref` e o SGPe só é consultado no que falta.
+
+// Teto por chamada: a tela manda o que está visível, não as 14 mil linhas.
+const SGPE_MAXIMO = 400;
+// Quantos podem ir ao SGPe numa requisição. O SGPe é recurso de terceiro e caro; o resto fica
+// para as próximas chamadas, já que o cache vai enchendo.
+const SGPE_MAXIMO_AO_VIVO = 25;
+
+// POST /sgpe/links  body: { processos: ["SCC 8855/2025", ...] }
+app.post('/sgpe/links', async (req, res) => {
+  try {
+    const brutos = Array.isArray(req.body && req.body.processos)
+      ? req.body.processos.slice(0, SGPE_MAXIMO)
+      : [];
+
+    // Normaliza e joga fora o que não é processo. Uma chave por processo — a mesma lista costuma
+    // vir com repetidos (2.704 processos do acervo têm mais de uma PC).
+    const porChave = new Map();
+    for (const b of brutos) {
+      const p = normalizarProcesso(b);
+      if (!p || !siglaConhecida(p.sigla)) continue;
+      porChave.set(formatarProcesso(p), p);
+    }
+    if (porChave.size === 0) {
+      return res.json({ data: { links: {}, naoEncontrados: [], semSessao: 0, temSessao: temSessaoSgpe() }, error: null });
+    }
+
+    // ── 1. cache ──
+    // `unnest` de três arrays em vez de 3N placeholders: um lote de 400 viraria 1.200 parâmetros.
+    const chaves = [...porChave.values()];
+    const cacheadas = await pool.query(
+      `SELECT sigla, numero_oficial, ano, nu_processo, cd_orgaosetor
+         FROM sgpe_processo_ref
+        WHERE (sigla, numero_oficial, ano)
+              IN (SELECT * FROM unnest($1::text[], $2::int[], $3::int[]))`,
+      [chaves.map(p => p.sigla), chaves.map(p => p.numero), chaves.map(p => p.ano)]
+    );
+
+    const links = {};
+    for (const c of cacheadas.rows) {
+      links[`${c.sigla} ${c.numero_oficial}/${c.ano}`] = montarUrlSgpe(c.nu_processo, c.cd_orgaosetor, c.ano);
+    }
+    const doCache = Object.keys(links).length;
+
+    // ── 2. o que faltou, no SGPe ──
+    const faltando = [...porChave.entries()].filter(([chave]) => !links[chave]);
+    const naoEncontrados = [];
+    let semSessao = 0;
+
+    for (const [chave, p] of faltando.slice(0, SGPE_MAXIMO_AO_VIVO)) {
+      try {
+        // Sequencial de propósito: nada de disparar dezenas de requisições no SGPe ao mesmo tempo.
+        const r = await resolverNoSgpe(p);
+        links[chave] = montarUrlSgpe(r.nuProcesso, r.cdOrgaosetor, r.ano);
+        await pool.query(
+          `INSERT INTO sgpe_processo_ref (sigla, numero_oficial, ano, nu_processo, cd_orgaosetor, origem)
+           VALUES ($1, $2, $3, $4, $5, 'SGPE')
+           ON CONFLICT (sigla, numero_oficial, ano) DO NOTHING`,
+          [p.sigla, p.numero, p.ano, r.nuProcesso, r.cdOrgaosetor]
+        );
+      } catch (e) {
+        if (e instanceof ProcessoNaoEncontrado) { naoEncontrados.push(chave); continue; }
+        // Sessão caída derruba a rodada inteira: insistir só geraria erro em série.
+        if (e instanceof SessaoExpirada) { semSessao = faltando.length - (Object.keys(links).length - doCache); break; }
+        naoEncontrados.push(chave);
+      }
+    }
+    // O que passou do teto por requisição não é erro — volta nas próximas chamadas.
+    semSessao += Math.max(0, faltando.length - SGPE_MAXIMO_AO_VIVO);
+
+    res.json({
+      data: { links, naoEncontrados, semSessao, temSessao: temSessaoSgpe() },
+      count: Object.keys(links).length,
+      error: null,
+    });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — colunas de usuarios (Primeiro Acesso / Perfil)
 // ══════════════════════════════════════
 async function garantirColunasUsuarios() {
@@ -1595,11 +1685,41 @@ async function garantirColunasUsuarios() {
 }
 
 // ══════════════════════════════════════
+//  MIGRAÇÃO — cache de links do SGPe
+// ══════════════════════════════════════
+// Tabela NOVA, então CREATE TABLE IF NOT EXISTS basta (a armadilha do CLAUDE.md só vale para
+// tabela que já existe). Sem TTL de propósito: o `nu_processo` não muda depois do processo
+// autuado, então o que foi resolvido uma vez vale para sempre.
+//
+// `origem`: 'SGPE' = resolvido ao vivo pelo endpoint DWR · 'CONFERIDO' = par verificado à mão.
+async function garantirTabelaSgpe() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sgpe_processo_ref (
+        sigla          TEXT      NOT NULL,
+        numero_oficial INTEGER   NOT NULL,
+        ano            INTEGER   NOT NULL,
+        nu_processo    INTEGER   NOT NULL,
+        cd_orgaosetor  INTEGER   NOT NULL,
+        origem         TEXT      NOT NULL DEFAULT 'SGPE',
+        criado_em      TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (sigla, numero_oficial, ano)
+      )
+    `);
+    console.log('Tabela sgpe_processo_ref (cache de links do SGPe) verificada.');
+  } catch (e) {
+    console.error('Erro ao garantir tabela sgpe_processo_ref:', e.message);
+  }
+}
+
+// ══════════════════════════════════════
 //  START
 // ══════════════════════════════════════
 const PORT = process.env.PORT || 3000;
-garantirColunasUsuarios().finally(() => {
-  app.listen(PORT, () => {
-    console.log(`SIGPC-GT API rodando na porta ${PORT}`);
+garantirColunasUsuarios()
+  .then(garantirTabelaSgpe)
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`SIGPC-GT API rodando na porta ${PORT}`);
+    });
   });
-});

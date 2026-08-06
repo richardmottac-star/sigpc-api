@@ -62,6 +62,25 @@ teste('SDR05001028/2017', null, 'SDR nao e orgao, SDR05 e');
 teste('ADR050001027/2017', null, '');
 teste('ADR18968/2017', null, '');
 
+console.log('\n═══ 4b. ZERO A ESQUERDA — a trava tem de olhar o texto CRU ═══');
+// SDR05001028: a trava PRECISA disparar aqui. O zero da regiao so sobrevive porque os zeros
+// a esquerda passaram a ser removidos DEPOIS da avaliacao — antes ela recebia "5001028" e
+// comparava com SDR50 (inexistente) em vez de SDR05 (que e orgao), nao disparava, e o valor
+// so nao virava link errado porque SDR sozinho tambem nao esta no mapa. Era acidente.
+teste('SDR05001028/2017', null, 'trava deve disparar (SDR05 e orgao), nao ser acidente');
+
+// SCC05001028 NAO e ambiguo, e por isso linka. SCC nao tem regional: "SCC05" nao existe no
+// mapa, entao ha uma unica leitura possivel — SCC, processo 5001028. A trava rejeita
+// AMBIGUIDADE, nao formato colado; recusar este caso seria recusar tambem os da secao 4c.
+// Se um dia entrar uma chave SCC05 no mapa, este mesmo teste passa a devolver null sozinho,
+// sem tocar no codigo — a trava consulta o mapa, nao uma lista chumbada de siglas.
+teste('SCC05001028/2017', '5001028,10068,2017', 'inambiguo: SCC05 nao existe no mapa');
+
+console.log('\n═══ 4c. REGRESSAO — numero zero-preenchido colado, sigla sem regiao ═══');
+teste('FCEE000260/2017', '260,4267,2017', 'FCEE nao tem regional');
+teste('SCC00008684/2024', '8684,10068,2024', 'SCC nao tem regional');
+teste('SCC0008503/2024', '8503,10068,2024', '');
+
 console.log('\n═══ 5. LIXO E MALFORMADO ═══');
 teste('Aguardando protocolo', null, '');
 teste('SCC 6579', null, 'sem ano');

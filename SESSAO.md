@@ -35,17 +35,22 @@ Nenhuma das três consulta o SGPe: só leem o cache. Quem consulta é `job_sgpe_
 
 ---
 
-## REGRA CRÍTICA
+## A REGRA CRÍTICA ACABOU — 08/08
 
-A regex do `index.html` (sigpc-gt) e a de `lib/sgpe-link.js` (sigpc-api) são **a mesma regra
-em dois lugares**. Mexeu numa, mexa na outra e rode o teste de paridade.
+Era esta: *"a regex do `index.html` e a de `lib/sgpe-link.js` são a mesma regra em dois
+lugares; mexeu numa, mexa na outra"*. **Não vale mais** — o front não tem mais regex.
 
-Já quebrou uma vez, em 06/08: o servidor passou a aceitar região na sigla e o front ficou
-para trás. O sintoma foi silencioso — ADR não linkava na tela, FCEE e SCC linkavam, e a
-API respondia certo porque ninguém perguntava. Nada dá erro quando isso acontece.
+A API passou a devolver o link pronto num mapa `links`, indexado pelo **valor cru**, e a tela
+virou um `Map.get`. `SGPE_PADRAO`, `sgpeChave`, o resolvedor e o observador saíram do
+`index.html` em 08/08 (sigpc-gt `main`), junto com o `sgpe-link-standalone.js`.
 
-O teste de paridade extrai a regex e a `sgpeChave` do próprio `index.html` e compara com a
-lib contra todos os processos do banco. É a única forma de perceber a divergência.
+**A regra agora tem um dono só: `lib/sgpe-link.js`.** O teste de paridade foi aposentado — não
+há mais o que comparar. No lugar dele, `sigpc-gt/teste_front_links.js` falha se a
+normalização voltar a aparecer na tela.
+
+Continua valendo o aviso do topo de `lib/sgpe-link.js`: **não existe fórmula** para o
+`nuProcesso` interno. Medido em 08/08 sobre 7.699 pares reais, o deslocamento vai de 0 a 171,
+sem regra. Errar não dá erro — abre outro processo em silêncio.
 
 ---
 

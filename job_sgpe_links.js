@@ -35,6 +35,12 @@ const MAX_TENTATIVAS = 5;
 // cima de instabilidade: 15 min, 1 h, 6 h, 24 h — e depois desiste.
 const RECUO_MINUTOS = [15, 60, 360, 1440];
 
+// DISJUNTOR. Erro isolado é normal e segue adiante; erro em série é o SGPe fora do ar, e aí
+// insistir só produz dano: 7 mil linhas marcadas como ERRO, `tentativas` inflado e uma hora
+// perdida. Uma rodada abortada não custa nada — o que ficou volta na próxima.
+// `naoEncontrado` NÃO conta: é o SGPe respondendo, e respondendo certo.
+const MAX_ERROS_SEGUIDOS = 10;
+
 /** Minutos a esperar antes da próxima tentativa; `null` = desistiu. */
 function esperaMinutos(tentativas) {
   const t = Number(tentativas) || 0;
@@ -90,6 +96,8 @@ async function rodar(opts = {}) {
   const {
     limite = Infinity, dryRun = false, somenteNovos = false, retentarErros = false,
     pausaMs = 0, pool: poolExterno = null, log = console.log,
+    // Injetável só para teste — em produção é sempre a consulta real ao SGPe.
+    resolver = resolverNoSgpe,
   } = opts;
 
   const db = poolExterno || novoPool();
@@ -102,7 +110,8 @@ async function rodar(opts = {}) {
 
   const estado = {
     alvos: 0, fila: 0, processados: 0,
-    resolvidos: 0, naoEncontrados: 0, erros: 0, restantes: 0, interrompido: false,
+    resolvidos: 0, naoEncontrados: 0, erros: 0, restantes: 0,
+    interrompido: false, abortadoPorErros: false,
   };
 
   try {
@@ -156,17 +165,20 @@ async function rodar(opts = {}) {
     // ── 4. resolve ──
     log('');
     const inicio = Date.now();
+    let errosSeguidos = 0;
     for (const { chave, p } of fila) {
       if (parar) { estado.interrompido = true; break; }
       try {
-        const r = await resolverNoSgpe(p);
+        const r = await resolver(p);
         await gravarResolvido(db, p, r);
         estado.resolvidos++;
+        errosSeguidos = 0;
       } catch (e) {
         if (e instanceof ProcessoNaoEncontrado) {
           // Definitivo: o SGPe respondeu que não existe. Grava a negativa e nunca mais volta.
           await gravarNegativa(db, p, e.message);
           estado.naoEncontrados++;
+          errosSeguidos = 0;   // resposta válida do SGPe — ele está no ar
           log(`  NAO ENCONTRADO  ${chave}`);
         } else if (e instanceof SessaoExpirada) {
           // Derruba a rodada inteira: insistir só geraria erro em série.
@@ -177,7 +189,15 @@ async function rodar(opts = {}) {
           // Rede, timeout, sigla ambígua. Provisório: volta para a fila com recuo.
           await gravarErro(db, p, e.message);
           estado.erros++;
+          errosSeguidos++;
           log(`  ERRO  ${chave}  ${e.message}`);
+          if (errosSeguidos >= MAX_ERROS_SEGUIDOS) {
+            log(`\n  ${MAX_ERROS_SEGUIDOS} ERROS SEGUIDOS — o SGPe provavelmente está fora do ar.`);
+            log('  Encerrando a rodada em vez de insistir. O que ficou volta na próxima.');
+            estado.interrompido = true;
+            estado.abortadoPorErros = true;
+            break;
+          }
         }
       }
       estado.processados++;
@@ -231,4 +251,7 @@ if (require.main === module) {
     .catch(e => { console.error('ERRO:', e.message); process.exit(1); });
 }
 
-module.exports = { rodar, montarFila, esperaMinutos, lerArgumentos, MAX_TENTATIVAS, RECUO_MINUTOS };
+module.exports = {
+  rodar, montarFila, esperaMinutos, lerArgumentos,
+  MAX_TENTATIVAS, RECUO_MINUTOS, MAX_ERROS_SEGUIDOS,
+};

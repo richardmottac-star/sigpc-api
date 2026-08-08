@@ -11,7 +11,8 @@
 // USO: node teste_sgpe_lote.js
 
 const { montarLinks, linksDeLinhas, chavesDeValores } = require('./lib/sgpe-lote');
-const { montarFila, esperaMinutos } = require('./job_sgpe_links');
+const { montarFila, esperaMinutos, rodar, MAX_ERROS_SEGUIDOS } = require('./job_sgpe_links');
+const { ProcessoNaoEncontrado } = require('./lib/sgpe-link');
 
 let ok = 0, falhou = 0;
 
@@ -143,6 +144,48 @@ const URL_2146 = 'https://sgpe.sea.sc.gov.br/cpav/visualizarDocumentosProcesso.d
     conf(esperaMinutos(4) === 1440, '4ª -> 24 h');
     conf(esperaMinutos(5) === null, '5ª -> desiste');
     conf(esperaMinutos(0) === 15, 'defensivo: 0 tentativas cai no primeiro degrau');
+  }
+
+  console.log('\n═══ 9. DISJUNTOR — erro em série aborta a rodada ═══');
+  {
+    // Banco de mentira que devolve 30 processos como acervo e cache vazio.
+    const acervo = Array.from({ length: 30 }, (_, i) => ({ v: `SCC${1000 + i}/2020` }));
+    const dbFalso = () => ({
+      query: async (sql) => {
+        if (/FROM prestacoes_contas/.test(sql)) return { rows: acervo };
+        if (/FROM sgpe_processo_ref/.test(sql)) return { rows: [] };
+        return { rows: [] };                                  // os INSERTs
+      },
+    });
+    const calado = () => {};
+
+    // (a) SGPe fora do ar: todo mundo dá erro de rede.
+    const e1 = await rodar({
+      pool: dbFalso(), log: calado, resolver: async () => { throw new Error('ECONNRESET'); },
+    });
+    conf(e1.abortadoPorErros === true, `abortou com ${MAX_ERROS_SEGUIDOS} erros seguidos`);
+    conf(e1.erros === MAX_ERROS_SEGUIDOS, `parou em ${MAX_ERROS_SEGUIDOS} e não nos 30`, `erros=${e1.erros}`);
+
+    // (b) Erro intercalado com sucesso NÃO pode abortar — instabilidade pontual é normal.
+    let n = 0;
+    const e2 = await rodar({
+      pool: dbFalso(), log: calado,
+      resolver: async () => {
+        n++;
+        if (n % 3 === 0) throw new Error('timeout');
+        return { nuProcesso: 1, cdOrgaosetor: 10068, ano: 2020 };
+      },
+    });
+    conf(e2.abortadoPorErros === false, 'erro intercalado não aborta');
+    conf(e2.processados === 30, 'processou os 30', `processados=${e2.processados}`);
+
+    // (c) "Não encontrado" é resposta VÁLIDA do SGPe — não conta para o disjuntor.
+    const e3 = await rodar({
+      pool: dbFalso(), log: calado,
+      resolver: async () => { throw new ProcessoNaoEncontrado('nao existe'); },
+    });
+    conf(e3.abortadoPorErros === false, '30 "não encontrado" seguidos não abortam');
+    conf(e3.naoEncontrados === 30, 'todos viraram negativa', `naoEncontrados=${e3.naoEncontrados}`);
   }
 
   console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

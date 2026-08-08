@@ -85,8 +85,10 @@ entre região e número. Mas a rede de segurança prevista no plano não está l
 - **22 valores dos grupos B e C** (ano grudado / ambíguos) em `adr_sdr_sem_link.csv`,
   neste repositório — conferência manual. Atingem 345 PCs.
   Composição: 18 com ano grudado, 1 com barra extra, 1 com ponto no ano, 2 sem região.
-- **Merge da feature na main do sigpc-api** — produção roda da feature, confirmado no
-  painel do Railway. Não há registro dessa configuração no código do repositório.
+- ~~Merge da feature na main do sigpc-api~~ — **feito em 08/08** (`0285939`, fast-forward).
+  ⚠️ Produção continua rodando da **`feature/baixa-por-parcial`**, não da `main` — confirmado
+  no painel do Railway, e o cron do job também aponta para ela. Não há registro dessa
+  configuração no código. Quem for mexer: publicar na main **não** publica em produção.
 - **Sondar `cdOrgaosetor` das 9 regionais** agora testáveis: ADR01, 18, 21, 22, 24, 26,
   28, 29, 32. A ADR22 (`13580`) nunca foi verificada — foi ela que originou a frente.
 
@@ -101,9 +103,11 @@ entre região e número. Mas a rede de segurança prevista no plano não está l
 | Cache de links | tabela `sgpe_processo_ref` | criada no boot |
 | Mapa `links` nas 3 rotas | `server.js` + `lib/sgpe-lote.js` | 08/08 |
 | Colunas de negativa | `tentativas`, `ultima_tentativa`, `motivo`; `nu_processo` passou a aceitar NULL | ALTER aplicado à mão em 08/08 e no boot |
-| Job | `job_sgpe_links.js` — **ainda não rodou em volume** | 08/08 |
+| Job | `job_sgpe_links.js` + cron de hora em hora no Railway (`--limite=200`) | 08/08 |
+| Front sem regex | `sigpc-gt/index.html` — `procHtml` virou `Map.get` | sigpc-gt `94bae1a` |
 
-`main` do sigpc-api está em `d425328`, **quatro commits atrás** da feature.
+`main` e `feature/baixa-por-parcial` estão **iguais** em `0285939` (merge de 08/08).
+Produção roda da **feature** — ver a observação em PENDENTE.
 
 ### Cache em 08/08
 

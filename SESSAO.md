@@ -1,6 +1,37 @@
-# SIGPC-API — ESTADO EM 06/08/2026
+# SIGPC-API — ESTADO EM 08/08/2026
 
 Cole no início do chat novo.
+
+---
+
+## CONCLUÍDO EM 08/08 — link do SGPe vem pronto no GET
+
+O link deixou de ser carregado progressivamente pela tela. As **três** rotas que alimentam
+os números de processo passam a devolver um mapa `links` ao lado de `data`:
+
+| rota | campos |
+|---|---|
+| `GET /prestacoes_contas` | `processo_pc` + `processo_mae` |
+| `GET /prestacoes_contas/resumo_tr` | `processo_mae` |
+| `GET /prestacoes_contas/alertas_prazo` | `processo_pc` do `top10` |
+
+**A chave do mapa é o VALOR CRU** (`links["SCC2146/2020"]`), não a forma canônica. É o que
+permite ao front fazer `links[p.processo_pc]` sem regex — e é o que vai matar a REGRA CRÍTICA
+abaixo quando a Fase 6 (front) entrar.
+
+Nenhuma das três consulta o SGPe: só leem o cache. Quem consulta é `job_sgpe_links.js`.
+
+- **Negativa gravada** — `origem = 'NAO_ENCONTRADO'` com `nu_processo` NULL. Processo que o
+  SGPe não tem para de ser reconsultado a cada sessão. Precedência entre estados:
+  `CONFERIDO` > `SGPE` > `NAO_ENCONTRADO` > `ERRO` (provisório, volta com recuo).
+- **`ERRO`** é falha de rede: volta para a fila em 15 min / 1 h / 6 h / 24 h e desiste na 5ª.
+- **`POST /sgpe/links` continua no ar**, agora ciente da negativa — é a rede de segurança
+  até o front trocar.
+
+### PARADO DE PROPÓSITO (combinado com o Richard em 08/08)
+
+- **Fase 6 — front (`sigpc-gt/index.html`)**: não começou.
+- **Job de carga (~1h15)**: não rodou. Fila em 7.317, para rodar acompanhado.
 
 ---
 
@@ -63,8 +94,32 @@ entre região e número. Mas a rede de segurança prevista no plano não está l
 | `POST /sgpe/links` | Railway, roda da `feature/baixa-por-parcial` | `1cf8a0f` |
 | Mapa de 183 órgãos | `lib/sgpe-link.js` | `9938571` |
 | Cache de links | tabela `sgpe_processo_ref` | criada no boot |
+| Mapa `links` nas 3 rotas | `server.js` + `lib/sgpe-lote.js` | 08/08 |
+| Colunas de negativa | `tentativas`, `ultima_tentativa`, `motivo`; `nu_processo` passou a aceitar NULL | ALTER aplicado à mão em 08/08 e no boot |
+| Job | `job_sgpe_links.js` — **ainda não rodou em volume** | 08/08 |
 
-`main` do sigpc-api está em `d425328`, **três commits atrás** da feature.
+`main` do sigpc-api está em `d425328`, **quatro commits atrás** da feature.
+
+### Cache em 08/08
+
+388 resolvidos · **7.317 na fila** · 7.700 processos linkáveis no acervo.
+Fora de alcance para sempre: 72 que não casam a regex + 4 de sigla desconhecida
+(`ADR`, `SCCSCC`, `AR19`) — esses nem chegam a consultar o SGPe.
+
+### O job
+
+```bash
+node job_sgpe_links.js --dry-run          # mostra a fila, não toca em nada
+node job_sgpe_links.js --limite=200       # o que o cron vai rodar
+node job_sgpe_links.js --somente-novos    # fim de carga
+node job_sgpe_links.js --retentar-erros   # força os que falharam por rede
+```
+
+Ritmo medido: **0,59 s por processo** (mediana), p90 0,79 s. A fila cheia leva **~1h15**.
+Ctrl+C encerra depois do processo corrente, sem escrita pela metade.
+
+**FALTA CRIAR:** serviço separado no Railway para o cron (de hora em hora,
+`--limite=200`). Não há `railway.json` no repositório — é configuração de painel.
 
 ---
 
@@ -88,8 +143,8 @@ entre região e número. Mas a rede de segurança prevista no plano não está l
 ## COMO TESTAR
 
 ```bash
-node teste_sgpe_link.js     # 39 testes, sem rede e sem banco
-node --check server.js lib/sgpe-link.js lib/sgpe-dwr.js
+npm run teste               # 39 + 33 testes, sem rede e sem banco
+node --check server.js lib/*.js job_sgpe_links.js
 ```
 
 Produção:

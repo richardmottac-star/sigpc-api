@@ -6,6 +6,7 @@ const {
   ProcessoNaoEncontrado, SessaoExpirada,
 } = require('./lib/sgpe-link');
 const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
+const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
 
 const app = express();
 app.use(cors());
@@ -704,7 +705,10 @@ app.get('/prestacoes_contas', async (req, res) => {
       `SELECT * FROM prestacoes_contas ${where} ORDER BY tr LIMIT $${i++} OFFSET $${i++}`,
       [...values, parseInt(limit), parseInt(offset)]
     );
-    res.json({ data: rows, count: parseInt(countRes.rows[0].count), error: null });
+    // Link do SGPe junto com os dados — ver o cabeçalho de lib/sgpe-lote.js. Só cache, nunca
+    // consulta o SGPe: quem consulta é o job. Chave do mapa = o valor CRU da linha.
+    const links = await linksDeLinhas(pool, rows, ['processo_pc', 'processo_mae']);
+    res.json({ data: rows, count: parseInt(countRes.rows[0].count), links, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -737,7 +741,9 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
        ORDER BY tr`,
       values
     );
-    res.json({ data: rows, count: rows.length, error: null });
+    // Tela Estoque — a coluna SGPe MÃE. Mesmo contrato das outras rotas: `links` ao lado de `data`.
+    const links = await linksDeLinhas(pool, rows, ['processo_mae']);
+    res.json({ data: rows, count: rows.length, links, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -765,11 +771,15 @@ app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
     const vencida365 = rows.filter(r => r.dias > 365);
     const vencidaMenos365 = rows.filter(r => r.dias > 0 && r.dias <= 365);
     const aVencer30 = rows.filter(r => r.dias <= 0);
+    const top10 = rows.slice(0, 10);
+    // Só as 10 linhas que a tela mostra — as demais nunca são renderizadas.
+    const links = await linksDeLinhas(pool, top10, ['processo_pc']);
     res.json({
       data: {
         contagem: { vencida365: vencida365.length, vencidaMenos365: vencidaMenos365.length, aVencer30: aVencer30.length },
-        top10: rows.slice(0, 10)
+        top10
       },
+      links,
       error: null
     });
   } catch (e) {
@@ -1621,14 +1631,21 @@ app.post('/sgpe/links', async (req, res) => {
     );
 
     const links = {};
+    // Linha com `nu_processo` NULL é NEGATIVA: o SGPe já respondeu que o processo não existe.
+    // Sem separá-la aqui a URL sairia como `processoPK=null,null,ano` — e ela também não pode
+    // voltar para a fila do SGPe, que é o motivo de ela existir.
+    const negativas = new Set();
     for (const c of cacheadas.rows) {
-      links[`${c.sigla} ${c.numero_oficial}/${c.ano}`] = montarUrlSgpe(c.nu_processo, c.cd_orgaosetor, c.ano);
+      const chave = `${c.sigla} ${c.numero_oficial}/${c.ano}`;
+      if (c.nu_processo == null) { negativas.add(chave); continue; }
+      links[chave] = montarUrlSgpe(c.nu_processo, c.cd_orgaosetor, c.ano);
     }
     const doCache = Object.keys(links).length;
 
     // ── 2. o que faltou, no SGPe ──
-    const faltando = [...porChave.entries()].filter(([chave]) => !links[chave]);
-    const naoEncontrados = [];
+    const faltando = [...porChave.entries()].filter(([chave]) => !links[chave] && !negativas.has(chave));
+    // As negativas já sabidas vão junto: a tela guarda e para de perguntar.
+    const naoEncontrados = [...negativas];
     let semSessao = 0;
 
     for (const [chave, p] of faltando.slice(0, SGPE_MAXIMO_AO_VIVO)) {
@@ -1636,14 +1653,15 @@ app.post('/sgpe/links', async (req, res) => {
         // Sequencial de propósito: nada de disparar dezenas de requisições no SGPe ao mesmo tempo.
         const r = await resolverNoSgpe(p);
         links[chave] = montarUrlSgpe(r.nuProcesso, r.cdOrgaosetor, r.ano);
-        await pool.query(
-          `INSERT INTO sgpe_processo_ref (sigla, numero_oficial, ano, nu_processo, cd_orgaosetor, origem)
-           VALUES ($1, $2, $3, $4, $5, 'SGPE')
-           ON CONFLICT (sigla, numero_oficial, ano) DO NOTHING`,
-          [p.sigla, p.numero, p.ano, r.nuProcesso, r.cdOrgaosetor]
-        );
+        await gravarResolvido(pool, p, r);
       } catch (e) {
-        if (e instanceof ProcessoNaoEncontrado) { naoEncontrados.push(chave); continue; }
+        // Negativa gravada também aqui, não só no job: sem isso o mesmo processo inexistente
+        // é reconsultado a cada sessão nova do navegador, queimando a cota de 25 ao vivo.
+        if (e instanceof ProcessoNaoEncontrado) {
+          naoEncontrados.push(chave);
+          await gravarNegativa(pool, p, e.message);
+          continue;
+        }
         // Sessão caída derruba a rodada inteira: insistir só geraria erro em série.
         if (e instanceof SessaoExpirada) { semSessao = faltando.length - (Object.keys(links).length - doCache); break; }
         naoEncontrados.push(chave);
@@ -1691,7 +1709,9 @@ async function garantirColunasUsuarios() {
 // tabela que já existe). Sem TTL de propósito: o `nu_processo` não muda depois do processo
 // autuado, então o que foi resolvido uma vez vale para sempre.
 //
-// `origem`: 'SGPE' = resolvido ao vivo pelo endpoint DWR · 'CONFERIDO' = par verificado à mão.
+// `origem`: 'SGPE' = resolvido ao vivo pelo endpoint DWR · 'CONFERIDO' = par verificado à mão
+// · 'NAO_ENCONTRADO' = o SGPe respondeu que o processo não existe · 'ERRO' = falha de rede,
+// estado provisório que volta para a fila do job depois de um recuo.
 async function garantirTabelaSgpe() {
   try {
     await pool.query(`
@@ -1705,6 +1725,20 @@ async function garantirTabelaSgpe() {
         criado_em      TIMESTAMP NOT NULL DEFAULT NOW(),
         PRIMARY KEY (sigla, numero_oficial, ano)
       )
+    `);
+    // A tabela agora EXISTE em produção (388 linhas em 08/08/2026), então o CREATE acima não
+    // alcança mais coluna nenhuma — armadilha 2 do CLAUDE.md. O que muda vem por ALTER.
+    //
+    // `nu_processo`/`cd_orgaosetor` passam a aceitar NULL: é o que distingue a linha de
+    // NEGATIVA (processo que o SGPe não tem) da linha resolvida. Toda leitura filtra por
+    // `nu_processo IS NOT NULL` — ver lib/sgpe-lote.js.
+    await pool.query(`
+      ALTER TABLE sgpe_processo_ref
+        ALTER COLUMN nu_processo   DROP NOT NULL,
+        ALTER COLUMN cd_orgaosetor DROP NOT NULL,
+        ADD COLUMN IF NOT EXISTS tentativas       INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS ultima_tentativa TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS motivo           TEXT
     `);
     console.log('Tabela sgpe_processo_ref (cache de links do SGPe) verificada.');
   } catch (e) {

@@ -4,7 +4,9 @@
   "description": "API SIGPC-GT",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "job:sgpe": "node job_sgpe_links.js",
+    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

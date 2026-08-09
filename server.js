@@ -702,7 +702,8 @@ app.get('/prestacoes_contas', async (req, res) => {
   try {
     const {
       tr, codigo_pc, codigo_nl, analista_id, analista_nome, grupo,
-      status, baixada, setorial_id, conflito, estornada, enviado_ci, limit = 9999, offset = 0
+      status, baixada, setorial_id, conflito, estornada, enviado_ci, busca,
+      limit = 9999, offset = 0
     } = req.query;
     const conditions = [];
     const values = [];
@@ -720,6 +721,21 @@ app.get('/prestacoes_contas', async (req, res) => {
     if (conflito !== undefined) { conditions.push(`conflito = $${i++}`); values.push(conflito === 'true'); }
     if (estornada !== undefined) { conditions.push(`estornada = $${i++}`); values.push(estornada === 'true'); }
     if (enviado_ci !== undefined) { conditions.push(`enviado_ci = $${i++}`); values.push(enviado_ci === 'true'); }
+
+    // BUSCA LIVRE — parcial, sem acento, sobre os sete campos que identificam uma PC na tela.
+    // Os demais filtros acima são igualdade exata e continuam sendo: `tr=2019TR000168` casa
+    // uma TR só, `busca=000168` casa qualquer coisa que contenha esse pedaço.
+    //
+    // A ordem dos campos é a de quem procura: primeiro o que a pessoa tem na mão (TR, número
+    // do SGPe), depois o que ela lembra (entidade), por último os códigos internos.
+    if (busca) {
+      const p = `$${i++}`;
+      values.push(`%${semAcento(busca)}%`);
+      conditions.push(
+        `(tr ILIKE ${p} OR processo_mae ILIKE ${p} OR processo_pc ILIKE ${p}
+          OR entidade ILIKE ${p} OR codigo_nl ILIKE ${p} OR codigo_pc ILIKE ${p})`
+      );
+    }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas ${where}`, values);
@@ -770,10 +786,13 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
       // O mesmo escopo vale dentro da subconsulta: buscar não pode revelar TR de fora do
       // recorte do usuário.
       const escopoSub = escopo.length ? `${escopo.join(' AND ')} AND ` : '';
+      // Mesmos sete campos do GET /prestacoes_contas — buscar a NL "2022NL008336" ou a PC
+      // "2020PC000845" tem de trazer a TR delas. Aqui basta UMA linha casar para a TR
+      // inteira aparecer, e as contagens continuam vendo todas as linhas dela.
       conditions.push(
         `tr IN (SELECT tr FROM prestacoes_contas
-                 WHERE ${escopoSub}(tr ILIKE ${p} OR entidade ILIKE ${p}
-                                    OR processo_mae ILIKE ${p} OR processo_pc ILIKE ${p}))`
+                 WHERE ${escopoSub}(tr ILIKE ${p} OR processo_mae ILIKE ${p} OR processo_pc ILIKE ${p}
+                                    OR entidade ILIKE ${p} OR codigo_nl ILIKE ${p} OR codigo_pc ILIKE ${p}))`
       );
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';

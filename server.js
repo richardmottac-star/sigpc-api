@@ -944,6 +944,77 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════
+//  INÍCIO DA ANÁLISE
+// ══════════════════════════════════════
+// ⚠️ A COLUNA É CRIADA À MÃO, pelo Richard, no painel do Railway:
+//
+//   ALTER TABLE prestacoes_contas ADD COLUMN IF NOT EXISTS dt_inicio_analise TIMESTAMP;
+//
+// Enquanto ela não existir, referenciá-la derrubaria o PATCH de assumir TR com
+// "column does not exist" — e assumir TR é o caminho crítico da tela. Por isso o código
+// PERGUNTA ao banco, uma vez no boot, se a coluna está lá, e só então passa a usá-la.
+// Assim a ordem entre o deploy e o ALTER deixa de importar.
+let TEM_DT_INICIO = false;
+
+async function verificarColunaInicioAnalise() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'prestacoes_contas' AND column_name = 'dt_inicio_analise'`);
+    TEM_DT_INICIO = rows.length > 0;
+    console.log(TEM_DT_INICIO
+      ? 'Coluna dt_inicio_analise presente — início da análise ativo.'
+      : 'Coluna dt_inicio_analise AUSENTE — início da análise inativo (rode o ALTER TABLE).');
+  } catch (e) {
+    TEM_DT_INICIO = false;
+    console.error('Erro ao verificar dt_inicio_analise:', e.message);
+  }
+}
+
+// `dt_inicio_analise` tem duas formas de ser preenchida, e nenhuma é retroativa:
+//
+//   AUTOMÁTICA — o PATCH abaixo carimba NOW() quando a PC vira 'analise' pela primeira vez.
+//   MANUAL     — esta rota, para as TRs assumidas antes de a coluna existir e para correção.
+//
+// Nada foi carimbado no histórico de propósito: `atualizado_em` é a última escrita de
+// qualquer tipo (cargas, backfills, a reserva de 09/08) e usá-lo produziria data plausível
+// e errada — pior que campo vazio, porque ninguém desconfia.
+//
+// ⚠️ Precisa vir ANTES de `/:codigo_pc`, senão "inicio_analise" é capturado como código de PC.
+//
+// PATCH /prestacoes_contas/inicio_analise  body { tr, analista_id, data }
+// `data` = 'YYYY-MM-DD' ou null para limpar.
+app.patch('/prestacoes_contas/inicio_analise', async (req, res) => {
+  try {
+    const { tr, analista_id, data } = req.body || {};
+    if (!TEM_DT_INICIO)
+      return res.status(409).json({ data: null, error: { message: 'A coluna dt_inicio_analise ainda não existe no banco. Rode o ALTER TABLE.' } });
+    if (!tr || !analista_id)
+      return res.status(400).json({ data: null, error: { message: 'tr e analista_id são obrigatórios' } });
+
+    if (data !== null && data !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data)))
+        return res.status(400).json({ data: null, error: { message: 'data deve ser YYYY-MM-DD' } });
+      // Armadilha 3 do CLAUDE.md: data futura zera relatório. Análise não começa amanhã.
+      if (String(data) > new Date().toISOString().slice(0, 10))
+        return res.status(400).json({ data: null, error: { message: 'a data de início não pode ser futura' } });
+    }
+
+    // Só as PCs do próprio analista: ninguém carimba o início da análise alheia.
+    const { rows } = await pool.query(
+      `UPDATE prestacoes_contas
+          SET dt_inicio_analise = $1::timestamp, atualizado_em = NOW()
+        WHERE tr = $2 AND analista_id = $3
+        RETURNING codigo_pc`,
+      [data ? `${data} 00:00:00` : null, tr, parseInt(analista_id)]
+    );
+    res.json({ data: { tr, data: data || null, pcs: rows.length }, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // PATCH /prestacoes_contas/:codigo_pc — atualização pontual (ex: assumir TR)
 // precisa vir depois de /baixar e /estornar, senão "baixar"/"estornar" seriam capturados como codigo_pc
 app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
@@ -961,6 +1032,12 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
     });
     if (sets.length === 0)
       return res.status(400).json({ data: null, error: { message: 'nenhum campo permitido informado' } });
+
+    // Carimba o início da análise na PRIMEIRA vez que a PC vira 'analise'. O COALESCE é o
+    // ponto: devolver ao estoque e reassumir não reinicia a contagem — o relógio da análise
+    // já tinha começado. E nunca sobrescreve o que foi definido à mão.
+    if (campos.status === 'analise' && TEM_DT_INICIO) sets.push(`dt_inicio_analise = COALESCE(dt_inicio_analise, NOW())`);
+
     sets.push(`atualizado_em = NOW()`);
     values.push(req.params.codigo_pc);
     const { rows } = await pool.query(
@@ -1870,6 +1947,7 @@ const PORT = process.env.PORT || 3000;
 garantirColunasUsuarios()
   .then(garantirTabelaSgpe)
   .then(garantirTabelaPreferenciaTr)
+  .then(verificarColunaInicioAnalise)
   .finally(() => {
     app.listen(PORT, () => {
       console.log(`SIGPC-GT API rodando na porta ${PORT}`);

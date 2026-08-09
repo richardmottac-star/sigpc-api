@@ -970,6 +970,15 @@ async function verificarColunaInicioAnalise() {
     TEM_DT_INICIO = false;
     console.error('Erro ao verificar dt_inicio_analise:', e.message);
   }
+  return TEM_DT_INICIO;
+}
+
+// ⚠️ Reconsulta enquanto for `false`. O primeiro desenho lia o flag só no boot, e isso criou
+// um acoplamento bobo: o ALTER rodado DEPOIS do deploy não tinha efeito até alguém reiniciar
+// o serviço — foi exatamente o que aconteceu em 09/08. Uma vez verdadeiro, nunca mais
+// consulta (coluna não desaparece), então o custo é zero no caminho quente.
+async function temInicioAnalise() {
+  return TEM_DT_INICIO ? true : verificarColunaInicioAnalise();
 }
 
 // `dt_inicio_analise` tem duas formas de ser preenchida, e nenhuma é retroativa:
@@ -988,7 +997,7 @@ async function verificarColunaInicioAnalise() {
 app.patch('/prestacoes_contas/inicio_analise', async (req, res) => {
   try {
     const { tr, analista_id, data } = req.body || {};
-    if (!TEM_DT_INICIO)
+    if (!await temInicioAnalise())
       return res.status(409).json({ data: null, error: { message: 'A coluna dt_inicio_analise ainda não existe no banco. Rode o ALTER TABLE.' } });
     if (!tr || !analista_id)
       return res.status(400).json({ data: null, error: { message: 'tr e analista_id são obrigatórios' } });
@@ -1036,7 +1045,7 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
     // Carimba o início da análise na PRIMEIRA vez que a PC vira 'analise'. O COALESCE é o
     // ponto: devolver ao estoque e reassumir não reinicia a contagem — o relógio da análise
     // já tinha começado. E nunca sobrescreve o que foi definido à mão.
-    if (campos.status === 'analise' && TEM_DT_INICIO) sets.push(`dt_inicio_analise = COALESCE(dt_inicio_analise, NOW())`);
+    if (campos.status === 'analise' && await temInicioAnalise()) sets.push(`dt_inicio_analise = COALESCE(dt_inicio_analise, NOW())`);
 
     sets.push(`atualizado_em = NOW()`);
     values.push(req.params.codigo_pc);

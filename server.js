@@ -1387,11 +1387,15 @@ app.get('/metas_analistas', async (req, res) => {
 // ══════════════════════════════════════
 app.get('/anotacoes_tr', async (req, res) => {
   try {
-    const { tr } = req.query;
+    const { tr, trs } = req.query;
     const conditions = [];
     const values = [];
     let i = 1;
     if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
+    // `trs` (lista separada por vírgula) existe para o painel da Minha Planilha: ele precisa
+    // saber quais das ~54 TRs do analista têm anotação, e uma chamada por TR seriam 54
+    // requisições só para desenhar um ícone.
+    if (trs) { conditions.push(`tr = ANY($${i++}::text[])`); values.push(String(trs).split(',').filter(Boolean)); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(
       `SELECT * FROM anotacoes_tr ${where} ORDER BY criado_em DESC`,
@@ -1746,6 +1750,76 @@ async function garantirColunasUsuarios() {
 }
 
 // ══════════════════════════════════════
+//  MIGRAÇÃO — preferências do painel por analista
+// ══════════════════════════════════════
+// Guarda, por analista e por TR, o que é escolha DELE e não do dado: se a TR está fixada no
+// topo e se o painel dela fica aberto. Duas colunas em vez de duas tabelas porque a chave é
+// a mesma — e porque quase toda linha vai ter as duas.
+//
+// Tabela NOVA, então `CREATE TABLE IF NOT EXISTS` basta (a armadilha 2 do CLAUDE.md só vale
+// para tabela que já existe).
+async function garantirTabelaPreferenciaTr() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS preferencia_tr (
+        analista_id   INTEGER      NOT NULL,
+        tr            VARCHAR(20)  NOT NULL,
+        fixada        BOOLEAN      NOT NULL DEFAULT false,
+        expandida     BOOLEAN      NOT NULL DEFAULT false,
+        atualizado_em TIMESTAMP    NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (analista_id, tr)
+      )
+    `);
+    console.log('Tabela preferencia_tr (alfinete e painel aberto) verificada.');
+  } catch (e) {
+    console.error('Erro ao garantir tabela preferencia_tr:', e.message);
+  }
+}
+
+// GET /preferencia_tr?analista_id=X — tudo que o analista fixou ou deixou aberto
+app.get('/preferencia_tr', async (req, res) => {
+  try {
+    const { analista_id } = req.query;
+    if (!analista_id)
+      return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+    const { rows } = await pool.query(
+      `SELECT tr, fixada, expandida FROM preferencia_tr WHERE analista_id = $1`,
+      [parseInt(analista_id)]
+    );
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    // Tabela ainda não criada não pode derrubar a tela: sem preferência, tudo recolhido.
+    res.json({ data: [], count: 0, error: null });
+  }
+});
+
+// PATCH /preferencia_tr  body { analista_id, tr, fixada?, expandida? }
+// Manda só o que mudou — o campo omitido fica como estava.
+app.patch('/preferencia_tr', async (req, res) => {
+  try {
+    const { analista_id, tr, fixada, expandida } = req.body || {};
+    if (!analista_id || !tr)
+      return res.status(400).json({ data: null, error: { message: 'analista_id e tr são obrigatórios' } });
+
+    const { rows } = await pool.query(
+      `INSERT INTO preferencia_tr (analista_id, tr, fixada, expandida, atualizado_em)
+       VALUES ($1, $2, COALESCE($3, false), COALESCE($4, false), NOW())
+       ON CONFLICT (analista_id, tr) DO UPDATE
+          SET fixada        = COALESCE($3, preferencia_tr.fixada),
+              expandida     = COALESCE($4, preferencia_tr.expandida),
+              atualizado_em = NOW()
+       RETURNING tr, fixada, expandida`,
+      [parseInt(analista_id), tr,
+       fixada === undefined ? null : !!fixada,
+       expandida === undefined ? null : !!expandida]
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — cache de links do SGPe
 // ══════════════════════════════════════
 // Tabela NOVA, então CREATE TABLE IF NOT EXISTS basta (a armadilha do CLAUDE.md só vale para
@@ -1795,6 +1869,7 @@ async function garantirTabelaSgpe() {
 const PORT = process.env.PORT || 3000;
 garantirColunasUsuarios()
   .then(garantirTabelaSgpe)
+  .then(garantirTabelaPreferenciaTr)
   .finally(() => {
     app.listen(PORT, () => {
       console.log(`SIGPC-GT API rodando na porta ${PORT}`);

@@ -715,17 +715,43 @@ app.get('/prestacoes_contas', async (req, res) => {
 });
 
 // GET /prestacoes_contas/resumo_tr?analista_id=X&setorial_id=X&busca=X — agrupado por TR
+//
+// ⚠️ A BUSCA ESCOLHE QUAIS TRs APARECEM. Ela NÃO pode entrar no mesmo WHERE das agregações.
+//
+// Era esse o defeito até 09/08/2026: o filtro da busca ficava no WHERE, que roda ANTES do
+// GROUP BY, então `total_pcs`, `total_nls`, `baixadas` e `status` passavam a contar só as
+// linhas que casaram com o termo. Medido em produção: a TR 2019TR000168 tem 20 PCs e
+// aparecia com 2 ao buscar "FCEE5830".
+//
+// E não parava na contagem — a tela deriva o status de `baixadas >= total_pcs`
+// (index.html, renderEst), então uma TR de 20 PCs com 2 baixadas era exibida como BAIXADA.
+// 1.500 das 1.559 TRs têm mais de uma PC, ou seja, quase todas estavam sujeitas.
+//
+// A correção é a busca virar `tr IN (subconsulta)`: ela seleciona o conjunto de TRs, e as
+// agregações continuam vendo todas as linhas de cada TR.
 app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
   try {
     const { analista_id, setorial_id, busca } = req.query;
-    const conditions = [];
+    // Escopo: recorta o universo de linhas e, portanto, também as contagens. É intencional —
+    // um analista vê os números das SUAS PCs.
+    const escopo = [];
     const values = [];
     let i = 1;
-    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
-    if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+    if (analista_id) { escopo.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    if (setorial_id) { escopo.push(`setorial_id = $${i++}`); values.push(setorial_id); }
+
+    const conditions = [...escopo];
     if (busca) {
-      conditions.push(`(tr ILIKE $${i} OR entidade ILIKE $${i} OR processo_mae ILIKE $${i} OR processo_pc ILIKE $${i})`);
-      values.push(`%${busca}%`); i++;
+      const p = `$${i++}`;
+      values.push(`%${busca}%`);
+      // O mesmo escopo vale dentro da subconsulta: buscar não pode revelar TR de fora do
+      // recorte do usuário.
+      const escopoSub = escopo.length ? `${escopo.join(' AND ')} AND ` : '';
+      conditions.push(
+        `tr IN (SELECT tr FROM prestacoes_contas
+                 WHERE ${escopoSub}(tr ILIKE ${p} OR entidade ILIKE ${p}
+                                    OR processo_mae ILIKE ${p} OR processo_pc ILIKE ${p}))`
+      );
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(

@@ -8,27 +8,7 @@ const {
 const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
 const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
 
-// ══════════════════════════════════════
-//  BUSCA — acento
-// ══════════════════════════════════════
-// Tira o acento DO TERMO DIGITADO, não da coluna.
-//
-// Funciona porque o acervo está inteiro sem acento — conferido em 09/08/2026: 0 de 14.652
-// linhas têm `[À-ÿ]` em `tr`, `entidade`, `processo_pc`, `processo_mae`, `codigo_pc` ou
-// `codigo_nl`, e 0 de 49 em `usuarios.nome`. As entidades estão gravadas assim:
-//   "ASSOC DOS PAIS E AMIGOS DOS EXCEPCIONAIS DE SAO JOSE"
-//
-// Sem isto, quem digitava "São José" — a grafia correta — via tela vazia:
-//   busca "São José" ->  0 TRs        busca "SAO JOSE" -> 24 TRs
-//
-// ⚠️ SE UM DIA ENTRAR DADO ACENTUADO NO ACERVO, esta solução não o alcança: tirar o acento
-// do termo aproxima o termo do dado, não o contrário. Aí o caminho é `CREATE EXTENSION
-// unaccent` (disponível no Railway, versão 1.1, ainda não instalada) ou `translate()` na
-// coluna. A carga vem de CSV, então é do carregador que o acento entraria.
-// `\p{Diacritic}` pega as marcas que o NFD separa da letra. Escrito assim, e não como classe
-// de caracteres combinantes (`[̀-ͯ]`), porque aquela forma vira bytes invisíveis no
-// fonte — impossíveis de revisar num diff.
-const semAcento = (s) => String(s == null ? '' : s).normalize('NFD').replace(/\p{Diacritic}/gu, '');
+const { semAcento, condicaoBusca } = require('./lib/busca');
 
 const app = express();
 app.use(cors());
@@ -729,12 +709,9 @@ app.get('/prestacoes_contas', async (req, res) => {
     // A ordem dos campos é a de quem procura: primeiro o que a pessoa tem na mão (TR, número
     // do SGPe), depois o que ela lembra (entidade), por último os códigos internos.
     if (busca) {
-      const p = `$${i++}`;
-      values.push(`%${semAcento(busca)}%`);
-      conditions.push(
-        `(tr ILIKE ${p} OR processo_mae ILIKE ${p} OR processo_pc ILIKE ${p}
-          OR entidade ILIKE ${p} OR codigo_nl ILIKE ${p} OR codigo_pc ILIKE ${p})`
-      );
+      const r = condicaoBusca(busca, values, i);
+      conditions.push(r.condicao);
+      i = r.proximo;
     }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
@@ -780,19 +757,17 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
 
     const conditions = [...escopo];
     if (busca) {
-      const p = `$${i++}`;
-      // Sem acento: o acervo está todo sem acento, então é o TERMO que se aproxima do dado.
-      values.push(`%${semAcento(busca)}%`);
+      // Mesma condição do GET /prestacoes_contas — a mesma palavra tem de achar a mesma coisa
+      // nas duas rotas. Buscar a NL "2022NL008336", a PC "2020PC000845" ou "SCC 2511" traz a
+      // TR delas: basta UMA linha casar para a TR aparecer, e as contagens continuam vendo
+      // todas as linhas dela (ver o aviso sobre o GROUP BY acima).
+      const r = condicaoBusca(busca, values, i);
+      i = r.proximo;
       // O mesmo escopo vale dentro da subconsulta: buscar não pode revelar TR de fora do
       // recorte do usuário.
       const escopoSub = escopo.length ? `${escopo.join(' AND ')} AND ` : '';
-      // Mesmos sete campos do GET /prestacoes_contas — buscar a NL "2022NL008336" ou a PC
-      // "2020PC000845" tem de trazer a TR delas. Aqui basta UMA linha casar para a TR
-      // inteira aparecer, e as contagens continuam vendo todas as linhas dela.
       conditions.push(
-        `tr IN (SELECT tr FROM prestacoes_contas
-                 WHERE ${escopoSub}(tr ILIKE ${p} OR processo_mae ILIKE ${p} OR processo_pc ILIKE ${p}
-                                    OR entidade ILIKE ${p} OR codigo_nl ILIKE ${p} OR codigo_pc ILIKE ${p}))`
+        `tr IN (SELECT tr FROM prestacoes_contas WHERE ${escopoSub}${r.condicao})`
       );
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';

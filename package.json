@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "job:sgpe": "node job_sgpe_links.js",
-    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js"
+    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

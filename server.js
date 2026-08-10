@@ -1136,18 +1136,50 @@ app.post('/solicitacao_vaga', async (req, res) => {
 // PATCH /solicitacao_vaga/:id  body { status: 'aprovada'|'negada', decidido_por, motivo }
 app.patch('/solicitacao_vaga/:id', async (req, res) => {
   try {
-    const { status, decidido_por, motivo } = req.body || {};
-    if (!['aprovada', 'negada'].includes(status))
-      return res.status(400).json({ data: null, error: { message: "status deve ser 'aprovada' ou 'negada'" } });
+    const { status, decidido_por, motivo, analista_id } = req.body || {};
+    if (!['aprovada', 'negada', 'cancelada'].includes(status))
+      return res.status(400).json({ data: null, error: { message: "status deve ser 'aprovada', 'negada' ou 'cancelada'" } });
     if (status === 'negada' && !(motivo && String(motivo).trim()))
       return res.status(400).json({ data: null, error: { message: 'negar exige motivo' } });
 
-    // Expira antes de decidir: aprovar um pedido de 5 dias atrás daria a alguém uma
-    // autorização que a TR já não guarda — ela voltou ao estoque e pode ter dono novo.
-    // Com a expiração antes, o UPDATE abaixo não acha 'pendente' e o coordenador recebe
-    // "já foi decidido" em vez de aprovar no vazio.
+    // Expira ANTES de qualquer coisa, inclusive do cancelamento: um pedido de 5 dias que o
+    // analista cancela viraria 'cancelada' e apagaria a prova de que ele ficou sem resposta.
+    // Expirando primeiro, ele recebe "já está como 'expirada'" — e o registro fica.
     await limiteTr.expirarPendentes(pool);
 
+    // ── CANCELAMENTO ─────────────────────────────────────────────────────────
+    // Caminho separado de propósito: cancelar não é decidir. Quem cancela é o DONO do
+    // pedido, e não o coordenador — então nem passa pela conferência de quem aprova.
+    if (status === 'cancelada') {
+      if (!analista_id)
+        return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório para cancelar' } });
+
+      // O `analista_id` entra no WHERE, e não numa leitura antes: assim a posse é conferida
+      // no MESMO comando que grava. Conferir antes deixaria uma fresta entre ler e escrever.
+      const dono = parseInt(analista_id);
+      const { rows } = await pool.query(
+        `UPDATE solicitacao_vaga
+            SET status = 'cancelada', decidido_por = $1, decidido_em = NOW()
+          WHERE id = $2 AND analista_id = $1 AND status = 'pendente'
+          RETURNING *`, [dono, parseInt(req.params.id)]);
+
+      if (!rows.length) {
+        const at = await pool.query(`SELECT status, analista_id FROM solicitacao_vaga WHERE id = $1`,
+                                    [parseInt(req.params.id)]);
+        const r = at.rows[0];
+        const msg = !r ? 'Pedido não encontrado.'
+          : Number(r.analista_id) !== dono ? 'Este pedido é de outro analista.'
+          : r.status === 'pendente' ? 'Não foi possível cancelar.'
+          : `Este pedido já está como '${r.status}'.`;
+        return res.status(409).json({ data: null, error: { message: msg, status_atual: r ? r.status : null } });
+      }
+      // A TR volta ao estoque no mesmo instante: tudo que lê reserva filtra por 'pendente'.
+      return res.json({ data: rows[0], error: null });
+    }
+
+    // A expiração lá em cima também protege esta parte: aprovar um pedido de 5 dias daria a
+    // alguém autorização para uma TR que já voltou ao estoque e pode ter dono novo.
+    //
     // Só decide o que está pendente — sem isso, um duplo clique aprovaria duas vezes e
     // geraria duas vagas extras.
     const { rows } = await pool.query(

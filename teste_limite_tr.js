@@ -193,6 +193,27 @@ const SUPER = { id: 4, nome: 'Richard', perfil: 'superadmin', grupo: '3' };
     conf(L.RESERVA_DIAS === 3, 'o prazo e 3 dias, fixo no codigo (decisao de 10/08)');
   }
 
+  console.log('\n═══ 5e. CANCELAR SOLTA A TR NA HORA ═══');
+  {
+    // Nao ha funcao propria: cancelar e um UPDATE na rota. O que se garante aqui e que a
+    // reserva some no instante em que o status deixa de ser 'pendente' — porque TUDO que le
+    // reserva filtra por 'pendente'. Se um dia alguem trocar esse filtro por "nao decidida"
+    // ou coisa parecida, estes dois testes caem.
+    const d = db({ config: CFG() });
+    await L.reservaPendente(d, '2020TR000030');
+    conf(d.chamadas.some(c => /s\.status = 'pendente'/.test(c)),
+         "reservaPendente so olha 'pendente' — cancelada deixa de segurar na hora");
+
+    const e = db({ config: CFG() });
+    await L.reservasPendentes(e);
+    conf(e.chamadas.some(c => /s\.status = 'pendente'/.test(c)),
+         'reservasPendentes idem — a tag some junto');
+
+    // Cancelado nao pode continuar barrando quem quer assumir.
+    const c = await L.podeAssumirTr(db({ config: CFG(), ocupadas: 1, reserva: null }), ANALISTA, '2020TR000030');
+    conf(c.pode === true, 'sem pendente, a TR volta a ser assumivel');
+  }
+
   console.log('\n═══ 6. LIBERACAO: POR TR OU POR PARCIAL ═══');
   {
     const porTr = db({ config: CFG({ liberacao: 'tr' }), ocupadas: 3 });

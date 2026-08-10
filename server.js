@@ -9,6 +9,7 @@ const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
 const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
 
 const { semAcento, condicaoBusca } = require('./lib/busca');
+const limiteTr = require('./lib/limite-tr');
 
 const app = express();
 app.use(cors());
@@ -945,6 +946,194 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  TRAVA DE TRs POR ANALISTA
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/limite-tr.js. Aqui ficam só as rotas.
+
+// GET /limite_tr/situacao?analista_id=X — quanto ele tem, quanto pode, se pode pedir mais
+app.get('/limite_tr/situacao', async (req, res) => {
+  try {
+    const { analista_id, tr } = req.query;
+    if (!analista_id)
+      return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+    const u = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(analista_id)]);
+    if (!u.rows.length)
+      return res.status(404).json({ data: null, error: { message: 'analista não encontrado' } });
+
+    const s = tr ? await limiteTr.podeAssumirTr(pool, u.rows[0], tr)
+                 : await limiteTr.situacao(pool, u.rows[0]);
+    res.json({ data: s, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /config_limite_tr — a configuração global
+app.get('/config_limite_tr', async (req, res) => {
+  try {
+    res.json({ data: await limiteTr.lerConfig(pool), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /config_limite_tr — só superadmin. Manda só o que mudou.
+app.patch('/config_limite_tr', async (req, res) => {
+  try {
+    const { limite_padrao, liberacao, pedido_ativo, pedido_aprovador, atualizado_por, atualizado_por_nome } = req.body || {};
+    const { rows } = await pool.query(
+      `UPDATE config_limite_tr
+          SET limite_padrao    = CASE WHEN $1::boolean THEN $2::int  ELSE limite_padrao    END,
+              liberacao        = COALESCE($3, liberacao),
+              pedido_ativo     = COALESCE($4, pedido_ativo),
+              pedido_aprovador = COALESCE($5, pedido_aprovador),
+              atualizado_por      = $6,
+              atualizado_por_nome = $7,
+              atualizado_em       = NOW()
+        WHERE id = 1
+        RETURNING *`,
+      // o par (informou, valor) existe porque `limite_padrao = null` é um valor VÁLIDO
+      // (sem limite) — um COALESCE aqui tornaria impossível voltar para "sem limite".
+      [limite_padrao !== undefined,
+       limite_padrao === undefined || limite_padrao === null ? null : parseInt(limite_padrao),
+       liberacao ?? null, pedido_ativo ?? null, pedido_aprovador ?? null,
+       atualizado_por ?? null, atualizado_por_nome ?? null]
+    );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /limite_tr_excecao — exceções com nome e grupo vindos de usuarios (nunca duplicados)
+app.get('/limite_tr_excecao', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT e.analista_id, e.limite, e.observacao, e.atualizado_em,
+              u.nome, u.grupo, u.perfil
+         FROM limite_tr_excecao e
+         LEFT JOIN usuarios u ON u.id = e.analista_id
+        ORDER BY u.nome`);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.json({ data: [], count: 0, error: null });
+  }
+});
+
+// PATCH /limite_tr_excecao — cria ou atualiza. `limite: null` = sem limite para a pessoa.
+app.patch('/limite_tr_excecao', async (req, res) => {
+  try {
+    const { analista_id, limite, observacao, atualizado_por } = req.body || {};
+    if (!analista_id)
+      return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+    const { rows } = await pool.query(
+      `INSERT INTO limite_tr_excecao (analista_id, limite, observacao, atualizado_por, atualizado_em)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (analista_id) DO UPDATE
+          SET limite = EXCLUDED.limite, observacao = EXCLUDED.observacao,
+              atualizado_por = EXCLUDED.atualizado_por, atualizado_em = NOW()
+       RETURNING *`,
+      [parseInt(analista_id), limite === undefined || limite === null ? null : parseInt(limite),
+       observacao ?? null, atualizado_por ?? null]);
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.delete('/limite_tr_excecao/:analista_id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `DELETE FROM limite_tr_excecao WHERE analista_id = $1 RETURNING *`, [parseInt(req.params.analista_id)]);
+    res.json({ data: rows[0] || null, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ── Solicitações de vaga extra ──────────────────────────────────────────────
+// GET /solicitacao_vaga?status=pendente&grupo=3
+app.get('/solicitacao_vaga', async (req, res) => {
+  try {
+    const { status, grupo, analista_id } = req.query;
+    const cond = [];
+    const val = [];
+    let i = 1;
+    if (status) { cond.push(`s.status = $${i++}`); val.push(status); }
+    if (grupo) { cond.push(`u.grupo = $${i++}`); val.push(String(grupo)); }
+    if (analista_id) { cond.push(`s.analista_id = $${i++}`); val.push(parseInt(analista_id)); }
+    const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT s.*, u.nome AS analista_nome_completo, u.grupo,
+              (SELECT COUNT(DISTINCT tr)::int FROM prestacoes_contas
+                WHERE analista_id = s.analista_id AND baixada = false) AS trs_abertas,
+              d.nome AS decidido_por_nome
+         FROM solicitacao_vaga s
+         LEFT JOIN usuarios u ON u.id = s.analista_id
+         LEFT JOIN usuarios d ON d.id = s.decidido_por
+         ${where}
+        ORDER BY s.criado_em DESC`, val);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.json({ data: [], count: 0, error: null });
+  }
+});
+
+// POST /solicitacao_vaga  body { analista_id, tr, justificativa }
+app.post('/solicitacao_vaga', async (req, res) => {
+  try {
+    const { analista_id, tr, justificativa } = req.body || {};
+    if (!analista_id || !justificativa || !String(justificativa).trim())
+      return res.status(400).json({ data: null, error: { message: 'analista_id e justificativa são obrigatórios' } });
+
+    const cfg = await limiteTr.lerConfig(pool);
+    if (cfg.pedido_ativo === false)
+      return res.status(409).json({ data: null, error: { message: 'O pedido de vaga extra está desativado.' } });
+
+    // Uma pendente por TR: reenviar o mesmo pedido não pode gerar fila duplicada.
+    const dup = await pool.query(
+      `SELECT id FROM solicitacao_vaga
+        WHERE analista_id = $1 AND status = 'pendente' AND tr IS NOT DISTINCT FROM $2`,
+      [parseInt(analista_id), tr || null]);
+    if (dup.rows.length)
+      return res.status(409).json({ data: null, error: { message: 'Já existe um pedido pendente para esta TR.' } });
+
+    const { rows } = await pool.query(
+      `INSERT INTO solicitacao_vaga (analista_id, tr, justificativa)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [parseInt(analista_id), tr || null, String(justificativa).trim()]);
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /solicitacao_vaga/:id  body { status: 'aprovada'|'negada', decidido_por, motivo }
+app.patch('/solicitacao_vaga/:id', async (req, res) => {
+  try {
+    const { status, decidido_por, motivo } = req.body || {};
+    if (!['aprovada', 'negada'].includes(status))
+      return res.status(400).json({ data: null, error: { message: "status deve ser 'aprovada' ou 'negada'" } });
+    if (status === 'negada' && !(motivo && String(motivo).trim()))
+      return res.status(400).json({ data: null, error: { message: 'negar exige motivo' } });
+
+    // Só decide o que está pendente — sem isso, um duplo clique aprovaria duas vezes e
+    // geraria duas vagas extras.
+    const { rows } = await pool.query(
+      `UPDATE solicitacao_vaga
+          SET status = $1, decidido_por = $2, motivo = $3, decidido_em = NOW()
+        WHERE id = $4 AND status = 'pendente'
+        RETURNING *`,
+      [status, decidido_por ?? null, motivo ? String(motivo).trim() : null, parseInt(req.params.id)]);
+    if (!rows.length)
+      return res.status(409).json({ data: null, error: { message: 'Este pedido já foi decidido.' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  INÍCIO DA ANÁLISE
 // ══════════════════════════════════════
 // ⚠️ A COLUNA É CRIADA À MÃO, pelo Richard, no painel do Railway:
@@ -1029,6 +1218,32 @@ app.patch('/prestacoes_contas/inicio_analise', async (req, res) => {
 app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
   try {
     const campos = req.body;
+
+    // ── TRAVA DE TRs ────────────────────────────────────────────────────────
+    // Conferida AQUI, e não só na tela: a tela pode ser contornada, e este PATCH é o único
+    // caminho por onde uma TR muda de dono. Só entra quando o corpo é o de "assumir"
+    // (analista + status analise) — mudar situação ou enviar ao CI não passa por aqui.
+    if (campos.analista_id && campos.status === 'analise') {
+      const alvo = await pool.query(`SELECT tr FROM prestacoes_contas WHERE codigo_pc = $1`, [req.params.codigo_pc]);
+      const u = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(campos.analista_id)]);
+      if (alvo.rows.length && u.rows.length) {
+        const chk = await limiteTr.podeAssumirTr(pool, u.rows[0], alvo.rows[0].tr);
+        if (!chk.pode) {
+          return res.status(403).json({
+            data: null,
+            error: { message: chk.motivo, limite: chk.limite, ocupadas: chk.ocupadas, trava: true },
+          });
+        }
+        // Passou por autorização aprovada? Então a autorização foi gasta agora. Só marca
+        // quando foi ELA que liberou — se ele estava abaixo do limite, a autorização
+        // continua guardada para a próxima.
+        if (chk.autorizacao) {
+          await pool.query(`UPDATE solicitacao_vaga SET status = 'usada' WHERE id = $1 AND status = 'aprovada'`,
+                           [chk.autorizacao.id]);
+        }
+      }
+    }
+
     const sets = [];
     const values = [];
     let i = 1;

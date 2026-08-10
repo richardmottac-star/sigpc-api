@@ -968,6 +968,20 @@ app.get('/limite_tr/situacao', async (req, res) => {
   }
 });
 
+// GET /limite_tr/reservas — TRs com pedido pendente, uma linha por TR
+// Existe separada da `/solicitacao_vaga` porque a tela do Estoque precisa de UMA reserva por
+// TR — a mais antiga, que é a que de fato segura a TR. Dois analistas podem ter pedido a
+// mesma TR (o POST só impede o mesmo analista repetir), e aí a lista crua traria as duas.
+app.get('/limite_tr/reservas', async (req, res) => {
+  try {
+    const rows = await limiteTr.reservasPendentes(pool);
+    res.json({ data: rows, count: rows.length, dias: limiteTr.RESERVA_DIAS, error: null });
+  } catch (e) {
+    // Sem reservas o Estoque continua funcionando — nunca derrubar a tela por causa disto.
+    res.json({ data: [], count: 0, dias: limiteTr.RESERVA_DIAS, error: null });
+  }
+});
+
 // GET /config_limite_tr — a configuração global
 app.get('/config_limite_tr', async (req, res) => {
   try {
@@ -1231,7 +1245,10 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
         if (!chk.pode) {
           return res.status(403).json({
             data: null,
-            error: { message: chk.motivo, limite: chk.limite, ocupadas: chk.ocupadas, trava: true },
+            error: { message: chk.motivo, limite: chk.limite, ocupadas: chk.ocupadas, trava: true,
+                     // `reserva` distingue os dois bloqueios: limite atingido é uma coisa,
+                     // TR reservada por um colega é outra, e a tela fala diferente de cada.
+                     reserva: chk.reserva || null },
           });
         }
         // Passou por autorização aprovada? Então a autorização foi gasta agora. Só marca

@@ -21,7 +21,7 @@ const conf = (passou, rotulo, detalhe) => {
 };
 
 // Dublê de banco: responde por trecho de SQL.
-function db({ config, excecao, ocupadas = 0, extras = 0, jaMinha = false, autorizacao = null }) {
+function db({ config, excecao, ocupadas = 0, extras = 0, jaMinha = false, autorizacao = null, reserva = null }) {
   const chamadas = [];
   return {
     chamadas,
@@ -30,6 +30,7 @@ function db({ config, excecao, ocupadas = 0, extras = 0, jaMinha = false, autori
       if (/FROM config_limite_tr/.test(sql)) return { rows: config ? [config] : [] };
       if (/FROM limite_tr_excecao/.test(sql)) return { rows: excecao ? [excecao] : [] };
       if (/COUNT\(\*\)::int n FROM solicitacao_vaga/.test(sql)) return { rows: [{ n: extras }] };
+      if (/FROM solicitacao_vaga s[\s\S]*status = 'pendente'/.test(sql)) return { rows: reserva ? [reserva] : [] };
       if (/id, tr FROM solicitacao_vaga/.test(sql)) return { rows: autorizacao ? [autorizacao] : [] };
       if (/FROM prestacoes_contas WHERE tr = \$1 AND analista_id/.test(sql)) return { rows: jaMinha ? [{ n: 1 }] : [] };
       if (/COUNT\(DISTINCT tr\)|COUNT\(\*\)::int n FROM \(/.test(sql)) return { rows: [{ n: ocupadas }] };
@@ -104,6 +105,58 @@ const SUPER = { id: 4, nome: 'Richard', perfil: 'superadmin', grupo: '3' };
       ANALISTA, '2020TR000003');
     conf(comAut.pode === true, 'mas a autorização aprovada libera a TR');
     conf(comAut.autorizacao && comAut.autorizacao.id === 7, 'e devolve qual autorização foi usada', JSON.stringify(comAut.autorizacao));
+  }
+
+  console.log('\n═══ 5b. A APROVACAO NAO SOMA +1 NO LIMITE (defeito de 10/08) ═══');
+  {
+    // Era o defeito: com 5 de 5 e uma aprovação guardada, `limite` virava 6, o analista
+    // passava pelo caminho do limite e NUNCA pelo da autorização. Resultado: sem aviso no
+    // modal, sem consumo, e a aprovação virava +1 permanente.
+    const s = await L.situacao(db({ config: CFG(), ocupadas: 5, extras: 1 }), ANALISTA);
+    conf(s.limite === 5, 'com 1 aprovação guardada, o limite continua 5', `limite=${s.limite}`);
+    conf(s.podeAssumir === false, 'e 5 de 5 continua barrado pelo limite');
+    conf(s.extras === 1, 'mas `extras` continua visível para a tela mostrar');
+
+    // Agora a aprovação só libera pelo caminho certo — o que devolve a autorização.
+    const c = await L.podeAssumirTr(
+      db({ config: CFG(), ocupadas: 5, extras: 1, autorizacao: { id: 9, tr: '2020TR000009' } }),
+      ANALISTA, '2020TR000009');
+    conf(c.pode === true && c.autorizacao && c.autorizacao.id === 9,
+         'a autorização libera E se identifica, para o modal avisar e o PATCH consumir');
+  }
+
+  console.log('\n═══ 5c. RESERVA: PEDIDO PENDENTE SEGURA A TR ═══');
+  {
+    const OUTRO = { id: 77, nome: 'Grazielly Souza', analista_id: 77 };
+
+    // Longe do limite e mesmo assim barrado: a reserva NAO e a conta do limite.
+    const c = await L.podeAssumirTr(
+      db({ config: CFG(), ocupadas: 1, reserva: { id: 3, analista_id: 77, nome: 'Grazielly Souza' } }),
+      ANALISTA, '2020TR000010');
+    conf(c.pode === false, 'com 1 TR de 5, ainda assim nao fura a fila da reserva');
+    conf(/Grazielly/.test(c.motivo||''), 'o motivo diz de quem e o pedido', c.motivo);
+    conf(!!c.reserva, 'e devolve a reserva, para a tela falar diferente do limite');
+
+    // O proprio solicitante nao e barrado pelo proprio pedido.
+    const dono = await L.podeAssumirTr(
+      db({ config: CFG(), ocupadas: 1, reserva: { id: 3, analista_id: ANALISTA.id, nome: 'Grazielly' } }),
+      ANALISTA, '2020TR000010');
+    conf(dono.pode === true, 'quem pediu passa pela propria reserva');
+
+    // Superadmin passa por cima.
+    const sup = await L.podeAssumirTr(
+      db({ config: CFG(), ocupadas: 1, reserva: { id: 3, analista_id: 77, nome: 'Grazielly' } }),
+      SUPER, '2020TR000010');
+    conf(sup.pode === true, 'superadmin nao e barrado pela reserva');
+
+    // Sem TR nao ha o que reservar — e nao pode estourar.
+    const semTr = await L.reservaPendente(db({ config: CFG() }), null);
+    conf(semTr === null, 'reservaPendente(null) devolve null sem consultar');
+
+    // Tabela ausente: nunca travar o Estoque por causa de migração faltando.
+    const quebrado = { query: async () => { throw new Error('relation does not exist') } };
+    conf(await L.reservaPendente(quebrado, '2020TR000010') === null, 'tabela ausente: sem reserva');
+    conf((await L.reservasPendentes(quebrado)).length === 0, 'reservasPendentes devolve lista vazia');
   }
 
   console.log('\n═══ 6. LIBERACAO: POR TR OU POR PARCIAL ═══');

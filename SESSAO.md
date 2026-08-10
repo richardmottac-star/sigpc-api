@@ -1,6 +1,71 @@
-# SIGPC-API — ESTADO EM 08/08/2026
+# SIGPC-API — ESTADO EM 10/08/2026
 
 Cole no início do chat novo.
+
+---
+
+## CONCLUÍDO EM 10/08 — trava de TRs por analista (`a3e9ee3`, no ar)
+
+Commitado, empurrado e **publicado no Railway** (confirmado por `GET /limite_tr/situacao`).
+
+### As decisões, que valem mais que o código
+
+| decisão | valor | por quê |
+|---|---|---|
+| limite padrão | **5** | mas fica **NULL no banco** — o Richard digita na tela |
+| quando confere | **só no ato de assumir** | ligar a trava não tira TR de ninguém |
+| libera vaga | **TR inteira baixada** | `'parcial'` existe na config, não é a escolhida |
+| quem aprova | **coordenador** | vê só o próprio grupo; superadmin vê tudo |
+| superadmin | **nunca trava** | verificado antes de tudo, sem depender de exceção |
+
+**`limite_padrao` está NULL agora — nada trava até alguém digitar o número na tela.**
+Isso é intencional: o Richard quis ver a tela funcionando antes de ligar.
+
+### Três coisas que não são óbvias no código
+
+1. **`null` é sem limite; `0` é bloqueio total.** Não são a mesma coisa em lugar nenhum.
+   Confundir os dois libera ou trava a equipe inteira — há teste para cada.
+
+2. **A aprovação AUTORIZA A TR, não soma +1.** Mudei isso no meio do teste: a Grazielly tem
+   54 TRs num limite de 5 — aprovada, iria para 6 e continuaria travada, o que tornava o
+   pedido inútil justamente para quem precisa. Quem aprova vê quantas TRs a pessoa já tem.
+   A autorização vira `'usada'` ao ser gasta.
+
+3. **A trava vive no `PATCH /prestacoes_contas/:codigo_pc`**, não na tela. É o único caminho
+   por onde uma TR muda de dono. A tela só pergunta antes, por conveniência — e `limiteChecar`
+   devolve "pode" quando a rede falha, porque quem decide é o servidor na hora de gravar.
+   Como o front manda **um PATCH por PC**, há o caminho "a TR já é dele": sem ele, a segunda
+   PC de uma TR sendo assumida seria barrada e o analista ficaria com metade da TR.
+
+### Rotas
+
+`GET /limite_tr/situacao` · `GET|PATCH /config_limite_tr` ·
+`GET|PATCH|DELETE /limite_tr_excecao` · `GET|POST /solicitacao_vaga` ·
+`PATCH /solicitacao_vaga/:id`
+
+`PATCH /config_limite_tr` usa um par `(informou, valor)` em vez de COALESCE, porque
+`limite_padrao = null` é um valor válido e COALESCE o descartaria como "não informado".
+
+### Banco (já rodado pelo Richard em 10/08)
+
+`config_limite_tr` (1 linha, `limite_padrao` NULL) · `limite_tr_excecao` (0 linhas) ·
+`solicitacao_vaga` (0 linhas). SQL em `trava_trs.sql`, idempotente, com bloco de reverter.
+
+### Testado contra o banco de produção, e revertido
+
+Limite 5 barrou a Grazielly (54 TRs), deixou o Eduardo (1 TR) passar, superadmin isento;
+pedido duplicado recusado, negar sem motivo recusado, aprovar duas vezes recusado;
+autorização aprovada liberou a TR e virou `usada`.
+**Revertido:** 2 PCs de volta ao estoque, solicitações apagadas, config de volta a NULL.
+
+`teste_limite_tr.js` — 22 testes com dublê de banco, inclusive tabela ausente (tem de se
+comportar como "sem limite", nunca derrubar a tela). Suítes: 39+39+50+22.
+
+### O que falta
+
+- [ ] **Definir o limite na tela** (Configurações → Limite de TRs). Nada trava até lá.
+- [ ] Abas 2 e 3 de Configurações — a barra já monta a partir de `CFG_ABAS`, é só somar.
+- [ ] Notificar o analista quando o pedido for decidido (hoje ele só descobre tentando de novo).
 
 ---
 

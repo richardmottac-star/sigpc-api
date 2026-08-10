@@ -1135,14 +1135,19 @@ app.post('/solicitacao_vaga', async (req, res) => {
     const dono = parseInt(analista_id);
     const trAlvo = tr || null;
     const { rows } = await pool.query(
+      // Os `::` na lista do SELECT não são enfeite. Sem eles o Postgres deduz `$2` como
+      // varchar (vem da coluna `tr`) na inserção e como text (por causa do `$2::text` do
+      // NOT EXISTS) na condição, e recusa o comando inteiro com "inconsistent types deduced
+      // for parameter $2". Aconteceu em produção em 10/08. Declarar o tipo em TODOS os usos
+      // tira a dedução do caminho.
       `INSERT INTO solicitacao_vaga (analista_id, tr, justificativa)
-       SELECT $1, $2, $3
+       SELECT $1::int, $2::text, $3::text
         WHERE NOT EXISTS (
           SELECT 1 FROM solicitacao_vaga s
            WHERE s.status = 'pendente'
              AND s.criado_em > NOW() - (INTERVAL '1 day' * $4)
-             AND ( ($2::text IS NOT NULL AND s.tr = $2)
-                OR ($2::text IS NULL AND s.tr IS NULL AND s.analista_id = $1) ))
+             AND ( ($2::text IS NOT NULL AND s.tr = $2::text)
+                OR ($2::text IS NULL AND s.tr IS NULL AND s.analista_id = $1::int) ))
        RETURNING *`,
       [dono, trAlvo, String(justificativa).trim(), limiteTr.RESERVA_DIAS]);
 

@@ -960,6 +960,7 @@ app.get('/limite_tr/situacao', async (req, res) => {
     if (!u.rows.length)
       return res.status(404).json({ data: null, error: { message: 'analista não encontrado' } });
 
+    await limiteTr.expirarPendentes(pool);
     const s = tr ? await limiteTr.podeAssumirTr(pool, u.rows[0], tr)
                  : await limiteTr.situacao(pool, u.rows[0]);
     res.json({ data: s, error: null });
@@ -974,6 +975,7 @@ app.get('/limite_tr/situacao', async (req, res) => {
 // mesma TR (o POST só impede o mesmo analista repetir), e aí a lista crua traria as duas.
 app.get('/limite_tr/reservas', async (req, res) => {
   try {
+    await limiteTr.expirarPendentes(pool);
     const rows = await limiteTr.reservasPendentes(pool);
     res.json({ data: rows, count: rows.length, dias: limiteTr.RESERVA_DIAS, error: null });
   } catch (e) {
@@ -1069,6 +1071,10 @@ app.delete('/limite_tr_excecao/:analista_id', async (req, res) => {
 // GET /solicitacao_vaga?status=pendente&grupo=3
 app.get('/solicitacao_vaga', async (req, res) => {
   try {
+    // Antes de listar: quem passou dos 3 dias vira 'expirada'. Sem isto o coordenador veria
+    // na fila pedidos que já não seguram TR nenhuma.
+    await limiteTr.expirarPendentes(pool);
+
     const { status, grupo, analista_id } = req.query;
     const cond = [];
     const val = [];
@@ -1104,6 +1110,11 @@ app.post('/solicitacao_vaga', async (req, res) => {
     if (cfg.pedido_ativo === false)
       return res.status(409).json({ data: null, error: { message: 'O pedido de vaga extra está desativado.' } });
 
+    // Expira ANTES de conferir duplicata: um pedido de 5 dias atrás, que já não segura mais
+    // a TR, não pode impedir a pessoa de pedir de novo. Sem esta linha o analista ficaria
+    // preso a um pedido que morreu.
+    await limiteTr.expirarPendentes(pool);
+
     // Uma pendente por TR: reenviar o mesmo pedido não pode gerar fila duplicada.
     const dup = await pool.query(
       `SELECT id FROM solicitacao_vaga
@@ -1131,6 +1142,12 @@ app.patch('/solicitacao_vaga/:id', async (req, res) => {
     if (status === 'negada' && !(motivo && String(motivo).trim()))
       return res.status(400).json({ data: null, error: { message: 'negar exige motivo' } });
 
+    // Expira antes de decidir: aprovar um pedido de 5 dias atrás daria a alguém uma
+    // autorização que a TR já não guarda — ela voltou ao estoque e pode ter dono novo.
+    // Com a expiração antes, o UPDATE abaixo não acha 'pendente' e o coordenador recebe
+    // "já foi decidido" em vez de aprovar no vazio.
+    await limiteTr.expirarPendentes(pool);
+
     // Só decide o que está pendente — sem isso, um duplo clique aprovaria duas vezes e
     // geraria duas vagas extras.
     const { rows } = await pool.query(
@@ -1139,8 +1156,17 @@ app.patch('/solicitacao_vaga/:id', async (req, res) => {
         WHERE id = $4 AND status = 'pendente'
         RETURNING *`,
       [status, decidido_por ?? null, motivo ? String(motivo).trim() : null, parseInt(req.params.id)]);
-    if (!rows.length)
-      return res.status(409).json({ data: null, error: { message: 'Este pedido já foi decidido.' } });
+    if (!rows.length) {
+      // Não basta dizer "já foi decidido": expirado e negado são coisas diferentes, e o
+      // coordenador precisa saber se perdeu o prazo ou se um colega decidiu antes.
+      const at = await pool.query(`SELECT status FROM solicitacao_vaga WHERE id = $1`, [parseInt(req.params.id)]);
+      const st = at.rows[0] && at.rows[0].status;
+      const msg = !st ? 'Pedido não encontrado.'
+        : st === 'expirada' ? `Este pedido expirou (mais de ${limiteTr.RESERVA_DIAS} dias sem decisão) e a TR voltou ao estoque.`
+        : st === 'cancelada' ? 'O analista cancelou este pedido.'
+        : 'Este pedido já foi decidido.';
+      return res.status(409).json({ data: null, error: { message: msg, status_atual: st || null } });
+    }
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });

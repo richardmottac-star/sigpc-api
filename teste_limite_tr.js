@@ -26,7 +26,9 @@ function db({ config, excecao, ocupadas = 0, extras = 0, jaMinha = false, autori
   return {
     chamadas,
     query: async (sql, params) => {
-      chamadas.push(sql.replace(/\s+/g, ' ').trim().slice(0, 60));
+      // 220, e não 60: os testes de expiração conferem o `criado_em > NOW() - N dias`, que
+      // fica no fim do WHERE. Cortar antes escondia o filtro e o teste passava vazio.
+      chamadas.push(sql.replace(/\s+/g, ' ').trim().slice(0, 220));
       if (/FROM config_limite_tr/.test(sql)) return { rows: config ? [config] : [] };
       if (/FROM limite_tr_excecao/.test(sql)) return { rows: excecao ? [excecao] : [] };
       if (/COUNT\(\*\)::int n FROM solicitacao_vaga/.test(sql)) return { rows: [{ n: extras }] };
@@ -157,6 +159,38 @@ const SUPER = { id: 4, nome: 'Richard', perfil: 'superadmin', grupo: '3' };
     const quebrado = { query: async () => { throw new Error('relation does not exist') } };
     conf(await L.reservaPendente(quebrado, '2020TR000010') === null, 'tabela ausente: sem reserva');
     conf((await L.reservasPendentes(quebrado)).length === 0, 'reservasPendentes devolve lista vazia');
+  }
+
+  console.log('\n═══ 5d. EXPIRACAO EM 3 DIAS, SEM JOB ═══');
+  {
+    // O que de fato solta a TR e o filtro de tempo NA CONSULTA, nao o UPDATE. Se dependesse
+    // do UPDATE, uma TR ficaria reservada o fim de semana inteiro so porque ninguem abriu o
+    // sistema para disparar a varredura.
+    const d = db({ config: CFG() });
+    await L.reservaPendente(d, '2020TR000020');
+    conf(d.chamadas.some(c => /criado_em > NOW\(\)/.test(c)),
+         'reservaPendente ignora o pedido velho por tempo, na propria consulta');
+
+    const e = db({ config: CFG() });
+    await L.reservasPendentes(e);
+    conf(e.chamadas.some(c => /criado_em > NOW\(\)/.test(c)),
+         'reservasPendentes tambem — senao a tag ficaria na tela depois de expirar');
+
+    // O UPDATE existe para o estado GRAVADO alcancar a realidade: e ele que da ao analista
+    // o registro com que cobrar depois.
+    let sqlExp = null;
+    const f = { query: async (sql) => { sqlExp = sql.replace(/\s+/g,' '); return { rowCount: 2 } } };
+    const n = await L.expirarPendentes(f);
+    conf(n === 2, 'expirarPendentes devolve quantos expiraram');
+    conf(/SET status = 'expirada'/.test(sqlExp), "marca 'expirada'");
+    conf(/WHERE status = 'pendente'/.test(sqlExp), 'so mexe em pendente — nao ressuscita decidido');
+    conf(!/DELETE/.test(sqlExp), 'NAO apaga: a linha fica, e com ela o analista cobra depois');
+
+    // Banco fora do ar nao pode derrubar quem so queria listar.
+    const quebrado = { query: async () => { throw new Error('relation does not exist') } };
+    conf(await L.expirarPendentes(quebrado) === 0, 'tabela ausente: devolve 0 em vez de estourar');
+
+    conf(L.RESERVA_DIAS === 3, 'o prazo e 3 dias, fixo no codigo (decisao de 10/08)');
   }
 
   console.log('\n═══ 6. LIBERACAO: POR TR OU POR PARCIAL ═══');

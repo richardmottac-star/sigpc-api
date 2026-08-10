@@ -214,6 +214,28 @@ const SUPER = { id: 4, nome: 'Richard', perfil: 'superadmin', grupo: '3' };
     conf(c.pode === true, 'sem pendente, a TR volta a ser assumivel');
   }
 
+  console.log('\n═══ 5f. QUEM PEDIU PRIMEIRO LEVA ═══');
+  {
+    // A regra vive no INSERT condicional da rota (server.js). Aqui se garante a peca que a
+    // rota usa para saber QUEM ganhou a corrida e montar a mensagem certa.
+    const meu = await L.reservaPendente(
+      db({ config: CFG(), reserva: { id: 5, analista_id: ANALISTA.id, nome: 'Grazielly' } }), '2020TR000040');
+    conf(meu && Number(meu.analista_id) === ANALISTA.id,
+         'reservaPendente identifica que o pendente e do proprio — mensagem de clique repetido');
+
+    const dele = await L.reservaPendente(
+      db({ config: CFG(), reserva: { id: 5, analista_id: 77, nome: 'Grazielly Souza' } }), '2020TR000040');
+    conf(dele && Number(dele.analista_id) !== ANALISTA.id,
+         'e quando e de outro — mensagem de corrida perdida');
+    conf((dele.nome||'').split(' ')[0] === 'Grazielly',
+         'o primeiro nome sai igual ao da tag do Estoque, para ser a mesma pessoa aos olhos de quem le');
+
+    // O pedido SEM TR nao disputa reserva: nao ha TR para segurar. O limite dele e outro
+    // (um por analista), e quem cuida disso e o INSERT condicional.
+    conf(await L.reservaPendente(db({ config: CFG(), reserva: { id: 6, analista_id: 77 } }), null) === null,
+         'pedido sem TR especifica nao reserva nada');
+  }
+
   console.log('\n═══ 6. LIBERACAO: POR TR OU POR PARCIAL ═══');
   {
     const porTr = db({ config: CFG({ liberacao: 'tr' }), ocupadas: 3 });

@@ -1122,18 +1122,50 @@ app.post('/solicitacao_vaga', async (req, res) => {
     // preso a um pedido que morreu.
     await limiteTr.expirarPendentes(pool);
 
-    // Uma pendente por TR: reenviar o mesmo pedido não pode gerar fila duplicada.
-    const dup = await pool.query(
-      `SELECT id FROM solicitacao_vaga
-        WHERE analista_id = $1 AND status = 'pendente' AND tr IS NOT DISTINCT FROM $2`,
-      [parseInt(analista_id), tr || null]);
-    if (dup.rows.length)
-      return res.status(409).json({ data: null, error: { message: 'Já existe um pedido pendente para esta TR.' } });
-
+    // ── QUEM PEDIU PRIMEIRO LEVA ─────────────────────────────────────────────
+    // Conferir e depois inserir deixaria uma fresta: dois cliques simultâneos passam os dois
+    // pela conferência e o coordenador acaba com dois pedidos para a mesma TR — exatamente
+    // a escolha que ele não deve ter de fazer. Por isso a condição vive DENTRO do INSERT,
+    // num comando só. Índice único resolveria melhor, mas exigiria ALTER TABLE.
+    //
+    // Duas regras no mesmo NOT EXISTS, porque são o mesmo assunto:
+    //   · TR nomeada  — uma pendente por TR, de QUALQUER analista (é a reserva);
+    //   · sem TR      — uma pendente por ANALISTA (decisão do Richard, 10/08). Sem TR não há
+    //                   o que reservar, então o que se evita é a pessoa encher a fila.
+    const dono = parseInt(analista_id);
+    const trAlvo = tr || null;
     const { rows } = await pool.query(
       `INSERT INTO solicitacao_vaga (analista_id, tr, justificativa)
-       VALUES ($1, $2, $3) RETURNING *`,
-      [parseInt(analista_id), tr || null, String(justificativa).trim()]);
+       SELECT $1, $2, $3
+        WHERE NOT EXISTS (
+          SELECT 1 FROM solicitacao_vaga s
+           WHERE s.status = 'pendente'
+             AND s.criado_em > NOW() - (INTERVAL '1 day' * $4)
+             AND ( ($2::text IS NOT NULL AND s.tr = $2)
+                OR ($2::text IS NULL AND s.tr IS NULL AND s.analista_id = $1) ))
+       RETURNING *`,
+      [dono, trAlvo, String(justificativa).trim(), limiteTr.RESERVA_DIAS]);
+
+    if (!rows.length) {
+      // Não entrou: alguém já ocupa o lugar. Quem, decide a mensagem — repetir o próprio
+      // clique e perder a corrida para um colega são situações diferentes.
+      if (!trAlvo) {
+        return res.status(409).json({ data: null, error: {
+          message: 'Você já tem um pedido sem TR específica aguardando decisão.' } });
+      }
+      const reserva = await limiteTr.reservaPendente(pool, trAlvo);
+      if (reserva && Number(reserva.analista_id) === dono) {
+        return res.status(409).json({ data: null, error: {
+          message: 'Já existe um pedido pendente para esta TR.' } });
+      }
+      const quem = reserva ? String(reserva.nome || 'Outro analista').split(' ')[0] : 'Outro analista';
+      return res.status(409).json({ data: null, error: {
+        message: `${quem} pediu esta TR primeiro. Se o pedido for negado ou expirar em ` +
+                 `${limiteTr.RESERVA_DIAS} dias, a TR volta ao estoque e você pode pedir.`,
+        // `reserva` vai junto para a tela montar a frase com a data no fuso de quem lê, e
+        // para distinguir isto de um erro de verdade.
+        reserva: reserva || null } });
+    }
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });

@@ -1087,6 +1087,13 @@ app.get('/solicitacao_vaga', async (req, res) => {
       `SELECT s.*, u.nome AS analista_nome_completo, u.grupo,
               (SELECT COUNT(DISTINCT tr)::int FROM prestacoes_contas
                 WHERE analista_id = s.analista_id AND baixada = false) AS trs_abertas,
+              -- O analista pediu a TR, caiu abaixo do limite antes da resposta e assumiu
+              -- direto. O pedido continua pendente e vira lixo na fila de quem aprova.
+              -- Decisão do Richard (10/08): não some sozinho — aparece marcado como
+              -- dispensado, para ninguém perder tempo decidindo o que já aconteceu.
+              (s.tr IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM prestacoes_contas p
+                  WHERE p.tr = s.tr AND p.analista_id = s.analista_id)) AS ja_assumida,
               d.nome AS decidido_por_nome
          FROM solicitacao_vaga s
          LEFT JOIN usuarios u ON u.id = s.analista_id

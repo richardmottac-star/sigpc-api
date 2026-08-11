@@ -46,6 +46,21 @@ const notificacao = require('./lib/notificacao');
 const CORTE_PRAZO = '2026-08-01';
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  RETENÇÃO DA NOTIFICAÇÃO LIDA — mude AQUI
+// ═══════════════════════════════════════════════════════════════════════════
+// Notificação LIDA é apagada este tanto de dias DEPOIS DA LEITURA.
+//
+// ⚠️ Não lida NUNCA é apagada, por mais antiga que seja — quem passou um mês fora encontra
+// tudo o que perdeu. E o relógio conta da leitura, não da criação: quem volta de férias e lê
+// hoje tem 15 dias a partir de hoje, e não um aviso que some amanhã.
+//
+// O que some é o AVISO, não o fato: a decisão em si (quem aprovou, quando, com que motivo)
+// fica em `solicitacao_vaga`, permanente. Por isso não há botão de excluir por item — como
+// nos pedidos expirados, o registro pode servir de prova.
+const DIAS_GUARDA_LIDA = 15;
+// ═══════════════════════════════════════════════════════════════════════════
+
 const DIAS_AVISO_PREVIO = 7;
 
 const args = process.argv.slice(2);
@@ -120,7 +135,8 @@ async function rodar() {
     // O corte sai impresso em toda passagem, de propósito: quem for investigar "por que não
     // avisou da PC X" precisa ver a data na hora, sem ter de abrir o código.
     console.log(`corte: ${CORTE_PRAZO} (PC anterior a esta data não gera aviso) · `
-              + `faixa: ${DIAS_AVISO_PREVIO} dias${DRY ? ' · DRY RUN' : ''}`);
+              + `faixa: ${DIAS_AVISO_PREVIO} dias · guarda da lida: ${DIAS_GUARDA_LIDA} dias`
+              + `${DRY ? ' · DRY RUN' : ''}`);
     console.log(`${alvos.length} PC(s) dentro da faixa`);
 
     for (const pc of alvos) {
@@ -132,8 +148,23 @@ async function rodar() {
       r ? gravadas++ : repetidas++;
     }
 
+    // Limpeza das lidas, na mesma passagem — sem cron novo. Vem DEPOIS de gravar: se a
+    // ordem fosse inversa e o job caísse no meio, a limpeza teria rodado sem os avisos novos
+    // terem entrado, e a passagem seguinte gastaria uma hora a mais para se acertar.
+    let apagadas = 0;
+    if (DRY) {
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int n FROM notificacao
+          WHERE lida_em IS NOT NULL AND lida_em < NOW() - (INTERVAL '1 day' * $1::int)`,
+        [DIAS_GUARDA_LIDA]);
+      console.log(`  [dry] apagaria ${rows[0].n} notificação(ões) lida(s) há mais de ${DIAS_GUARDA_LIDA} dias`);
+    } else {
+      apagadas = await notificacao.limparLidas(pool, DIAS_GUARDA_LIDA);
+    }
+
     const seg = ((Date.now() - t0) / 1000).toFixed(1);
-    console.log(`gravadas: ${gravadas} · já avisadas antes: ${repetidas} · ${seg}s`);
+    console.log(`gravadas: ${gravadas} · já avisadas antes: ${repetidas} · `
+              + `lidas apagadas: ${apagadas} · ${seg}s`);
   } catch (e) {
     console.error('ERRO:', e.message);
     process.exitCode = 1;
@@ -144,4 +175,4 @@ async function rodar() {
 
 if (require.main === module) rodar();
 
-module.exports = { buscarAlvos, montarAviso, rodar, DIAS_AVISO_PREVIO, CORTE_PRAZO };
+module.exports = { buscarAlvos, montarAviso, rodar, DIAS_AVISO_PREVIO, CORTE_PRAZO, DIAS_GUARDA_LIDA };

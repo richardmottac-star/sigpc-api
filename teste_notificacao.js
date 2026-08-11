@@ -127,6 +127,40 @@ function db(resposta) {
          'e so marca o que ainda nao foi lido: reler nao muda a hora da primeira leitura');
   }
 
+  console.log('\n═══ 4b. O SINO SO MOSTRA NAO LIDA; "VER TODAS" MOSTRA TUDO ═══');
+  {
+    const sino = db({ rows: [] });
+    await N.listar(sino, 57, 15, true);
+    conf(sino.ch[0].params[2] === true, 'o sino pede apenas nao lidas');
+    conf(/\$3::boolean IS NOT TRUE OR lida_em IS NULL/.test(sino.ch[0].sql),
+         'o filtro esta na consulta — a lida sai da vista na hora, nao so muda de cor');
+
+    const tudo = db({ rows: [] });
+    await N.listar(tudo, 57, 200);
+    conf(tudo.ch[0].params[2] === false, '"ver todas" pede tudo — some da vista, nao do registro');
+  }
+
+  console.log('\n═══ 4c. LIMPEZA DA LIDA APOS 15 DIAS ═══');
+  {
+    let sql = null;
+    const d = { query: async (s, p) => { sql = s.replace(/\s+/g,' '); return { rowCount: 3 } } };
+    const n = await N.limparLidas(d, 15);
+    conf(n === 3, 'devolve quantas apagou');
+
+    // ⚠️ A trava que mais importa: quem passou um mes fora tem de achar tudo o que perdeu.
+    conf(/lida_em IS NOT NULL/.test(sql), 'NAO LIDA nunca e apagada, por mais antiga que seja');
+    // Conta da LEITURA, nao da criacao: quem volta de ferias e le hoje tem 15 dias a partir
+    // de hoje, e nao um aviso que some amanha.
+    conf(/lida_em < NOW\(\) - \(INTERVAL '1 day' \* \$1::int\)/.test(sql),
+         'o relogio conta a partir da leitura, e o parametro leva o tipo escrito');
+    conf(!/criado_em/.test(sql), 'a data de criacao nao entra na conta');
+
+    conf(J.DIAS_GUARDA_LIDA === 15, 'o prazo e 15 dias, no mesmo bloco do CORTE_PRAZO');
+
+    const quebrado = { query: async () => { throw new Error('nope') } };
+    conf(await N.limparLidas(quebrado, 15) === 0, 'falha no banco devolve 0 sem derrubar o job');
+  }
+
   console.log('\n═══ 5. URGENTE NAO LIDA VEM PRIMEIRO ═══');
   {
     const d = db({ rows: [] });

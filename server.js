@@ -954,12 +954,15 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
 // GET /notificacao?destinatario_id=X&limite=15
 app.get('/notificacao', async (req, res) => {
   try {
-    const { destinatario_id, limite } = req.query;
+    const { destinatario_id, limite, apenas_nao_lidas } = req.query;
     if (!destinatario_id)
       return res.status(400).json({ data: null, error: { message: 'destinatario_id é obrigatório' } });
     const id = parseInt(destinatario_id);
+    // O sino pede só as não lidas; "ver todas" pede tudo. `nao_lidas` vem nos dois casos,
+    // porque é o contador do cabeçalho e ele não depende do que a lista mostra.
+    const so = apenas_nao_lidas === '1' || apenas_nao_lidas === 'true';
     const [lista, naoLidas] = await Promise.all([
-      notif.listar(pool, id, limite),
+      notif.listar(pool, id, limite, so),
       notif.contarNaoLidas(pool, id),
     ]);
     res.json({ data: lista, count: lista.length, nao_lidas: naoLidas, error: null });

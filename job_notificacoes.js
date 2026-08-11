@@ -44,6 +44,12 @@ const LIMITE = valorArg('--limite', 500);
  * recalculo nada aqui, e não escrevo em `prestacoes_contas`: este job só lê de lá.
  */
 async function buscarAlvos(pool) {
+  // ⚠️ Os `::int` NÃO são enfeite — sem eles isto morre com
+  // "operator is not unique: date + unknown". `CURRENT_DATE + $1` é ambíguo: o Postgres tem
+  // `date + integer` (dias) e `date + interval`, e com o parâmetro sem tipo não sabe qual
+  // usar. Aconteceu em produção em 10/08, e é o mesmo defeito do INSERT de mais cedo:
+  // parâmetro sem tipo declarado. A regra aqui virou: todo parâmetro em conta aritmética
+  // leva o tipo escrito.
   const { rows } = await pool.query(
     `SELECT codigo_pc, tr, entidade, analista_id, setorial_id, dt_limite_pc,
             (dt_limite_pc::date - CURRENT_DATE) AS dias
@@ -51,9 +57,9 @@ async function buscarAlvos(pool) {
       WHERE analista_id IS NOT NULL
         AND baixada = false
         AND dt_limite_pc IS NOT NULL
-        AND dt_limite_pc::date <= CURRENT_DATE + $1
+        AND dt_limite_pc::date <= CURRENT_DATE + $1::int
       ORDER BY dt_limite_pc
-      LIMIT $2`, [DIAS_AVISO_PREVIO, LIMITE]);
+      LIMIT $2::int`, [DIAS_AVISO_PREVIO, LIMITE]);
   return rows;
 }
 

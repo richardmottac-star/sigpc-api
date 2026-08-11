@@ -79,6 +79,22 @@ function db(resposta) {
     conf(/Vence em 1 dia\./.test(um.mensagem), 'singular no dia 1, sem "1 dias"', um.mensagem);
   }
 
+  console.log('\n═══ 3b. TODO PARAMETRO EM CONTA LEVA O TIPO ESCRITO ═══');
+  {
+    // Dois defeitos iguais em produção no mesmo dia (10/08): o INSERT do pedido de vaga com
+    // "inconsistent types deduced for parameter $2", e este job com "operator is not unique:
+    // date + unknown". Os dois pela mesma causa — parâmetro sem tipo declarado. O dublê não
+    // é Postgres e aceita qualquer SQL, então o teste passou a olhar o TEXTO do comando.
+    const d = db({ rows: [] });
+    await J.buscarAlvos(d);
+    const s = d.ch[0].sql;
+    conf(/CURRENT_DATE \+ \$1::int/.test(s),
+         'CURRENT_DATE + $1::int — sem o ::int, o Postgres nao escolhe entre date+integer e date+interval');
+    conf(/LIMIT \$2::int/.test(s), 'LIMIT $2::int');
+    conf(!/\$\d+(?!::)/.test(s.replace(/\$\d+::[a-z]+/g, '')),
+         'nao sobrou nenhum parametro sem tipo na consulta');
+  }
+
   console.log('\n═══ 4. MARCAR COMO LIDA CONFERE O DONO NO MESMO COMANDO ═══');
   {
     const d = db({ rows: [{ id: 5 }] });

@@ -30,10 +30,16 @@ const notificacao = require('./lib/notificacao');
 // ═══════════════════════════════════════════════════════════════════════════
 // PC com `dt_limite_pc` anterior a esta data NÃO gera aviso de prazo.
 //
-// 01/08/2026 é quando o SIGPC-GT virou fonte única. Sem o corte, o primeiro `--dry-run`
-// mostrou PCs de 2019 vencidas há 2.325 dias: o job despejaria MILHARES de avisos históricos
-// de uma vez, e o sino nasceria inútil — ninguém abre um sino com 3.000 itens, e os avisos
-// que importam ficariam soterrados pelos que ninguém pode mais resolver.
+// ⚠️ NÃO BAIXE ESTA DATA achando que o corte é conservador demais.
+//
+// O `dt_limite_pc` do acervo antigo NÃO É PRAZO: é cálculo em lote. Decisão do Richard em
+// 10/08/2026, e a distribuição não deixa dúvida — 29/07/2024 é a data mais recente de TODOS
+// os 44 analistas, e as 231 de 2027 caem TODAS em 30/01/2027. Num acervo de 4.721 PCs, nada
+// vence entre ago/2026 e jan/2027.
+//
+// Prazo real só passa a existir quando o analista inserir a data no sistema, a partir da
+// abertura para a equipe. Baixar o corte faria o sino cobrar prazo que ninguém definiu — e
+// avisar sobre 4.490 PCs de uma vez, o que mataria o sino no primeiro dia.
 //
 // ⚠️ O CORTE É SÓ DO SINO. Essas PCs continuam aparecendo normalmente no Estoque e na Minha
 // Planilha, e o cálculo de `dias_atraso` não muda. Nada aqui escreve em `prestacoes_contas`.

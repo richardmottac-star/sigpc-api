@@ -25,6 +25,21 @@
 const { Pool } = require('pg');
 const notificacao = require('./lib/notificacao');
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  DATA DE CORTE DO SINO — mude AQUI, é o único lugar
+// ═══════════════════════════════════════════════════════════════════════════
+// PC com `dt_limite_pc` anterior a esta data NÃO gera aviso de prazo.
+//
+// 01/08/2026 é quando o SIGPC-GT virou fonte única. Sem o corte, o primeiro `--dry-run`
+// mostrou PCs de 2019 vencidas há 2.325 dias: o job despejaria MILHARES de avisos históricos
+// de uma vez, e o sino nasceria inútil — ninguém abre um sino com 3.000 itens, e os avisos
+// que importam ficariam soterrados pelos que ninguém pode mais resolver.
+//
+// ⚠️ O CORTE É SÓ DO SINO. Essas PCs continuam aparecendo normalmente no Estoque e na Minha
+// Planilha, e o cálculo de `dias_atraso` não muda. Nada aqui escreve em `prestacoes_contas`.
+const CORTE_PRAZO = '2026-08-01';
+// ═══════════════════════════════════════════════════════════════════════════
+
 const DIAS_AVISO_PREVIO = 7;
 
 const args = process.argv.slice(2);
@@ -58,8 +73,9 @@ async function buscarAlvos(pool) {
         AND baixada = false
         AND dt_limite_pc IS NOT NULL
         AND dt_limite_pc::date <= CURRENT_DATE + $1::int
+        AND dt_limite_pc::date >= $3::date
       ORDER BY dt_limite_pc
-      LIMIT $2::int`, [DIAS_AVISO_PREVIO, LIMITE]);
+      LIMIT $2::int`, [DIAS_AVISO_PREVIO, LIMITE, CORTE_PRAZO]);
   return rows;
 }
 
@@ -95,7 +111,11 @@ async function rodar() {
 
   try {
     const alvos = await buscarAlvos(pool);
-    console.log(`${alvos.length} PC(s) dentro da faixa de aviso (${DIAS_AVISO_PREVIO} dias)${DRY ? ' — DRY RUN' : ''}`);
+    // O corte sai impresso em toda passagem, de propósito: quem for investigar "por que não
+    // avisou da PC X" precisa ver a data na hora, sem ter de abrir o código.
+    console.log(`corte: ${CORTE_PRAZO} (PC anterior a esta data não gera aviso) · `
+              + `faixa: ${DIAS_AVISO_PREVIO} dias${DRY ? ' · DRY RUN' : ''}`);
+    console.log(`${alvos.length} PC(s) dentro da faixa`);
 
     for (const pc of alvos) {
       const aviso = montarAviso(pc);
@@ -118,4 +138,4 @@ async function rodar() {
 
 if (require.main === module) rodar();
 
-module.exports = { buscarAlvos, montarAviso, rodar, DIAS_AVISO_PREVIO };
+module.exports = { buscarAlvos, montarAviso, rodar, DIAS_AVISO_PREVIO, CORTE_PRAZO };

@@ -95,6 +95,27 @@ function db(resposta) {
          'nao sobrou nenhum parametro sem tipo na consulta');
   }
 
+  console.log('\n═══ 3c. A DATA DE CORTE DO SINO ═══');
+  {
+    // Sem corte, o primeiro dry-run achou PCs de 2019 vencidas ha 2.325 dias. O job
+    // despejaria milhares de avisos historicos e o sino nasceria inutil — ninguem abre um
+    // sino com 3.000 itens, e o que importa ficaria soterrado pelo que ninguem resolve mais.
+    const d = db({ rows: [] });
+    await J.buscarAlvos(d);
+    const { sql, params } = d.ch[0];
+
+    conf(J.CORTE_PRAZO === '2026-08-01', 'o corte e 01/08/2026, quando o SIGPC-GT virou fonte unica');
+    conf(/dt_limite_pc::date >= \$3::date/.test(sql), 'a consulta filtra pela data de corte');
+    conf(params[2] === J.CORTE_PRAZO,
+         'e usa a constante, nao uma data escrita a mao no meio do SQL — muda num lugar so');
+
+    // As duas pontas juntas: nada anterior ao corte, nada alem da faixa de 7 dias.
+    conf(/dt_limite_pc::date <= CURRENT_DATE \+ \$1::int/.test(sql), 'a faixa dos 7 dias continua valendo');
+
+    // O corte e SO do sino. Se um dia alguem mexer aqui achando que ajusta prazo, isto cai.
+    conf(!/UPDATE|INSERT|DELETE/.test(sql), 'a consulta so LE: o job nunca escreve em prestacoes_contas');
+  }
+
   console.log('\n═══ 4. MARCAR COMO LIDA CONFERE O DONO NO MESMO COMANDO ═══');
   {
     const d = db({ rows: [{ id: 5 }] });

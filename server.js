@@ -1746,7 +1746,10 @@ app.post('/parcela/parecer', async (req, res) => {
 app.get('/parcela/respostas_diligencia', async (req, res) => {
   try {
     const { analista_id, setorial_id } = req.query;
-    const cond = [`h.evento = 'resposta_diligencia'`, `h.criado_em > p.dt_situacao`];
+    // `dt_situacao IS NULL` cobre as diligências vindas da carga, que não têm essa data —
+    // sem o ramo, a comparação daria NULL e o selo "Entidade respondeu" nunca apareceria.
+    const cond = [`h.evento = 'resposta_diligencia'`,
+                  `(p.dt_situacao IS NULL OR h.criado_em > p.dt_situacao)`];
     const val = [];
     if (analista_id) { val.push(parseInt(analista_id)); cond.push(`p.analista_id = $${val.length}`); }
     if (setorial_id) { val.push(setorial_id); cond.push(`p.setorial_id = $${val.length}`); }
@@ -1797,7 +1800,13 @@ app.post('/parcela/resposta_diligencia', async (req, res) => {
     await registrarHistorico(cli, {
       tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
       evento: 'resposta_diligencia',
-      valor_anterior: pcs[0].prazo_diligencia ? String(pcs[0].prazo_diligencia).slice(0, 10) : null,
+      // Mesmo cuidado do job: coluna `date` chega como objeto Date, e String(d).slice(0,10)
+      // daria "Fri Aug 14" em vez de "2026-08-14".
+      valor_anterior: pcs[0].prazo_diligencia
+        ? (pcs[0].prazo_diligencia instanceof Date
+            ? pcs[0].prazo_diligencia.toLocaleDateString('en-CA')
+            : String(pcs[0].prazo_diligencia).slice(0, 10))
+        : null,
       valor_novo: null,
       analista_id: b.analista_id ?? null,
       observacao: b.observacao ?? null,

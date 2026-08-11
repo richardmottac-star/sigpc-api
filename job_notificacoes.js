@@ -156,7 +156,14 @@ async function buscarDiligencias(pool) {
                   SELECT 1 FROM parcela_historico h
                    WHERE h.tr = p.tr AND h.parcial_num = p.parcial_num
                      AND h.evento IN ('resposta_diligencia','situacao')
-                     AND h.criado_em > p.dt_situacao) )
+                     -- ATENCAO: o ramo dt_situacao IS NULL nao e zelo. As 1.236 diligencias
+                     -- vindas da carga de 05/08 tem dt_situacao VAZIO. Sem ele, a comparacao
+                     -- daria NULL, o NOT EXISTS nunca acharia nada, e o "Entidade respondeu"
+                     -- jamais silenciaria a cobranca justamente nessas: o analista clicaria
+                     -- e continuaria sendo cobrado, sem entender por que.
+                     -- (Sem crase neste comentario: ele vive dentro de um template literal,
+                     --  e uma crase aqui encerra a string e quebra o arquivo inteiro.)
+                     AND (p.dt_situacao IS NULL OR h.criado_em > p.dt_situacao)) )
         )
       ORDER BY p.prazo_diligencia
       LIMIT $4::int`,
@@ -164,9 +171,27 @@ async function buscarDiligencias(pool) {
   return rows;
 }
 
+/**
+ * Data de coluna `date` em AAAA-MM-DD.
+ *
+ * ⚠️ O driver devolve `date` como OBJETO Date, não como texto. `String(d).slice(0,10)` dava
+ * "Fri Aug 14" — apareceu na primeira notificação real, em 11/08. Pior que o texto feio: essa
+ * forma ia junto no `ref_id` do dedupe.
+ *
+ * Usa os getters LOCAIS, e não `toISOString()`: a data vem como meia-noite local, e converter
+ * para UTC pode empurrar o dia para trás dependendo do fuso.
+ */
+function dataIso(d) {
+  if (!d) return '';
+  if (d instanceof Date)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return String(d).slice(0, 10);
+}
+
 function montarAvisoDiligencia(pc) {
   const onde = `${pc.codigo_pc}${pc.tr ? ` (TR ${pc.tr})` : ''} — ${pc.entidade || 'entidade não informada'}`;
-  const prazoBr = String(pc.prazo_diligencia).slice(0, 10).split('-').reverse().join('/');
+  const prazoIso = dataIso(pc.prazo_diligencia);
+  const prazoBr = prazoIso.split('-').reverse().join('/');
   const m = {
     previo:   { t: `Diligência vence em ${pc.dias} dia${pc.dias === 1 ? '' : 's'}`,
                 msg: `${onde}. Prazo dado à entidade: ${prazoBr}.`, urgente: false },
@@ -186,7 +211,7 @@ function montarAvisoDiligencia(pc) {
     // O prazo entra na chave: cada RODADA de diligência avisa por conta própria, e a segunda
     // não é confundida com a primeira. A faixa também, senão o aviso do dia seria engolido
     // pelo de 3 dias antes.
-    ref_id: `${pc.codigo_pc}|dilig-${pc.faixa}|${String(pc.prazo_diligencia).slice(0, 10)}`,
+    ref_id: `${pc.codigo_pc}|dilig-${pc.faixa}|${prazoIso}`,
     setorial_id: pc.setorial_id || null,
   };
 }

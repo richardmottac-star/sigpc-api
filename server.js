@@ -1738,6 +1738,80 @@ app.post('/parcela/parecer', async (req, res) => {
   }
 });
 
+// GET /parcela/respostas_diligencia?analista_id=X — quais parciais já tiveram resposta
+//
+// Rota própria e leve, à parte da consulta pesada da Minha Planilha. Devolve só o que vale
+// AGORA: `criado_em > dt_situacao` descarta a resposta da rodada anterior, porque abrir uma
+// diligência nova reescreve `dt_situacao`.
+app.get('/parcela/respostas_diligencia', async (req, res) => {
+  try {
+    const { analista_id, setorial_id } = req.query;
+    const cond = [`h.evento = 'resposta_diligencia'`, `h.criado_em > p.dt_situacao`];
+    const val = [];
+    if (analista_id) { val.push(parseInt(analista_id)); cond.push(`p.analista_id = $${val.length}`); }
+    if (setorial_id) { val.push(setorial_id); cond.push(`p.setorial_id = $${val.length}`); }
+
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (h.tr, h.parcial_num) h.tr, h.parcial_num, h.criado_em
+         FROM parcela_historico h
+         JOIN prestacoes_contas p
+           ON p.tr = h.tr AND p.parcial_num = h.parcial_num AND p.baixada = false
+        WHERE ${cond.join(' AND ')}
+        ORDER BY h.tr, h.parcial_num, h.criado_em DESC`, val);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    // A planilha carrega igual sem isto — só não mostra o selo de respondida.
+    res.json({ data: [], count: 0, error: null });
+  }
+});
+
+// POST /parcela/resposta_diligencia — body { tr, parcial_num, analista_id?, observacao?, setorial_id? }
+//
+// Registra que a ENTIDADE respondeu. NÃO muda a situação: a parcial continua em Diligência
+// enquanto o analista avalia. São coisas diferentes, e juntá-las empurraria o analista a
+// mudar o status antes da hora só para registrar a resposta.
+//
+// Serve de gatilho para o aviso de diligência vencida não sair. Não precisou de coluna nova:
+// `parcela_historico` aceita qualquer `evento`, e a data do evento é a data da resposta.
+app.post('/parcela/resposta_diligencia', async (req, res) => {
+  const b = req.body || {};
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
+    if (pcs.length === 0) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada' } });
+    }
+    // Só faz sentido em quem está em diligência — sem isto, um clique em parcial já resolvida
+    // gravaria um evento que silenciaria a cobrança da PRÓXIMA rodada.
+    if (!pcs.some(p => p.situacao_atual === 'Diligência' || p.status === 'diligencia')) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'Esta parcial não está em diligência.' } });
+    }
+
+    await registrarHistorico(cli, {
+      tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
+      evento: 'resposta_diligencia',
+      valor_anterior: pcs[0].prazo_diligencia ? String(pcs[0].prazo_diligencia).slice(0, 10) : null,
+      valor_novo: null,
+      analista_id: b.analista_id ?? null,
+      observacao: b.observacao ?? null,
+    });
+    await cli.query('COMMIT');
+    res.json({ data: { tr: b.tr, parcial_num: String(b.parcial_num), registrado: true }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
+  }
+});
+
 // POST /parcela/situacao — body { tr, parcial_num, situacao, prazo_diligencia?, qtd_diligencias?, observacao?, analista_id?, setorial_id? }
 // Acompanhamento: NAO baixa, nao mexe em baixada/data_baixa. Pode ir e voltar quantas vezes precisar.
 app.post('/parcela/situacao', async (req, res) => {

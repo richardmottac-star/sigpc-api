@@ -61,6 +61,25 @@ const CORTE_PRAZO = '2026-08-01';
 const DIAS_GUARDA_LIDA = 15;
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  PRAZO DA DILIGÊNCIA — mude AQUI
+// ═══════════════════════════════════════════════════════════════════════════
+// O prazo que o ANALISTA deu à entidade para responder (`prazo_diligencia`), diferente do
+// `dt_limite_pc`, que é o prazo da FCEE para analisar.
+//
+// Aqui NÃO há corte de data histórica: ao contrário do `dt_limite_pc`, este campo só existe
+// quando alguém digita na tela de Situação — e a tela EXIGE o prazo para marcar Diligência.
+// Não há acervo antigo para filtrar.
+const DILIG_AVISO_PREVIO = 3;    // avisa 3 dias antes de vencer
+const DILIG_COBRANCA     = 7;    // cobra 7 dias depois de vencido, se ninguém agiu
+// ⚠️ TETO DA COBRANÇA, e ele existe por um motivo concreto:
+// o dedupe mora na própria tabela `notificacao`, e notificação lida é apagada em
+// DIAS_GUARDA_LIDA. Quando a linha some, o job esquece que já avisou. Sem teto, a PC
+// esquecida viraria cobrança a cada 15 dias, para sempre — e o analista aprende a ignorar o
+// ícone. Passados 21 dias do prazo, silêncio.
+const DILIG_COBRANCA_ATE = 21;
+// ═══════════════════════════════════════════════════════════════════════════
+
 const DIAS_AVISO_PREVIO = 7;
 
 const args = process.argv.slice(2);
@@ -100,6 +119,78 @@ async function buscarAlvos(pool) {
   return rows;
 }
 
+/**
+ * As diligências que merecem aviso agora — as três faixas de uma vez.
+ *
+ * `faixa` sai da própria consulta ('previo' | 'hoje' | 'cobranca'), para a regra de qual
+ * aviso cabe a cada PC viver num lugar só, junto do filtro que a seleciona.
+ *
+ * ⚠️ O `NOT EXISTS` é o gatilho combinado com o Richard: a cobrança NÃO sai se, DEPOIS do
+ * início desta rodada de diligência (`dt_situacao`), houve
+ *   · `resposta_diligencia` — a entidade respondeu, ou
+ *   · `situacao`            — o analista já moveu a parcial.
+ *
+ * Comparar com `dt_situacao` resolve a segunda diligência de graça: abrir uma rodada nova
+ * reescreve `dt_situacao`, e a resposta da rodada anterior fica para trás — não silencia a
+ * cobrança nova.
+ */
+async function buscarDiligencias(pool) {
+  const { rows } = await pool.query(
+    `SELECT p.codigo_pc, p.tr, p.parcial_num, p.entidade, p.analista_id, p.setorial_id,
+            p.prazo_diligencia,
+            (p.prazo_diligencia - CURRENT_DATE) AS dias,
+            CASE WHEN p.prazo_diligencia = CURRENT_DATE            THEN 'hoje'
+                 WHEN p.prazo_diligencia > CURRENT_DATE            THEN 'previo'
+                 ELSE 'cobranca' END AS faixa
+       FROM prestacoes_contas p
+      WHERE p.analista_id IS NOT NULL
+        AND p.baixada = false
+        AND p.prazo_diligencia IS NOT NULL
+        AND (p.situacao_atual = 'Diligência' OR p.status = 'diligencia')
+        AND (
+              p.prazo_diligencia = CURRENT_DATE + $1::int          -- 3 dias antes
+           OR p.prazo_diligencia = CURRENT_DATE                    -- no dia
+           OR ( p.prazo_diligencia <= CURRENT_DATE - $2::int       -- vencida, dentro da janela
+            AND p.prazo_diligencia >= CURRENT_DATE - $3::int
+            AND NOT EXISTS (
+                  SELECT 1 FROM parcela_historico h
+                   WHERE h.tr = p.tr AND h.parcial_num = p.parcial_num
+                     AND h.evento IN ('resposta_diligencia','situacao')
+                     AND h.criado_em > p.dt_situacao) )
+        )
+      ORDER BY p.prazo_diligencia
+      LIMIT $4::int`,
+    [DILIG_AVISO_PREVIO, DILIG_COBRANCA, DILIG_COBRANCA_ATE, LIMITE]);
+  return rows;
+}
+
+function montarAvisoDiligencia(pc) {
+  const onde = `${pc.codigo_pc}${pc.tr ? ` (TR ${pc.tr})` : ''} — ${pc.entidade || 'entidade não informada'}`;
+  const prazoBr = String(pc.prazo_diligencia).slice(0, 10).split('-').reverse().join('/');
+  const m = {
+    previo:   { t: `Diligência vence em ${pc.dias} dia${pc.dias === 1 ? '' : 's'}`,
+                msg: `${onde}. Prazo dado à entidade: ${prazoBr}.`, urgente: false },
+    hoje:     { t: 'Diligência vence hoje',
+                msg: `${onde}. É o último dia do prazo dado à entidade.`, urgente: true },
+    cobranca: { t: `Diligência vencida há ${Math.abs(pc.dias)} dias, sem resposta`,
+                msg: `${onde}. Venceu em ${prazoBr} e a entidade não respondeu.`, urgente: true },
+  }[pc.faixa];
+  return {
+    destinatario_id: pc.analista_id,
+    tipo: 'diligencia',
+    urgente: m.urgente,
+    titulo: m.t,
+    mensagem: m.msg,
+    link: '#planilha',
+    ref_tipo: 'pc',
+    // O prazo entra na chave: cada RODADA de diligência avisa por conta própria, e a segunda
+    // não é confundida com a primeira. A faixa também, senão o aviso do dia seria engolido
+    // pelo de 3 dias antes.
+    ref_id: `${pc.codigo_pc}|dilig-${pc.faixa}|${String(pc.prazo_diligencia).slice(0, 10)}`,
+    setorial_id: pc.setorial_id || null,
+  };
+}
+
 function montarAviso(pc) {
   const vencida = pc.dias < 0;
   const onde = `${pc.codigo_pc}${pc.tr ? ` (TR ${pc.tr})` : ''} — ${pc.entidade || 'entidade não informada'}`;
@@ -135,7 +226,8 @@ async function rodar() {
     // O corte sai impresso em toda passagem, de propósito: quem for investigar "por que não
     // avisou da PC X" precisa ver a data na hora, sem ter de abrir o código.
     console.log(`corte: ${CORTE_PRAZO} (PC anterior a esta data não gera aviso) · `
-              + `faixa: ${DIAS_AVISO_PREVIO} dias · guarda da lida: ${DIAS_GUARDA_LIDA} dias`
+              + `faixa: ${DIAS_AVISO_PREVIO} dias · guarda da lida: ${DIAS_GUARDA_LIDA} dias · `
+              + `diligência: -${DILIG_AVISO_PREVIO}d / dia / +${DILIG_COBRANCA}d até +${DILIG_COBRANCA_ATE}d`
               + `${DRY ? ' · DRY RUN' : ''}`);
     console.log(`${alvos.length} PC(s) dentro da faixa`);
 
@@ -144,6 +236,16 @@ async function rodar() {
       if (DRY) { console.log(`  [dry] ${aviso.titulo}: ${aviso.mensagem}`); continue; }
       // `criar` devolve null quando o dedupe barrou — é o caso normal a partir da segunda
       // passagem, e não é erro.
+      const r = await notificacao.criar(pool, aviso);
+      r ? gravadas++ : repetidas++;
+    }
+
+    // ── Prazo da diligência ──────────────────────────────────────────────────
+    const diligs = await buscarDiligencias(pool);
+    console.log(`${diligs.length} diligência(s) na faixa de aviso`);
+    for (const pc of diligs) {
+      const aviso = montarAvisoDiligencia(pc);
+      if (DRY) { console.log(`  [dry] ${aviso.titulo}: ${aviso.mensagem}`); continue; }
       const r = await notificacao.criar(pool, aviso);
       r ? gravadas++ : repetidas++;
     }
@@ -175,4 +277,8 @@ async function rodar() {
 
 if (require.main === module) rodar();
 
-module.exports = { buscarAlvos, montarAviso, rodar, DIAS_AVISO_PREVIO, CORTE_PRAZO, DIAS_GUARDA_LIDA };
+module.exports = {
+  buscarAlvos, montarAviso, buscarDiligencias, montarAvisoDiligencia, rodar,
+  DIAS_AVISO_PREVIO, CORTE_PRAZO, DIAS_GUARDA_LIDA,
+  DILIG_AVISO_PREVIO, DILIG_COBRANCA, DILIG_COBRANCA_ATE,
+};

@@ -129,6 +129,13 @@ Coordenadores não contam produtividade e não aparecem no Quadro 2 do relatóri
 
 ### Dados
 - [ ] 16 TRs com 2+ analistas (`conflito = true`, 138 PCs)
+- [ ] **`dt_limite_pc` com buraco de 2 anos e meio — suspeita de dado errado, não investigada.**
+      Das 4.721 PCs abertas com analista: 2020→2024 tem 4.490, depois **nada** até
+      30/01/2027, que concentra 231 de uma vez. Nenhuma PC vence entre ago/2026 e jan/2027.
+      Duas datas repetem demais: **29/07/2024** é a `dt_limite_pc` mais recente de *todos* os
+      44 analistas, e as 231 de 2027 são *todas* em 30/01/2027 — cara de data calculada em
+      lote, não de prazo real. Levantado em 10/08/2026 ao montar o sino; o Richard mandou
+      anotar e **não investigar agora**.
 - [ ] 6 TRs que não casaram: `2020 TR000777` e `2022TR 002065` (espaço no meio);
       `2019TR000319`, `2021TR000719`, `2021TR000804`, `2024TR000204` (inexistentes)
 - [ ] Definir meta vigente: CGE (Ago/25) ou Monitoramento (Nov/25)

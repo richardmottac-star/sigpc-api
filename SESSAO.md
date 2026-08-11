@@ -1,6 +1,96 @@
-# SIGPC-API — ESTADO EM 10/08/2026
+# SIGPC-API — ESTADO EM 11/08/2026
 
 Cole no início do chat novo.
+
+---
+
+## A LIÇÃO DE 10–11/08: TESTE COM DUBLÊ NÃO É TESTE DE SQL
+
+**Quatro defeitos em dois dias, todos passando por 220 testes verdes, todos aparecendo no
+primeiro contato com o Postgres.** O dublê de banco aceita qualquer string como SQL.
+
+| defeito | onde |
+|---|---|
+| `inconsistent types deduced for parameter $2` | INSERT do pedido de vaga |
+| `operator is not unique: date + unknown` | `CURRENT_DATE + $1` no job |
+| `dt_situacao` NULL fazia o NOT EXISTS nunca casar | cobrança da diligência |
+| coluna `date` chega como objeto `Date` | `String(d).slice(0,10)` → `"Fri Aug 14"` |
+
+**Duas regras que saíram disso, e valem para código novo:**
+
+1. **Todo parâmetro em conta aritmética leva o tipo escrito** — `$1::int`, `$2::text`.
+   Há teste que falha se sobrar parâmetro sem tipo na consulta do job.
+2. **Coluna `date` não é texto.** Use `dataIso()` (em `job_notificacoes.js`), que usa getters
+   locais — `toISOString()` empurra o dia para trás em fuso negativo.
+
+E a terceira, de método: **rodar contra o banco antes de publicar.** Foi assim que os quatro
+apareceram. O Richard autoriza escrita caso a caso; leitura é livre.
+
+---
+
+## MÉTODO DE TRABALHO (mudou em 11/08)
+
+- **SELECT e testes: rodar direto**, sem pedir. `DATABASE_URL` já está no ambiente da máquina.
+- **INSERT / UPDATE / DELETE / ALTER / CREATE: mostrar o comando e ESPERAR.** Autorizado,
+  quem executa sou eu — o Richard não roda mais nada à mão.
+- **Nunca alterar dado de analista real sem autorização expressa.** Para teste, existe o
+  usuário **`ZZ TESTE TRAVA` (id 57)**, criado para isso.
+- Mockup antes de implementar. Parar entre as partes.
+
+---
+
+## CONCLUÍDO EM 11/08
+
+### Reserva de TR, expiração e cancelamento
+Pedido pendente **segura a TR** — sem isso o analista pede, espera e um colega leva.
+A checagem vem **antes da conta do limite**: quem tem 1 TR de 5 também não fura a fila.
+Expira em 3 dias; **o que solta a TR é o filtro de tempo NA CONSULTA**, não o UPDATE — senão
+a TR ficaria presa o fim de semana inteiro porque ninguém abriu o sistema. O UPDATE existe
+para o estado gravado alcançar a realidade, e a linha fica como `'expirada'`, que é o que dá
+ao analista com que cobrar.
+**Uma pendente por TR, garantida DENTRO do INSERT** (`INSERT ... SELECT ... WHERE NOT EXISTS`):
+conferir e depois inserir deixava a fresta de dois cliques simultâneos.
+
+### Sino de notificações
+Quatro tipos: `aprovacao`, `prazo`, `diligencia`, `recado`. **Gravadas no evento**, nunca
+calculadas na leitura.
+**O dedupe (`destinatario_id + tipo + ref_id`) é o que mantém o sino vivo** — sem ele o job
+horário geraria 24 avisos por dia por PC.
+Notificação lida **sai da vista na hora** e é apagada em `DIAS_GUARDA_LIDA = 15` dias **após a
+leitura**; não lida nunca é apagada. `limparLidas` roda no mesmo job.
+⚠️ **O dedupe mora na tabela `notificacao`**: apagá-la faz o job esquecer o que já avisou.
+
+### Prazo da diligência (canal novo)
+Três avisos por PC: −3 dias, no dia, +7 dias. **A cobrança não sai** se houve
+`resposta_diligencia` ou `situacao` em `parcela_historico` depois de `dt_situacao`.
+**Teto de 21 dias**, e ele existe porque o dedupe some junto com a notificação lida — sem
+teto, a PC esquecida viraria cobrança a cada 15 dias, para sempre.
+`POST /parcela/resposta_diligencia` **não muda a situação**: a parcial segue em Diligência
+enquanto o analista avalia. Sem coluna nova — `parcela_historico` aceita qualquer `evento`.
+
+---
+
+## POR QUE OS CANAIS DE PRAZO ESTÃO MUDOS (e devem ficar)
+
+Não é defeito. **`dt_limite_pc` histórico não é prazo — é cálculo em lote** (decisão do
+Richard, 10/08): 29/07/2024 é a data mais recente de *todos* os 44 analistas e as 231 de 2027
+caem *todas* em 30/01/2027. Daí `CORTE_PRAZO = '2026-08-01'`.
+**`prazo_diligencia` está vazio nas 14.652 linhas** porque as 1.236 diligências vieram da
+carga; a tela existe e **exige** o prazo, então a primeira diligência registrada pelo sistema
+já nasce válida.
+
+**Não baixar o `CORTE_PRAZO`.** Baixá-lo faz o sino cobrar prazo que ninguém definiu.
+
+---
+
+## CRON NO RAILWAY
+
+| job | agenda | comando |
+|---|---|---|
+| `job_sgpe_links` | de hora em hora | `node job_sgpe_links.js --limite=200` |
+| `job_notificacoes` | de hora em hora, **minuto 20** | `npm run job:notif` |
+
+Minuto 20 para não disputar conexão com o outro no início da hora.
 
 ---
 

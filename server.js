@@ -11,6 +11,7 @@ const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-l
 const { semAcento, condicaoBusca } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
 const notif = require('./lib/notificacao');
+const { HOJE_BR } = require('./lib/datas');
 
 const app = express();
 app.use(cors());
@@ -795,19 +796,19 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
 });
 
 // GET /prestacoes_contas/alertas_prazo?analista_id=X — alertas de prazo do analista, calculados em tempo real
-// (dias = CURRENT_DATE - dt_limite_pc: positivo = vencida, negativo = a vencer)
+// (dias = hoje_BR - dt_limite_pc: positivo = vencida, negativo = a vencer)
 app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
   try {
     const { analista_id, setorial_id } = req.query;
     if (!analista_id)
       return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
-    const conditions = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`, `(CURRENT_DATE - dt_limite_pc) >= -30`];
+    const conditions = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`, `(${HOJE_BR} - dt_limite_pc) >= -30`];
     const values = [parseInt(analista_id)];
     let i = 2;
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
     const { rows } = await pool.query(
       `SELECT tr, entidade, codigo_pc, processo_pc, dt_limite_pc,
-              (CURRENT_DATE - dt_limite_pc) AS dias
+              (${HOJE_BR} - dt_limite_pc) AS dias
        FROM prestacoes_contas
        WHERE ${conditions.join(' AND ')}
        ORDER BY dias DESC`,

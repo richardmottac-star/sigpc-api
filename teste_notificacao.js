@@ -13,6 +13,7 @@
 
 const N = require('./lib/notificacao');
 const J = require('./job_notificacoes');
+const D = require('./lib/datas');
 
 let ok = 0, falhou = 0;
 const conf = (passou, rotulo, detalhe) => {
@@ -88,11 +89,32 @@ function db(resposta) {
     const d = db({ rows: [] });
     await J.buscarAlvos(d);
     const s = d.ch[0].sql;
-    conf(/CURRENT_DATE \+ \$1::int/.test(s),
-         'CURRENT_DATE + $1::int — sem o ::int, o Postgres nao escolhe entre date+integer e date+interval');
+    conf(/America\/Sao_Paulo'\)::date \+ \$1::int/.test(s),
+         'hoje_BR + $1::int — sem o ::int, o Postgres nao escolhe entre date+integer e date+interval');
     conf(/LIMIT \$2::int/.test(s), 'LIMIT $2::int');
     conf(!/\$\d+(?!::)/.test(s.replace(/\$\d+::[a-z]+/g, '')),
          'nao sobrou nenhum parametro sem tipo na consulta');
+  }
+
+  console.log('\n═══ 3d. TODA CONTA DE PRAZO USA A DATA DE BRASILIA ═══');
+  {
+    // O Postgres do Railway roda em UTC, entao CURRENT_DATE vira o dia seguinte as 21h de
+    // Brasilia. Todo prazo daqui e data CIVIL brasileira. Medido em 11/08: "Diligencia vence
+    // hoje" chegava as 21h da VESPERA, e o "N dias de atraso" subia um dia a noite e voltava
+    // de manha. O erro so aparece a noite, que e quando ninguem esta olhando — por isso ha
+    // teste, e nao so um comentario.
+    conf(D.HOJE_BR === `(NOW() AT TIME ZONE 'America/Sao_Paulo')::date`,
+         'HOJE_BR e a data de hoje no fuso de Brasilia', D.HOJE_BR);
+    conf(!/CURRENT_DATE/.test(D.HOJE_BR),
+         'e nao depende do fuso do servidor — continua certo se o Railway mudar de regiao');
+
+    for (const [nome, fn] of [['buscarAlvos', J.buscarAlvos], ['buscarDiligencias', J.buscarDiligencias]]) {
+      const d = db({ rows: [] });
+      await fn(d);
+      const sql = d.ch[0].sql;
+      conf(!/CURRENT_DATE/.test(sql), `${nome}: nenhum CURRENT_DATE cru sobrou`);
+      conf(sql.includes('America/Sao_Paulo'), `${nome}: compara com a data de Brasilia`);
+    }
   }
 
   console.log('\n═══ 3c. A DATA DE CORTE DO SINO ═══');
@@ -110,7 +132,8 @@ function db(resposta) {
          'e usa a constante, nao uma data escrita a mao no meio do SQL — muda num lugar so');
 
     // As duas pontas juntas: nada anterior ao corte, nada alem da faixa de 7 dias.
-    conf(/dt_limite_pc::date <= CURRENT_DATE \+ \$1::int/.test(sql), 'a faixa dos 7 dias continua valendo');
+    conf(/dt_limite_pc::date <= \(NOW\(\) AT TIME ZONE 'America\/Sao_Paulo'\)::date \+ \$1::int/.test(sql),
+         'a faixa dos 7 dias continua valendo');
 
     // O corte e SO do sino. Se um dia alguem mexer aqui achando que ajusta prazo, isto cai.
     conf(!/UPDATE|INSERT|DELETE/.test(sql), 'a consulta so LE: o job nunca escreve em prestacoes_contas');

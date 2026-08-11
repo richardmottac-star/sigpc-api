@@ -23,6 +23,7 @@
 // CRON no Railway: de hora em hora, ao lado do job_sgpe_links.
 
 const { Pool } = require('pg');
+const { HOJE_BR } = require('./lib/datas');
 const notificacao = require('./lib/notificacao');
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -107,12 +108,12 @@ async function buscarAlvos(pool) {
   // leva o tipo escrito.
   const { rows } = await pool.query(
     `SELECT codigo_pc, tr, entidade, analista_id, setorial_id, dt_limite_pc,
-            (dt_limite_pc::date - CURRENT_DATE) AS dias
+            (dt_limite_pc::date - ${HOJE_BR}) AS dias
        FROM prestacoes_contas
       WHERE analista_id IS NOT NULL
         AND baixada = false
         AND dt_limite_pc IS NOT NULL
-        AND dt_limite_pc::date <= CURRENT_DATE + $1::int
+        AND dt_limite_pc::date <= ${HOJE_BR} + $1::int
         AND dt_limite_pc::date >= $3::date
       ORDER BY dt_limite_pc
       LIMIT $2::int`, [DIAS_AVISO_PREVIO, LIMITE, CORTE_PRAZO]);
@@ -138,9 +139,9 @@ async function buscarDiligencias(pool) {
   const { rows } = await pool.query(
     `SELECT p.codigo_pc, p.tr, p.parcial_num, p.entidade, p.analista_id, p.setorial_id,
             p.prazo_diligencia,
-            (p.prazo_diligencia - CURRENT_DATE) AS dias,
-            CASE WHEN p.prazo_diligencia = CURRENT_DATE            THEN 'hoje'
-                 WHEN p.prazo_diligencia > CURRENT_DATE            THEN 'previo'
+            (p.prazo_diligencia - ${HOJE_BR}) AS dias,
+            CASE WHEN p.prazo_diligencia = ${HOJE_BR}            THEN 'hoje'
+                 WHEN p.prazo_diligencia > ${HOJE_BR}            THEN 'previo'
                  ELSE 'cobranca' END AS faixa
        FROM prestacoes_contas p
       WHERE p.analista_id IS NOT NULL
@@ -148,10 +149,10 @@ async function buscarDiligencias(pool) {
         AND p.prazo_diligencia IS NOT NULL
         AND (p.situacao_atual = 'Diligência' OR p.status = 'diligencia')
         AND (
-              p.prazo_diligencia = CURRENT_DATE + $1::int          -- 3 dias antes
-           OR p.prazo_diligencia = CURRENT_DATE                    -- no dia
-           OR ( p.prazo_diligencia <= CURRENT_DATE - $2::int       -- vencida, dentro da janela
-            AND p.prazo_diligencia >= CURRENT_DATE - $3::int
+              p.prazo_diligencia = ${HOJE_BR} + $1::int          -- 3 dias antes
+           OR p.prazo_diligencia = ${HOJE_BR}                    -- no dia
+           OR ( p.prazo_diligencia <= ${HOJE_BR} - $2::int       -- vencida, dentro da janela
+            AND p.prazo_diligencia >= ${HOJE_BR} - $3::int
             AND NOT EXISTS (
                   SELECT 1 FROM parcela_historico h
                    WHERE h.tr = p.tr AND h.parcial_num = p.parcial_num

@@ -7,9 +7,11 @@
     "start": "node server.js",
     "job:sgpe": "node job_sgpe_links.js",
     "job:notif": "node job_notificacoes.js",
-    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js && node teste_limite_tr.js && node teste_notificacao.js && node teste_faixa.js"
+    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js && node teste_limite_tr.js && node teste_notificacao.js && node teste_faixa.js && node teste_auth.js && node teste_http_auth.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "csv-parse": "^7.0.1",
     "express": "^4.18.2",

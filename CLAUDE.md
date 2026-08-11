@@ -44,6 +44,14 @@ TR ──── processo mãe (1:1)
 
 ## Banco de dados
 
+### `usuarios` — 50 registros
+
+Além do cadastro: `senha_hash` (bcrypt desde 11/08/2026) e **`senha_provisoria`** — quando
+`true`, o login desvia para a tela de troca antes de abrir o painel. Criada no boot por
+`garantirColunasUsuarios()`, nasce `false`; quem marca é `migracao_senhas.sql`.
+
+⚠️ **Login é por CPF.** Nove usuários estão sem CPF e não conseguem entrar — ver Pendências.
+
 ### `prestacoes_contas` — 14.652 registros (fonte única)
 
 Chave: `codigo_pc`. Tipos: `parcial` (13.626) e `final` (1.026, sem NL, id `{TR}-PFINAL`).
@@ -103,6 +111,20 @@ Coordenadores não contam produtividade e não aparecem no Quadro 2 do relatóri
 7. **Chave de agrupamento é `codigo_pc`**, nunca `processo_sgp` — 2.704 processos
    têm mais de uma PC.
 
+8. **`senha_hash` NUNCA sai do servidor.** Toda rota que devolve linha de `usuarios` passa
+   por `auth.semSegredo()`. Até 11/08/2026 não era assim: `GET /usuarios` entregava as 49
+   senhas em texto puro a quem pedisse, sem credencial nenhuma — medido em produção.
+   `teste_auth.js` falha se qualquer `SELECT *` ou `RETURNING *` de `usuarios` chegar à
+   resposta sem o filtro. **Não contornar a trava: ela é a correção.**
+
+9. **A senha não se confere no front.** Quem confere é `POST /usuarios/login`. A regra de
+   quem pode entrar mora em `lib/auth.js`, não no `index.html` — lá ela era contornável
+   pelo DevTools.
+
+10. **Comentário dentro de template literal não leva crase.** Uma crase no meio de uma
+    `` `...` `` fecha a string e o arquivo deixa de compilar. Aconteceu duas vezes em
+    11/08, no `server.js` e no `index.html`. Escrever `FALSE`, não `` `false` ``.
+
 ---
 
 ## Método: TRABALHAR EM BLOCO, NÃO PASSO A PASSO (desde 12/08/2026)
@@ -138,6 +160,16 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
 
 > Conferida contra o banco em **11/08/2026**. O que está marcado `[x]` foi verificado, não
 > presumido — a consulta que provou está escrita ao lado. Não reabrir sem medir de novo.
+
+### ABERTURA AOS 47 ANALISTAS — o que trava (varredura de 11/08/2026)
+- [ ] **Nove analistas sem CPF não conseguem entrar. O login é por CPF.**
+      Nayara (**coordenadora do G1**), Aline, Daniela, Franciani, Marisa, Ana Leticia,
+      Miriam, Marlene, Scheila. Mais a **Grazielly** (id 42, `senha_hash` NULL) e o
+      **Eduardo** (id 52, `ativo = false`). **Entram 39 de 50.** Falta o dado, só.
+- [ ] **`migracao_senhas.sql` não foi executado** — sem ele ninguém é obrigado a trocar a
+      senha, e as 44 senhas iguais continuam valendo.
+- [ ] **`migracao_senhas_hash.js` (opcional)** — converte de uma vez o texto puro que
+      sobrar. O login já converte a de quem entra.
 
 ### Aberto — precisa de decisão do Richard
 - [ ] **Caroline** — meta 27 vigente, **sem usuário em `usuarios`**. É a única meta vigente

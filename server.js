@@ -1,6 +1,7 @@
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const compression = require('compression');
 const {
   normalizarProcesso, formatarProcesso, siglaConhecida, montarUrlSgpe,
   ProcessoNaoEncontrado, SessaoExpirada,
@@ -13,9 +14,21 @@ const limiteTr = require('./lib/limite-tr');
 const notif = require('./lib/notificacao');
 const { HOJE_BR } = require('./lib/datas');
 const faixa = require('./lib/faixa');
+const auth = require('./lib/auth');
 
 const app = express();
 app.use(cors());
+
+// ⚠️ COMPRESSÃO — medido em 11/08, véspera da abertura aos 47 analistas:
+//     GET /prestacoes_contas  →  11.330.330 bytes · 3,1 s
+// SEIS telas do `index.html` chamam `fetchTodasPCs()`, que baixa as 14.652 linhas inteiras.
+// Com 47 pessoas entrando na mesma manhã, era a primeira coisa que ia doer. Com gzip o
+// mesmo corpo cai para ~1 MB.
+//
+// Vem ANTES de `express.json` e das rotas: o middleware precisa envolver a resposta antes
+// de qualquer handler escrever nela.
+app.use(compression());
+
 app.use(express.json({ limit: '5mb' }));
 
 const pool = new Pool({
@@ -82,7 +95,9 @@ app.get('/usuarios', async (req, res) => {
     if (gteUltimoAcesso) { conditions.push(`ultimo_acesso >= $${i++}`); values.push(gteUltimoAcesso); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(`SELECT * FROM usuarios ${where} ORDER BY nome`, values);
-    res.json({ data: rows, error: null });
+    // ⚠️ `senha_hash` NUNCA sai daqui — ver o cabeçalho de lib/auth.js. Até 11/08 esta rota
+    // devolvia as 49 senhas em texto puro a quem pedisse, sem nenhuma credencial.
+    res.json({ data: rows.map(auth.semSegredo), error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -91,7 +106,104 @@ app.get('/usuarios', async (req, res) => {
 app.get('/usuarios/:id', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM usuarios WHERE id = $1', [req.params.id]);
-    res.json({ data: rows, error: null });
+    res.json({ data: rows.map(auth.semSegredo), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
+//  LOGIN
+// ══════════════════════════════════════
+// POST /usuarios/login  body { cpf, senha, setorial }
+//
+// ⚠️ ESTA ROTA NÃO EXISTIA ANTES DE 11/08/2026. O login inteiro acontecia no navegador: o
+// front pedia a linha do usuário — com a senha — e comparava em JavaScript. Ver o cabeçalho
+// de lib/auth.js para o que isso significava na prática.
+//
+// A conferência do CPF é por DÍGITOS, e não pelo texto: o mesmo CPF aparece formatado de
+// jeitos diferentes conforme tenha vindo da planilha ou do formulário. É a mesma regra que
+// `primeiro_acesso` já usava — o login usava igualdade exata e recusava quem tivesse o CPF
+// gravado noutro formato.
+app.post('/usuarios/login', async (req, res) => {
+  try {
+    const { cpf, senha, setorial } = req.body || {};
+    if (!cpf || !senha || !setorial)
+      return res.status(400).json({ data: null, error: { message: 'Preencha todos os campos.' } });
+
+    const { rows } = await pool.query(
+      `SELECT * FROM usuarios
+        WHERE regexp_replace(cpf, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+        LIMIT 1`, [String(cpf)]);
+    const u = rows[0];
+
+    // Mesma resposta para CPF inexistente e senha errada. Respostas diferentes contariam a
+    // quem tentasse quais CPFs existem no sistema.
+    const RECUSA = 'CPF ou senha incorretos.';
+    if (!u) return res.status(401).json({ data: null, error: { message: RECUSA } });
+
+    const { ok, precisaRehash } = await auth.conferir(senha, u.senha_hash);
+    if (!ok) return res.status(401).json({ data: null, error: { message: RECUSA } });
+
+    // A senha confere. Agora as regras de entrada — que davam mensagem própria antes e
+    // continuam dando: quem acertou a senha merece saber por que ainda não entrou.
+    const recusa = auth.podeEntrar(u, setorial);
+    if (recusa) return res.status(403).json({ data: null, error: { message: recusa } });
+
+    // ⚠️ A SENHA EM TEXTO PURO VIRA HASH AQUI, no login que a provou.
+    //
+    // É o que migra as 49 senhas antigas sem exigir um dia de parada: cada pessoa que entra
+    // converte a sua. A escrita grava exatamente a senha que a pessoa acabou de digitar
+    // certo, na linha dela — não muda o que ninguém sabe, nem exige que decorem outra.
+    //
+    // Falhar aqui não pode barrar a entrada: se o UPDATE não for, ela entra igual e a
+    // conversão acontece no próximo login.
+    if (precisaRehash) {
+      try {
+        await pool.query('UPDATE usuarios SET senha_hash = $1 WHERE id = $2',
+                         [await auth.hashSenha(senha), u.id]);
+      } catch (e) {
+        console.error('Falha ao converter senha para hash (usuario ' + u.id + '):', e.message);
+      }
+    }
+
+    // Carimba o acesso aqui, e não numa chamada separada da tela: é o servidor que sabe que
+    // o login aconteceu de verdade.
+    pool.query('UPDATE usuarios SET ultimo_acesso = NOW() WHERE id = $1', [u.id]).catch(() => {});
+
+    res.json({ data: auth.semSegredo(u), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /usuarios/trocar_senha  body { id, senha_atual, senha_nova }
+//
+// Troca a própria senha, provando a atual. É por aqui que passa a troca obrigatória do
+// primeiro acesso — em 11/08, 44 dos 50 usuários compartilhavam UMA senha.
+//
+// Exige a senha atual mesmo na troca obrigatória: sem isso, bastaria conhecer o `id` de
+// alguém para trocar a senha dele por uma rota pública.
+app.post('/usuarios/trocar_senha', async (req, res) => {
+  try {
+    const { id, senha_atual, senha_nova } = req.body || {};
+    if (!id) return res.status(400).json({ data: null, error: { message: 'id é obrigatório' } });
+
+    const { rows } = await pool.query('SELECT * FROM usuarios WHERE id = $1', [parseInt(id) || 0]);
+    const u = rows[0];
+    if (!u) return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado' } });
+
+    const { ok } = await auth.conferir(senha_atual, u.senha_hash);
+    if (!ok) return res.status(401).json({ data: null, error: { message: 'A senha atual está incorreta.' } });
+
+    const erro = auth.validarSenhaNova(senha_nova, senha_atual);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const atualizado = await pool.query(
+      `UPDATE usuarios SET senha_hash = $1, senha_provisoria = false WHERE id = $2 RETURNING *`,
+      [await auth.hashSenha(senha_nova), u.id]);
+
+    res.json({ data: auth.semSegredo(atualizado.rows[0]), error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -100,14 +212,19 @@ app.get('/usuarios/:id', async (req, res) => {
 app.post('/usuarios', async (req, res) => {
   try {
     const b = req.body;
+    // A senha chega em texto e sai daqui como hash. O campo continua se chamando
+    // `senha_hash` no corpo do pedido — o nome sempre foi esse, o que mudou é ele passar a
+    // ser verdade. Nasce provisória: quem escolheu a senha foi o admin, não a pessoa.
     const { rows } = await pool.query(
       `INSERT INTO usuarios (nome, cpf, senha_hash, perfil, setorial_id, grupo, ativo,
-                             matricula, portaria, data_ingresso, data_saida, meta_mensal, criado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW()) RETURNING *`,
-      [b.nome, b.cpf, b.senha_hash, b.perfil, b.setorial_id, b.grupo ?? null, b.ativo ?? true,
+                             matricula, portaria, data_ingresso, data_saida, meta_mensal,
+                             senha_provisoria, criado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,NOW()) RETURNING *`,
+      [b.nome, b.cpf, b.senha_hash ? await auth.hashSenha(b.senha_hash) : null,
+       b.perfil, b.setorial_id, b.grupo ?? null, b.ativo ?? true,
        b.matricula ?? null, b.portaria ?? null, b.data_ingresso ?? null, b.data_saida ?? null, b.meta_mensal ?? 10]
     );
-    res.json({ data: rows[0], error: null });
+    res.json({ data: auth.semSegredo(rows[0]), error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -117,7 +234,7 @@ app.post('/usuarios', async (req, res) => {
 const USUARIOS_PATCH_PERMITIDOS = [
   'nome', 'cpf', 'perfil', 'setorial_id', 'grupo', 'ativo', 'senha_hash', 'ultimo_acesso',
   'regiao', 'municipio', 'telefone', 'email', 'nucleo', 'foto_base64', 'aprovado', 'aguardando_aprovacao',
-  'matricula', 'portaria', 'data_ingresso', 'data_saida', 'meta_mensal'
+  'matricula', 'portaria', 'data_ingresso', 'data_saida', 'meta_mensal', 'senha_provisoria'
 ];
 
 app.patch('/usuarios/:id', async (req, res) => {
@@ -128,6 +245,19 @@ app.patch('/usuarios/:id', async (req, res) => {
     let i = 1;
     for (const [k, v] of Object.entries(b)) {
       if (!USUARIOS_PATCH_PERMITIDOS.includes(k)) continue;
+      if (k === 'senha_hash') {
+        // ⚠️ Senha que entra por aqui é o admin redefinindo a de outra pessoa. Vira hash, e
+        // vira PROVISÓRIA: quem escolheu não foi o dono. Sem esta linha, a redefinição pelo
+        // painel devolveria o usuário à situação que estamos justamente desfazendo.
+        if (v === null || v === undefined || String(v) === '') continue;
+        sets.push(`senha_hash = $${i++}`);
+        values.push(await auth.hashSenha(v));
+        if (b.senha_provisoria === undefined) {
+          sets.push(`senha_provisoria = $${i++}`);
+          values.push(true);
+        }
+        continue;
+      }
       sets.push(`${k} = $${i++}`);
       values.push(v);
     }
@@ -138,7 +268,7 @@ app.patch('/usuarios/:id', async (req, res) => {
       `UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
       values
     );
-    res.json({ data: rows[0], error: null });
+    res.json({ data: auth.semSegredo(rows[0]), error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -175,6 +305,13 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
     if (!nome || !cpf || !senha_hash || !setorial_id)
       return res.status(400).json({ data: null, error: { message: 'Preencha nome, CPF, senha e setorial.' } });
 
+    // A pessoa escolhe a própria senha aqui — então ela NÃO nasce provisória, ao contrário
+    // da criada pelo admin em POST /usuarios. Mas passa pela mesma régua: quem se cadastra
+    // hoje não pode entrar com '123456'.
+    const erroSenha = auth.validarSenhaNova(senha_hash, null);
+    if (erroSenha) return res.status(400).json({ data: null, error: { message: erroSenha } });
+    const senhaGuardar = await auth.hashSenha(senha_hash);
+
     // Compara só os dígitos do CPF — planilha e formulário podem formatar diferente
     const existente = await pool.query(
       `SELECT id, senha_hash, ativo, aprovado, aguardando_aprovacao
@@ -197,10 +334,11 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
       const { rows } = await pool.query(
         `UPDATE usuarios
            SET email = $1, telefone = $2, regiao = $3, municipio = $4, nucleo = $5,
-               senha_hash = $6, aguardando_aprovacao = true, ativo = false, aprovado = false
+               senha_hash = $6, senha_provisoria = false,
+               aguardando_aprovacao = true, ativo = false, aprovado = false
          WHERE id = $7
          RETURNING id, nome, cpf`,
-        [email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senha_hash, u.id]
+        [email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senhaGuardar, u.id]
       );
       return res.json({
         data: rows[0],
@@ -212,10 +350,10 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
     const { rows } = await pool.query(
       `INSERT INTO usuarios
          (nome, cpf, email, telefone, regiao, municipio, nucleo, senha_hash, setorial_id,
-          perfil, ativo, aprovado, aguardando_aprovacao, grupo, criado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'analista',false,false,true,NULL,NOW())
+          perfil, ativo, aprovado, aguardando_aprovacao, grupo, senha_provisoria, criado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'analista',false,false,true,NULL,false,NOW())
        RETURNING id, nome, cpf`,
-      [nome, cpf, email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senha_hash, setorial_id]
+      [nome, cpf, email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senhaGuardar, setorial_id]
     );
     res.json({
       data: rows[0],
@@ -245,7 +383,7 @@ app.patch('/usuarios/:id/aprovar', async (req, res) => {
     );
     if (!rows.length)
       return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado' } });
-    res.json({ data: rows[0], error: null });
+    res.json({ data: auth.semSegredo(rows[0]), error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -2488,9 +2626,13 @@ async function garantirColunasUsuarios() {
         ADD COLUMN IF NOT EXISTS nucleo VARCHAR(80),
         ADD COLUMN IF NOT EXISTS foto_base64 TEXT,
         ADD COLUMN IF NOT EXISTS aprovado BOOLEAN DEFAULT false,
-        ADD COLUMN IF NOT EXISTS aguardando_aprovacao BOOLEAN DEFAULT false
+        ADD COLUMN IF NOT EXISTS aguardando_aprovacao BOOLEAN DEFAULT false,
+        -- Troca obrigatória no primeiro acesso. Nasce FALSE de propósito: ligar a coluna
+        -- não pode, sozinha, trancar 50 pessoas na tela de troca de senha. Quem marca quem
+        -- precisa trocar é o UPDATE de migracao_senhas.sql, que o Richard autoriza.
+        ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT false
     `);
-    console.log('Colunas de usuarios (Primeiro Acesso / Perfil) verificadas.');
+    console.log('Colunas de usuarios (Primeiro Acesso / Perfil / senha provisoria) verificadas.');
   } catch (e) {
     console.error('Erro ao garantir colunas de usuarios:', e.message);
   }

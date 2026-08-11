@@ -28,6 +28,23 @@ apareceram. O Richard autoriza escrita caso a caso; leitura é livre.
 
 ---
 
+## ⚠️ RITMO: EM BLOCO, NÃO PASSO A PASSO (a partir de 12/08/2026)
+
+**Em 10/08 o passo a passo — mockup, parar, implementar uma tela, parar, reportar — consumiu
+o dia inteiro e cansou o Richard sem necessidade.** A partir de 12/08:
+
+- agrupar frentes relacionadas num **único ciclo**;
+- **parar só** quando a decisão for realmente dele: regra de negócio, prioridade, dado de
+  analista real;
+- **não parar** por detalhe de implementação, texto de mensagem ou escolha técnica — decidir,
+  seguir, reportar depois;
+- **reportar em bloco no fim**, não a cada etapa.
+
+Rodar contra o banco antes de publicar **continua valendo**.
+E isto não afrouxa a autorização de escrita — muda o ritmo, não a permissão.
+
+---
+
 ## MÉTODO DE TRABALHO (mudou em 11/08)
 
 - **SELECT e testes: rodar direto**, sem pedir. `DATABASE_URL` já está no ambiente da máquina.

@@ -105,6 +105,25 @@ Coordenadores não contam produtividade e não aparecem no Quadro 2 do relatóri
 
 ---
 
+## Método: TRABALHAR EM BLOCO, NÃO PASSO A PASSO (desde 12/08/2026)
+
+**Motivo:** em 10/08 o método passo a passo — mockup, parar, implementar uma tela, parar,
+reportar — consumiu o dia inteiro e cansou o Richard sem necessidade.
+
+- **Agrupar frentes relacionadas num único ciclo**, em vez de parar entre cada tela.
+- **Parar só quando a decisão for realmente dele:** regra de negócio, prioridade, ou
+  dado de analista real.
+- **Não parar** para confirmar detalhe de implementação, texto de mensagem ou escolha
+  técnica — decidir, seguir, e reportar depois.
+- **Reportar em bloco no fim**, não a cada etapa.
+- **Rodar contra o banco antes de publicar continua valendo** — foi o que pegou os quatro
+  defeitos de SQL de 10–11/08, todos invisíveis aos 220 testes com dublê.
+
+Isto NÃO afrouxa a regra de escrita no banco: `INSERT`/`UPDATE`/`DELETE`/`ALTER`/`CREATE`
+continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, não a permissão.
+
+---
+
 ## Padrões de trabalho
 
 - Validar sempre com `node --check` antes de commit.

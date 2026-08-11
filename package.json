@@ -7,7 +7,7 @@
     "start": "node server.js",
     "job:sgpe": "node job_sgpe_links.js",
     "job:notif": "node job_notificacoes.js",
-    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js && node teste_limite_tr.js && node teste_notificacao.js"
+    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js && node teste_limite_tr.js && node teste_notificacao.js && node teste_faixa.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

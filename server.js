@@ -12,6 +12,7 @@ const { semAcento, condicaoBusca } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
 const notif = require('./lib/notificacao');
 const { HOJE_BR } = require('./lib/datas');
+const faixa = require('./lib/faixa');
 
 const app = express();
 app.use(cors());
@@ -942,6 +943,96 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
       params
     );
     res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
+//  FAIXA DE AVISOS (rodapé)
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/faixa.js.
+
+// GET /faixa_aviso/ativas?grupo=3 — o que passa agora. É a rota que TODA tela chama.
+app.get('/faixa_aviso/ativas', async (req, res) => {
+  const rows = await faixa.ativas(pool, req.query.grupo);
+  res.json({ data: rows, count: rows.length, error: null });
+});
+
+// GET /faixa_aviso — tudo, para a tela de gestão
+app.get('/faixa_aviso', async (req, res) => {
+  const rows = await faixa.listar(pool, req.query.grupo);
+  res.json({ data: rows, count: rows.length, error: null });
+});
+
+// POST /faixa_aviso  body { texto, escopo, inicio, fim, ordem, grupo, autor_id }
+app.post('/faixa_aviso', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const erro = faixa.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const a = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const autor = a.rows[0];
+    if (!autor || !['coordenador', 'superadmin'].includes(autor.perfil))
+      return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin escreve na faixa.' } });
+
+    // Coordenador só alcança o próprio grupo, e isso é decidido AQUI — a tela pode ser
+    // contornada. Mesma regra do recado do sino.
+    const grupo = autor.perfil === 'coordenador' ? autor.grupo : (b.grupo || null);
+
+    const { rows } = await pool.query(
+      `INSERT INTO faixa_aviso (texto, escopo, ativo, inicio, fim, ordem, grupo, autor_id, autor_nome)
+       VALUES ($1::text, $2::text, $3::boolean, $4::date, $5::date, $6::int, $7::text, $8::int, $9::text)
+       RETURNING *`,
+      [String(b.texto).trim(), b.escopo || 'inicial', b.ativo !== false,
+       b.inicio || null, b.fim || null, parseInt(b.ordem) || 0,
+       grupo || null, autor.id, autor.nome]);
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /faixa_aviso/:id — manda só o que mudou
+app.patch('/faixa_aviso/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.texto !== undefined || b.escopo !== undefined || b.inicio !== undefined || b.fim !== undefined) {
+      const erro = faixa.validar({ texto: b.texto ?? 'x', escopo: b.escopo, inicio: b.inicio, fim: b.fim });
+      if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    }
+    // Par (informou, valor) em vez de COALESCE: `inicio = null` significa "sem data de
+    // início", e COALESCE trataria isso como "não informado" — a data nunca sairia.
+    const { rows } = await pool.query(
+      `UPDATE faixa_aviso
+          SET texto  = CASE WHEN $1::boolean  THEN $2::text    ELSE texto  END,
+              escopo = CASE WHEN $3::boolean  THEN $4::text    ELSE escopo END,
+              ativo  = CASE WHEN $5::boolean  THEN $6::boolean ELSE ativo  END,
+              inicio = CASE WHEN $7::boolean  THEN $8::date    ELSE inicio END,
+              fim    = CASE WHEN $9::boolean  THEN $10::date   ELSE fim    END,
+              ordem  = CASE WHEN $11::boolean THEN $12::int    ELSE ordem  END,
+              atualizado_em = NOW()
+        WHERE id = $13::int
+        RETURNING *`,
+      [b.texto !== undefined, b.texto !== undefined ? String(b.texto).trim() : null,
+       b.escopo !== undefined, b.escopo ?? null,
+       b.ativo !== undefined, b.ativo ?? null,
+       b.inicio !== undefined, b.inicio || null,
+       b.fim !== undefined, b.fim || null,
+       b.ordem !== undefined, b.ordem ?? null,
+       parseInt(req.params.id)]);
+    if (!rows.length) return res.status(404).json({ data: null, error: { message: 'Faixa não encontrada.' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.delete('/faixa_aviso/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`DELETE FROM faixa_aviso WHERE id = $1 RETURNING *`, [parseInt(req.params.id)]);
+    res.json({ data: rows[0] || null, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }

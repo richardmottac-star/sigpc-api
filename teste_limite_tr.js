@@ -179,16 +179,22 @@ const SUPER = { id: 4, nome: 'Richard', perfil: 'superadmin', grupo: '3' };
     // O UPDATE existe para o estado GRAVADO alcancar a realidade: e ele que da ao analista
     // o registro com que cobrar depois.
     let sqlExp = null;
-    const f = { query: async (sql) => { sqlExp = sql.replace(/\s+/g,' '); return { rowCount: 2 } } };
+    const f = { query: async (sql) => {
+      if (/INSERT INTO notificacao/.test(sql)) return { rows: [] };   // o aviso de expiração
+      sqlExp = sql.replace(/\s+/g,' ');
+      return { rows: [{ id: 1, analista_id: 42, tr: 'X' }, { id: 2, analista_id: 43, tr: 'Y' }] };
+    } };
     const n = await L.expirarPendentes(f);
-    conf(n === 2, 'expirarPendentes devolve quantos expiraram');
+    conf(n.length === 2, 'expirarPendentes devolve as linhas que expiraram');
+    conf(/RETURNING id, analista_id, tr/.test(sqlExp),
+         'com RETURNING: e dele que sai a notificacao, sem consulta depois');
     conf(/SET status = 'expirada'/.test(sqlExp), "marca 'expirada'");
     conf(/WHERE status = 'pendente'/.test(sqlExp), 'so mexe em pendente — nao ressuscita decidido');
     conf(!/DELETE/.test(sqlExp), 'NAO apaga: a linha fica, e com ela o analista cobra depois');
 
     // Banco fora do ar nao pode derrubar quem so queria listar.
     const quebrado = { query: async () => { throw new Error('relation does not exist') } };
-    conf(await L.expirarPendentes(quebrado) === 0, 'tabela ausente: devolve 0 em vez de estourar');
+    conf((await L.expirarPendentes(quebrado)).length === 0, 'tabela ausente: lista vazia em vez de estourar');
 
     conf(L.RESERVA_DIAS === 3, 'o prazo e 3 dias, fixo no codigo (decisao de 10/08)');
   }

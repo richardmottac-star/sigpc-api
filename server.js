@@ -10,6 +10,7 @@ const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-l
 
 const { semAcento, condicaoBusca } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
+const notif = require('./lib/notificacao');
 
 const app = express();
 app.use(cors());
@@ -946,6 +947,100 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
 });
 
 // ══════════════════════════════════════
+//  NOTIFICAÇÕES (o sino)
+// ══════════════════════════════════════
+// A regra e o porquê do dedupe estão em lib/notificacao.js.
+
+// GET /notificacao?destinatario_id=X&limite=15
+app.get('/notificacao', async (req, res) => {
+  try {
+    const { destinatario_id, limite } = req.query;
+    if (!destinatario_id)
+      return res.status(400).json({ data: null, error: { message: 'destinatario_id é obrigatório' } });
+    const id = parseInt(destinatario_id);
+    const [lista, naoLidas] = await Promise.all([
+      notif.listar(pool, id, limite),
+      notif.contarNaoLidas(pool, id),
+    ]);
+    res.json({ data: lista, count: lista.length, nao_lidas: naoLidas, error: null });
+  } catch (e) {
+    // O sino quebrado não pode derrubar o cabeçalho do sistema inteiro.
+    res.json({ data: [], count: 0, nao_lidas: 0, error: null });
+  }
+});
+
+// PATCH /notificacao/:id  body { destinatario_id } — marca como lida
+app.patch('/notificacao/:id', async (req, res) => {
+  try {
+    const { destinatario_id } = req.body || {};
+    if (!destinatario_id)
+      return res.status(400).json({ data: null, error: { message: 'destinatario_id é obrigatório' } });
+    const r = await notif.marcarLida(pool, req.params.id, destinatario_id);
+    // Já lida, ou de outra pessoa: não é erro que mereça alarme na tela — o efeito desejado
+    // (estar lida) ou já vale, ou nunca foi dela para valer.
+    res.json({ data: r, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /notificacao/marcar_todas  body { destinatario_id }
+app.post('/notificacao/marcar_todas', async (req, res) => {
+  try {
+    const { destinatario_id } = req.body || {};
+    if (!destinatario_id)
+      return res.status(400).json({ data: null, error: { message: 'destinatario_id é obrigatório' } });
+    const n = await notif.marcarTodas(pool, destinatario_id);
+    res.json({ data: { marcadas: n }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /notificacao — recado escrito por coordenador ou superadmin
+// body { autor_id, alvo: 'analista'|'grupo'|'todos', analista_id?, grupo?, titulo, mensagem, urgente? }
+app.post('/notificacao', async (req, res) => {
+  try {
+    const { autor_id, alvo, analista_id, grupo, titulo, mensagem, urgente } = req.body || {};
+    if (!titulo || !String(titulo).trim())
+      return res.status(400).json({ data: null, error: { message: 'título é obrigatório' } });
+
+    const a = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
+    const autor = a.rows[0];
+    if (!autor || !['coordenador', 'superadmin'].includes(autor.perfil))
+      return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin envia recado.' } });
+
+    let destinatarios = [];
+    if (alvo === 'analista') {
+      if (!analista_id)
+        return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+      destinatarios = [parseInt(analista_id)];
+    } else {
+      // Coordenador não manda para fora do próprio grupo, nem com alvo 'todos' — a conferência
+      // é aqui, e não só na tela, porque a tela pode ser contornada.
+      const g = autor.perfil === 'coordenador' ? autor.grupo : (alvo === 'todos' ? null : grupo);
+      const q = g ? await pool.query(`SELECT id FROM usuarios WHERE grupo = $1`, [String(g)])
+                  : await pool.query(`SELECT id FROM usuarios`);
+      destinatarios = q.rows.map(r => r.id);
+    }
+
+    // O autor não recebe o próprio recado.
+    destinatarios = destinatarios.filter(id => Number(id) !== Number(autor.id));
+
+    const n = await notif.criarVarios(pool, destinatarios, {
+      tipo: 'recado', titulo: String(titulo).trim(),
+      mensagem: `${mensagem ? String(mensagem).trim() + '\n\n' : ''}— ${autor.nome}`,
+      urgente: !!urgente,
+      // Sem `ref_id`: dois recados no mesmo dia são dois recados, não uma repetição. É o
+      // único tipo em que o dedupe fica desligado de propósito.
+    });
+    res.json({ data: { enviadas: n, destinatarios: destinatarios.length }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
 //  TRAVA DE TRs POR ANALISTA
 // ══════════════════════════════════════
 // A regra e o porquê estão em lib/limite-tr.js. Aqui ficam só as rotas.
@@ -1217,6 +1312,18 @@ app.patch('/solicitacao_vaga/:id', async (req, res) => {
           : `Este pedido já está como '${r.status}'.`;
         return res.status(409).json({ data: null, error: { message: msg, status_atual: r ? r.status : null } });
       }
+      // Quem cancela é o próprio analista, então avisar ELE do que acabou de fazer é ruído.
+      // Quem precisa saber é o coordenador: saiu um item da fila dele sem que ele decidisse.
+      const u = await pool.query(`SELECT nome, grupo FROM usuarios WHERE id = $1`, [dono]);
+      const quem = u.rows[0] || {};
+      await notif.criarVarios(pool, await notif.coordenadoresDoGrupo(pool, quem.grupo), {
+        tipo: 'aprovacao',
+        titulo: 'Pedido de vaga cancelado',
+        mensagem: `${quem.nome || ('id ' + dono)} cancelou o próprio pedido`
+                + `${rows[0].tr ? ` da TR ${rows[0].tr}` : ''}. Saiu da sua fila.`,
+        link: '#aprovacoes', ref_tipo: 'solicitacao_vaga', ref_id: String(rows[0].id),
+      });
+
       // A TR volta ao estoque no mesmo instante: tudo que lê reserva filtra por 'pendente'.
       return res.json({ data: rows[0], error: null });
     }
@@ -1243,6 +1350,27 @@ app.patch('/solicitacao_vaga/:id', async (req, res) => {
         : 'Este pedido já foi decidido.';
       return res.status(409).json({ data: null, error: { message: msg, status_atual: st || null } });
     }
+
+    // O aviso mais importante do sino: hoje o analista só descobre que foi aprovado tentando
+    // assumir de novo. Vai com `urgente` na aprovação porque tem prazo — a reserva dele cai
+    // em 3 dias, e uma vaga aprovada que ninguém usa não serve para nada.
+    const aprovada = status === 'aprovada';
+    const alvo = rows[0];
+    const dec = await pool.query(`SELECT nome FROM usuarios WHERE id = $1`, [decidido_por ?? 0]);
+    await notif.criar(pool, {
+      destinatario_id: alvo.analista_id,
+      tipo: 'aprovacao',
+      urgente: aprovada,
+      titulo: aprovada ? 'Pedido de vaga aprovado' : 'Pedido de vaga negado',
+      mensagem: aprovada
+        ? `${(dec.rows[0]||{}).nome || 'A coordenação'} aprovou seu pedido`
+          + `${alvo.tr ? ` da TR ${alvo.tr}` : ''}. Você já pode assumi-la.`
+        : `${(dec.rows[0]||{}).nome || 'A coordenação'} negou seu pedido`
+          + `${alvo.tr ? ` da TR ${alvo.tr}` : ''}.`
+          + `${alvo.motivo ? ` Motivo: ${alvo.motivo}` : ''}`,
+      link: '#estoque', ref_tipo: 'solicitacao_vaga', ref_id: String(alvo.id),
+    });
+
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
@@ -1387,6 +1515,27 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
       `UPDATE prestacoes_contas SET ${sets.join(', ')} WHERE codigo_pc = $${i} RETURNING *`,
       values
     );
+
+    // Movimentação de diligência. O dono da PC sai do RESULTADO, não do corpo do PATCH: quem
+    // move a diligência costuma ser o Controle Interno, não o analista — ler de
+    // `campos.analista_id` avisaria a pessoa errada, ou ninguém.
+    const pcAlvo = rows[0];
+    if (pcAlvo && ['diligencia', 'reanalise'].includes(campos.status) && pcAlvo.analista_id) {
+      const emDilig = campos.status === 'diligencia';
+      await notif.criar(pool, {
+        destinatario_id: pcAlvo.analista_id,
+        tipo: 'diligencia',
+        titulo: emDilig ? 'PC em diligência' : 'PC voltou para reanálise',
+        mensagem: `${pcAlvo.codigo_pc}${pcAlvo.tr ? ` (TR ${pcAlvo.tr})` : ''} — ${pcAlvo.entidade || 'entidade não informada'}.`,
+        link: '#planilha', ref_tipo: 'pc',
+        // O `ref_id` carrega o status e o número da diligência. Sem isso, uma PC que vai para
+        // diligência, volta para reanálise e cai em diligência de novo só avisaria da
+        // primeira vez — o dedupe enxergaria as três movimentações como a mesma.
+        ref_id: `${pcAlvo.codigo_pc}|${campos.status}|${pcAlvo.num_diligencia || 0}`,
+        setorial_id: pcAlvo.setorial_id || null,
+      });
+    }
+
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });

@@ -136,18 +136,41 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
 
 ## Pendências
 
-### Verificar (última rodada não conferida)
-- [ ] Quadro 2 do relatório CGE lista os 45 servidores (estava truncando em 5)
-- [ ] Estoque no Quadro 1 mostra 11.552 (estava 14.622)
-- [ ] Tela Produtividade com linhas neutras (estava colorida por faixa)
+> Conferida contra o banco em **11/08/2026**. O que está marcado `[x]` foi verificado, não
+> presumido — a consulta que provou está escrita ao lado. Não reabrir sem medir de novo.
 
-### Cadastro
-- [ ] Gustavo — falta nome completo e portaria; assinatura comentada no PDF
-- [ ] Caroline — meta gravada, sem usuário em `usuarios`
-- [ ] Claudia — aparece com meta "—" no relatório
+### Aberto — precisa de decisão do Richard
+- [ ] **Caroline** — meta 27 vigente, **sem usuário em `usuarios`**. É a única meta vigente
+      nessa situação (conferido: 46 metas vigentes, 45 com usuário).
+- [ ] **Meta vigente: CGE (Ago/25) ou Monitoramento (Nov/25)** — nunca decidido.
+- [ ] **Gustavo: nome completo e portaria.** O cadastro existe (id 56, coordenador, grupo 3),
+      mas a assinatura segue comentada no PDF do relatório CGE.
 
-### Dados
-- [ ] 16 TRs com 2+ analistas (`conflito = true`, 138 PCs)
+### Aberto — trabalho técnico
+- [ ] **Quadro 2 do relatório CGE** lista os 45 servidores? (estava truncando em 5) — nunca
+      conferido depois da correção.
+- [ ] **Estoque no Quadro 1.** A anotação antiga diz 11.552; o banco tem **11.033 abertas**
+      (14.652 total − 3.619 baixadas). Os números não batem: conferir de onde sai o 11.552.
+- [ ] **Código morto no `index.html`:** `confDev` e modal `moDev` — 14 ocorrências.
+- [ ] **`identidade_sigpc.css` e `logo_sc_base64.js`** (no `sigpc-gt`): nenhum `<script>` ou
+      `<link>` os carrega. Mesmo caso do `sgpe-link-standalone.js` que foi removido —
+      candidatos a exclusão, **confirmar com o Richard antes**.
+
+### Resolvido — não reabrir
+- [x] **16 TRs com 2+ analistas** — `SELECT COUNT(DISTINCT tr) WHERE conflito = true` → **0**.
+- [x] **6 TRs que não casaram** (`2020 TR000777`, `2022TR 002065`, `2019TR000319`,
+      `2021TR000719`, `2021TR000804`, `2024TR000204`) — **nenhuma existe** em
+      `prestacoes_contas`. A lista está obsoleta.
+- [x] **Gustavo sem cadastro** — existe desde então: id 56, coordenador, grupo 3. A armadilha
+      antiga ("Grupo 3 não tem coordenador em `usuarios`") **não vale mais**, mas o
+      cai-para-o-superadmin em `notificacao.coordenadoresDoGrupo` fica: protege qualquer grupo
+      que venha a ficar sem coordenador.
+- [x] **Claudia com meta "—"** — id 36 em `usuarios`, meta 120 vigente. O dado está completo;
+      reabrir só se voltar a aparecer no relatório.
+- [x] **Notificações internas / sininho** — implementado em 10–11/08. Quatro canais.
+- [x] **Tela Produtividade com linhas neutras** — corrigido em 19/07/2026.
+
+### Decisões registradas (não são pendências — são o motivo de o sistema ser assim)
 - **`dt_limite_pc` histórico NÃO é prazo — é cálculo em lote. Decisão do Richard, 10/08/2026.**
       Não é defeito a investigar: é dado que não deve ser usado como prazo.
       A prova está na própria distribuição — **29/07/2024** é a `dt_limite_pc` mais recente de
@@ -159,11 +182,11 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
       O sino não emite prazo sobre o acervo antigo — só sobre data inserida daqui pra frente.
       **Não baixar esse corte** achando que é conservador demais: baixá-lo faz o sino avisar
       sobre datas que ninguém definiu.
-- [ ] 6 TRs que não casaram: `2020 TR000777` e `2022TR 002065` (espaço no meio);
-      `2019TR000319`, `2021TR000719`, `2021TR000804`, `2024TR000204` (inexistentes)
-- [ ] Definir meta vigente: CGE (Ago/25) ou Monitoramento (Nov/25)
+- **Prazo é data civil brasileira, nunca `CURRENT_DATE`.** O Postgres do Railway roda em UTC,
+  então `CURRENT_DATE` vira o dia seguinte às 21h de Brasília. Medido em 11/08 às 23h55:
+  as **11.033** PCs com prazo mostravam um dia a mais de atraso, e o número voltava de manhã.
+  Use `HOJE_BR` de `lib/datas.js`. Há teste que falha se um `CURRENT_DATE` cru voltar.
 
-### Funcionalidades
-- [ ] Notificações internas — sininho no cabeçalho, não implementado
-- [ ] E-mails dos analistas — adiado
-- [ ] Código morto: `confDev` e modal `moDev`
+### E-mails dos analistas — não é pendência de dado
+O campo `email` existe e é preenchido (Primeiro Acesso e Meu Perfil, desde 19/07/2026).
+O que não existe é **envio** de e-mail — isso é funcionalidade nova, não item em aberto.

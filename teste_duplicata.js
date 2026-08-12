@@ -166,6 +166,16 @@ console.log('\n═══ 8. TRAVAS NO server.js ═══');
        'e so acontece depois de o plano aprovar');
   conf(/FOR UPDATE/.test(src.slice(src.indexOf("app.post('/usuarios/mesclar'"), src.indexOf("app.post('/usuarios/mesclar'") + 1400)),
        'as duas linhas sao travadas na transacao');
+
+  // ⚠️ O FILTRO DE SETORIAL NAO PODE ESCONDER PENDENTE.
+  // Em 12/08 a Marlene se cadastrou como "SED" — a unica SED de 56 pessoas — e sumiu da
+  // fila. Ninguem ia aprova-la, e ninguem ia saber por que.
+  const bloco = src.slice(src.indexOf("app.get('/usuarios/pendentes'"),
+                          src.indexOf("app.get('/usuarios/pendentes'") + 1800);
+  conf(!/FROM usuarios u\s+\$\{req\.query\.setorial_id \? 'WHERE/.test(bloco),
+       'a consulta NAO filtra por setorial no WHERE');
+  conf(/outra_setorial: !!\(setorial && u\.setorial_id !== setorial\)/.test(bloco),
+       'setorial diferente vira AVISO, nao sumico');
 }
 
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

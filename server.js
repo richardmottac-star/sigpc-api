@@ -119,15 +119,28 @@ app.get('/usuarios', async (req, res) => {
 // e a contagem de PCs de cada lado. É o que a fila do Painel ADMIN consome.
 app.get('/usuarios/pendentes', async (req, res) => {
   try {
+    // ⚠️ O FILTRO DE SETORIAL NÃO ESCONDE PENDENTE. Ele recorta só o universo em que se
+    // procura duplicata.
+    //
+    // Em 12/08 a Marlene escolheu "SED" no Primeiro Acesso — a única SED de um cadastro
+    // com 56 pessoas, num sistema em que a setorial é sempre FCEE. Com o filtro no WHERE,
+    // ela SUMIU da fila de aprovação: ninguém ia aprová-la, e ninguém ia saber por quê.
+    //
+    // Quem espera aprovação sempre aparece. O que a setorial diferente vira é um AVISO.
     const { rows } = await pool.query(`
       SELECT u.*,
              (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
              (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id AND baixada) AS baixas
         FROM usuarios u
-       ${req.query.setorial_id ? 'WHERE u.setorial_id = $1' : ''}
-       ORDER BY u.criado_em`, req.query.setorial_id ? [req.query.setorial_id] : []);
+       ORDER BY u.criado_em`);
 
-    const pendentes = rows.filter(u => u.aguardando_aprovacao);
+    const setorial = req.query.setorial_id || null;
+    const pendentes = rows
+      .filter(u => u.aguardando_aprovacao)
+      .map(u => ({ ...u, outra_setorial: !!(setorial && u.setorial_id !== setorial) }));
+    // A busca por duplicata varre o cadastro INTEIRO, e não só a setorial filtrada: a conta
+    // antiga da Marlene é FCEE e a nova é SED — recortar por setorial esconderia justamente
+    // a duplicata que interessa.
     const analisados = dup.analisar(pendentes, rows).map(p => ({
       ...auth.semSegredo(p),
       candidatos: p.candidatos.map(c => ({

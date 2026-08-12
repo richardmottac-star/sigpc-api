@@ -207,13 +207,13 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
 > presumido — a consulta que provou está escrita ao lado. Não reabrir sem medir de novo.
 
 ### ABERTURA — o que ainda trava (conferido em 12/08/2026)
-- [ ] **7 sem CPF não conseguem entrar. O login é por CPF.** ids 5 Nayara (**coordenadora do
-      G1**), 7 Aline, 11 Daniela, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo.
-      Franciani, Marlene e Ana Letícia resolveram sozinhas pelo **Primeiro Acesso** — os
-      outros podem fazer igual, e aí é só mesclar na fila.
+- [ ] **6 sem CPF não conseguem entrar. O login é por CPF.** ids 5 Nayara (**coordenadora do
+      G1**), 7 Aline, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo.
+      Franciani, Marlene, Ana Letícia e Daniela resolveram sozinhas pelo **Primeiro
+      Acesso** — os outros podem fazer igual, e aí é só mesclar na fila.
 - [ ] **Eduardo (52)** — `ativo = false`. Entra ou não?
-- [ ] **Daniela (66)** aguardando aprovação, com aviso FORTE contra a **id 11 Daniela
-      (200 PCs, 167 baixas)**. Mesclar ou aprovar como conta nova.
+- [ ] **Aline (67)** aguardando aprovação, com aviso FORTE contra a **id 7 Aline
+      (413 PCs, 169 baixas)**. Mesclar ou aprovar como conta nova.
 - [ ] **Modo preparação x Controle Interno** — os 3 técnicos estão barrados. Desligar o modo
       ou isentar o perfil.
 - [x] `migracao_senhas.sql` — **executado em 11/08**, 47 marcados. 30 ainda provisórias.

@@ -26,13 +26,13 @@ sozinho em até 1 minuto.
 | usuários | **54** · 52 ativos · **1 aguardando aprovação** |
 | perfis | 47 analista · 3 coordenador · **3 controle_interno** · 1 superadmin |
 | senhas | 24 em bcrypt · **30 ainda provisórias** |
-| **sem CPF** | **7** — ids 5 Nayara, 7 Aline, 11 Daniela, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo |
+| **sem CPF** | **6** — ids 5 Nayara, 7 Aline, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo |
 | PCs | 14.652 · 3.619 baixadas · 13 no Controle Interno |
 | fila do CI | 13 PCs `na_fila`, em 6 encaminhamentos · `ci_mensagem` vazia |
 
-**O pendente é o id 66, Daniela Tavares Fiorentin** — autocadastro com aviso FORTE de
-duplicidade contra a **id 11 Daniela (200 PCs, 167 baixas)**. **Não mesclei**: você
-autorizou três mesclagens e esta apareceu depois. O botão está na fila, testado.
+**O pendente é o id 67, ALINE GREFF BUAES** — autocadastro com aviso FORTE de duplicidade
+contra a **id 7 Aline (413 PCs, 169 baixas)**. **Não mesclei**: não foi autorizada. O botão
+está na fila e foi usado quatro vezes hoje.
 
 ---
 
@@ -59,13 +59,14 @@ provisória.
 `lib/duplicata.js` + `GET /usuarios/pendentes` + `POST /usuarios/mesclar`.
 Primeiro Acesso passou a **recusar CPF que já existe**, em qualquer estado.
 
-**Três mesclagens feitas** (o cadastro antigo é o que fica, sempre):
+**Quatro mesclagens feitas** (o cadastro antigo é o que fica, sempre):
 
 | novo | → antigo | copiado |
 |---|---|---|
 | 65 Franciani Mary Daniel Pereira | **12 Franciani** (111 PCs) | CPF, e-mail, telefone |
 | 60 Marlene Teodoro Ramos da Silva | **46 Marlene** (48 PCs) | CPF, e-mail, telefone |
 | 61 Ana Letícia Wloch de Oliveira | **23 Ana Leticia** (147 PCs) | CPF, e-mail, telefone |
+| 66 Daniela Tavares Fiorentin | **11 Daniela** (200 PCs) | CPF, e-mail, telefone |
 
 **Duas aprovações:** **22 Ana Claudia** (106 PCs) e **24 Elisandra** (210 PCs) — estavam
 presas na fila desde 14/06 e não tinham duplicata.
@@ -106,9 +107,10 @@ todas foi rodar contra o Postgres — ou, no caso da rota, subir o Express de ve
 
 ### Depende de você
 - [ ] **Modo preparação x Controle Interno** — desligar o modo, ou isentar o perfil.
-- [ ] **A Daniela (66)** — mesclar em 11 ou aprovar como conta nova.
-- [ ] **7 usuários sem CPF** não conseguem entrar (o login é por CPF). A Franciani, a Marlene
-      e a Ana Letícia resolveram pelo Primeiro Acesso — os outros podem fazer igual.
+- [ ] **A Aline (67)** — aviso FORTE contra a id 7 Aline (413 PCs). Mesclar ou aprovar.
+- [ ] **6 usuários sem CPF** não conseguem entrar (o login é por CPF). Franciani, Marlene,
+      Ana Letícia e Daniela resolveram sozinhas pelo Primeiro Acesso — os outros podem fazer
+      igual, e aí é só mesclar na fila.
 - [ ] **Eduardo (52)** — inativo. Entra ou não?
 - [ ] **A sua senha** ainda é `704342`, agora em bcrypt. Esteve pública por meses; troque em
       Meu Perfil.

@@ -17,6 +17,7 @@ const faixa = require('./lib/faixa');
 const auth = require('./lib/auth');
 const prep = require('./lib/preparacao');
 const ci = require('./lib/ci');
+const dup = require('./lib/duplicata');
 
 const app = express();
 app.use(cors());
@@ -322,30 +323,27 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
       [cpf]
     );
 
+    // ⚠️ CPF QUE JÁ EXISTE É RECUSADO, EM QUALQUER ESTADO (12/08/2026).
+    //
+    // Antes, só o cadastro "completo e ativo" era recusado; o resto era atualizado em
+    // silêncio, e a pessoa não entendia o que tinha acontecido. Agora a recusa é sempre, e
+    // a frase diz o caminho: voltar ao login e usar a senha provisória.
+    //
+    // A conferência é AQUI, e não só na tela: a tela pode ser contornada, e é este INSERT
+    // que cria a conta duplicada.
+    //
+    // ⚠️ ISTO NÃO RESOLVE SOZINHO O CASO DE 12/08. As três duplicatas nasceram porque as
+    // contas antigas NÃO TÊM CPF — a busca por CPF não achava nada e o INSERT seguia. Quem
+    // pega esse caso é o aviso de duplicidade na fila de aprovação, por nome.
     if (existente.rows.length > 0) {
-      const u = existente.rows[0];
-
-      // Já tem cadastro completo e ativo — não recadastra, manda usar o login normal
-      if (u.senha_hash && u.aprovado && u.ativo) {
-        return res.status(409).json({ data: null, error: { message: 'Este CPF já possui cadastro ativo. Use o login normal para acessar o sistema.' } });
-      }
-
-      // Registro já existe (ex.: analista pré-cadastrado com PCs vinculadas) — atualiza só dados
-      // de contato/senha e reabre para aprovação. NÃO mexe em nome, grupo, perfil nem analista_id,
-      // que são o que liga o registro às PCs em prestacoes_contas.
-      const { rows } = await pool.query(
-        `UPDATE usuarios
-           SET email = $1, telefone = $2, regiao = $3, municipio = $4, nucleo = $5,
-               senha_hash = $6, senha_provisoria = false,
-               aguardando_aprovacao = true, ativo = false, aprovado = false
-         WHERE id = $7
-         RETURNING id, nome, cpf`,
-        [email || null, telefone || null, regiao || null, municipio || null, nucleo || null, senhaGuardar, u.id]
-      );
-      return res.json({
-        data: rows[0],
-        error: null,
-        message: 'Cadastro atualizado! Aguarde a aprovação do seu coordenador para acessar o sistema.'
+      return res.status(409).json({
+        data: null,
+        error: {
+          message: 'Você já tem cadastro no SIGPC-GT. Não é preciso solicitar acesso — volte à ' +
+                   'tela de entrada e use este CPF com a senha Sigpc@2026. O sistema vai pedir ' +
+                   'uma senha nova, e depois você atualiza seus dados em Meu Perfil.',
+          ja_cadastrado: true,
+        },
       });
     }
 
@@ -364,6 +362,85 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
+//  DUPLICIDADE DE CADASTRO
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/duplicata.js — inclusive o falso positivo que ela evita.
+
+// GET /usuarios/pendentes — os que aguardam aprovação, já com os candidatos a duplicata
+// e a contagem de PCs de cada lado. É o que a fila do Painel ADMIN consome.
+app.get('/usuarios/pendentes', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT u.*,
+             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
+             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id AND baixada) AS baixas
+        FROM usuarios u
+       ${req.query.setorial_id ? 'WHERE u.setorial_id = $1' : ''}
+       ORDER BY u.criado_em`, req.query.setorial_id ? [req.query.setorial_id] : []);
+
+    const pendentes = rows.filter(u => u.aguardando_aprovacao);
+    const analisados = dup.analisar(pendentes, rows).map(p => ({
+      ...auth.semSegredo(p),
+      candidatos: p.candidatos.map(c => ({
+        nivel: c.nivel, motivo: c.motivo, usuario: auth.semSegredo(c.usuario),
+      })),
+    }));
+    res.json({ data: analisados, count: analisados.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /usuarios/mesclar  body { id_novo, id_existente, autor_id }
+//
+// Copia para o cadastro ANTIGO o que ele não tem (CPF, e-mail, telefone) e apaga o novo.
+// O antigo é o que carrega as PCs e as baixas — é ele que sobrevive, sempre.
+app.post('/usuarios/mesclar', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const { id_novo, id_existente, autor_id } = req.body || {};
+
+    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
+    const autor = q.rows[0];
+    if (!autor || !['coordenador', 'superadmin'].includes(autor.perfil))
+      return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin pode mesclar cadastros.' } });
+
+    await cli.query('BEGIN');
+    const { rows } = await cli.query(`
+      SELECT u.*, (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs
+        FROM usuarios u WHERE u.id = ANY($1) FOR UPDATE`,
+      [[parseInt(id_novo) || 0, parseInt(id_existente) || 0]]);
+
+    const novo  = rows.find(u => u.id === parseInt(id_novo));
+    const velho = rows.find(u => u.id === parseInt(id_existente));
+    const plano = dup.planoMesclagem(novo, velho);
+    if (plano.erro) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: plano.erro } });
+    }
+
+    const sets = [], vals = [];
+    Object.entries(plano.copiar).forEach(([k, v]) => { sets.push(`${k} = $${sets.length + 1}`); vals.push(v); });
+    if (sets.length) {
+      vals.push(velho.id);
+      await cli.query(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
+    }
+
+    // ⚠️ Lista explícita de id, e só depois de o plano ter provado que o novo tem 0 PC.
+    // É a regra 12 do CLAUDE.md — WHERE de exclusão nunca por condição derivada.
+    await cli.query(`DELETE FROM usuarios WHERE id = $1`, [novo.id]);
+    await cli.query('COMMIT');
+
+    res.json({ data: { copiado: plano.copiar, excluido: novo.id, mantido: velho.id }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
   }
 });
 

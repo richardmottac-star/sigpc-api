@@ -445,6 +445,20 @@ app.post('/usuarios/mesclar', async (req, res) => {
       return res.status(409).json({ data: null, error: { message: plano.erro } });
     }
 
+    // ⚠️ A ORDEM IMPORTA: APAGA PRIMEIRO, COPIA DEPOIS.
+    //
+    // `usuarios` tem `UNIQUE (cpf)`. Copiando o CPF para a conta antiga antes de apagar a
+    // nova, as duas ficam com o mesmo CPF por um instante e o Postgres recusa com
+    // `duplicate key value violates unique constraint "usuarios_cpf_key"`. Foi o que
+    // aconteceu na primeira tentativa real, em 12/08 — a transação desfez tudo, mas a
+    // mesclagem não acontecia nunca.
+    //
+    // Apagar primeiro é seguro porque o plano já provou que o cadastro novo tem 0 PC: não
+    // há histórico para perder, e as duas operações estão na mesma transação.
+
+    // Lista explícita de id — regra 12 do CLAUDE.md, WHERE de exclusão nunca derivado.
+    await cli.query(`DELETE FROM usuarios WHERE id = $1`, [novo.id]);
+
     const sets = [], vals = [];
     Object.entries(plano.copiar).forEach(([k, v]) => { sets.push(`${k} = $${sets.length + 1}`); vals.push(v); });
     if (sets.length) {
@@ -452,9 +466,6 @@ app.post('/usuarios/mesclar', async (req, res) => {
       await cli.query(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
     }
 
-    // ⚠️ Lista explícita de id, e só depois de o plano ter provado que o novo tem 0 PC.
-    // É a regra 12 do CLAUDE.md — WHERE de exclusão nunca por condição derivada.
-    await cli.query(`DELETE FROM usuarios WHERE id = $1`, [novo.id]);
     await cli.query('COMMIT');
 
     res.json({ data: { copiado: plano.copiar, excluido: novo.id, mantido: velho.id }, error: null });

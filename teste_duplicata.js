@@ -164,6 +164,18 @@ console.log('\n═══ 8. TRAVAS NO server.js ═══');
        'o DELETE e por id explicito, nunca por condicao derivada');
   conf(/dup\.planoMesclagem\(novo, velho\)[\s\S]{0,200}?plano\.erro[\s\S]{0,120}?ROLLBACK/.test(src),
        'e so acontece depois de o plano aprovar');
+
+  // ⚠️ ORDEM: APAGA ANTES DE COPIAR. `usuarios` tem UNIQUE (cpf); copiar o CPF para a conta
+  // antiga antes de apagar a nova deixa as duas com o mesmo CPF por um instante, e o
+  // Postgres recusa com "duplicate key value violates unique constraint usuarios_cpf_key".
+  // Aconteceu na primeira mesclagem real, em 12/08.
+  const bm = src.slice(src.indexOf("app.post('/usuarios/mesclar'"),
+                       src.indexOf("app.post('/usuarios/mesclar'") + 2600);
+  const iDel = bm.indexOf('DELETE FROM usuarios WHERE id = $1');
+  const iUpd = bm.indexOf('UPDATE usuarios SET ${sets.join');
+  conf(iDel > 0 && iUpd > 0 && iDel < iUpd,
+       'o DELETE do cadastro novo vem ANTES do UPDATE do antigo (UNIQUE no cpf)',
+       `delete em ${iDel}, update em ${iUpd}`);
   conf(/FOR UPDATE/.test(src.slice(src.indexOf("app.post('/usuarios/mesclar'"), src.indexOf("app.post('/usuarios/mesclar'") + 1400)),
        'as duas linhas sao travadas na transacao');
 

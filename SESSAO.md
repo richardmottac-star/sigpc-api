@@ -4,35 +4,36 @@ Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
 ---
 
-## ⚠️ O QUE ESTÁ LIGADO AGORA, E O QUE ISSO IMPEDE
+## ⚠️ O SISTEMA ESTÁ ABERTO
 
-**O MODO PREPARAÇÃO ESTÁ LIGADO.** Enquanto estiver, **nenhum analista trabalha** — eles
-entram, trocam a senha e param numa tela restrita com o Meu Perfil.
+**O modo preparação foi DESLIGADO em 12/08** — a equipe trabalha normalmente. O
+interruptor continua em Configurações → Modo preparação, e ligá-lo de novo devolve todos
+os analistas à tela restrita em até 1 minuto, sem ninguém recarregar nada.
 
-⚠️ **Os três técnicos do Controle Interno TAMBÉM ESTÃO BARRADOS.** Só superadmin e
-coordenador são isentos (`ISENTOS` em `lib/preparacao.js`). Se eles forem começar, ou você
-desliga o modo em Configurações → Modo preparação, ou se acrescenta `controle_interno` à
-lista de isentos. **Decisão pendente.**
-
-Desligar abre o sistema para todos de uma vez, e quem estiver com a tela aberta entra
-sozinho em até 1 minuto.
-
----
+⚠️ Se ligar de novo, lembre: **os três técnicos do Controle Interno também são barrados**.
+Só superadmin e coordenador são isentos (`ISENTOS`, em `lib/preparacao.js`).
 
 ## ESTADO DO BANCO — medido em 12/08 ao fim do dia
 
 | | |
 |---|---|
-| usuários | **54** · 52 ativos · **1 aguardando aprovação** |
-| perfis | 47 analista · 3 coordenador · **3 controle_interno** · 1 superadmin |
-| senhas | 24 em bcrypt · **30 ainda provisórias** |
-| **sem CPF** | **6** — ids 5 Nayara, 7 Aline, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo |
+| usuários | **53** · **51 conseguem entrar** · 0 aguardando aprovação |
+| perfis | 46 analista · 3 coordenador · **3 controle_interno** · 1 superadmin |
+| senhas | **17 ainda provisórias** — as demais já foram trocadas |
+| **sem CPF** | **2** — ids **49 Scheila** e **52 Eduardo** (este também inativo) |
 | PCs | 14.652 · 3.619 baixadas · 13 no Controle Interno |
 | fila do CI | 13 PCs `na_fila`, em 6 encaminhamentos · `ci_mensagem` vazia |
 
-**O pendente é o id 67, ALINE GREFF BUAES** — autocadastro com aviso FORTE de duplicidade
-contra a **id 7 Aline (413 PCs, 169 baixas)**. **Não mesclei**: não foi autorizada. O botão
-está na fila e foi usado quatro vezes hoje.
+**A fila de aprovação está VAZIA.** Sete autocadastros foram resolvidos hoje: **cinco
+mesclagens** (Franciani→12, Marlene→46, Ana Letícia→23, Daniela→11, Aline→7, Marisa→17,
+Miriam→30 — sete, na verdade), **duas rejeições** (Graciane 70 e Marlene 71, com CPF
+inválido) e **duas aprovações** (Ana Claudia 22 e Elisandra 24, que não tinham duplicata e
+estavam presas desde 14/06).
+
+⚠️ **Os dois que faltam não dependem de código:**
+- **Scheila (49)** — sem CPF. Resolve pelo Primeiro Acesso, como sete colegas fizeram, ou
+  você insere direto como fez com a Nayara.
+- **Eduardo (52)** — sem CPF **e inativo**. Precisa das duas decisões.
 
 ---
 
@@ -74,6 +75,29 @@ presas na fila desde 14/06 e não tinham duplicata.
 ### Menu em três blocos, e o Online agora no cabeçalho
 Ver o `CLAUDE.md`. `SB_BLOCOS` + `SB_ITENS` no `index.html` são a fonte única.
 
+### Modo "VER COMO" — só superadmin
+Enxergar o sistema com os dados de um analista, em leitura. Minha Planilha, Meus pedidos,
+Produtividade e Dashboard passam a mostrar os dados dele.
+
+⚠️ **A garantia não é o botão cinza — é a trava no `fetch`.** `U.id` alimenta leitura e
+escrita com a mesma sintaxe, em 59 caminhos de escrita; desabilitar botão a botão erra um, e
+o que errar grava uma baixa no nome de outro. Como o `db.from()` também sai por `fetch`,
+existe um ponto só: com o modo ligado, **nada que não seja GET sai do navegador**. A única
+exceção é o `logout`.
+
+⚠️ **`U` nunca é trocado.** O alvo vive em `_verComo`, e `alvo()` só é chamado nas LEITURAS.
+
+Além da trava, **onze funções recusam na origem** (`planNovaAnotacao`, `pAbrirSit`,
+`pAbrirPar`, `pEstornar`, `pRespondeu`, `pEnviarCI`, `pCiResponder`, `salvarAnotacao`,
+`excluirAnotacao`, `ciDecidir`, `assumirTR`) — senão o modal abre, a pessoa preenche, clica,
+e só então descobre. E o menu encolhe: só o bloco do analista, **sem Estoque e sem Estornar**,
+que existem para agir e não mostram dado de ninguém.
+
+### Quem está online sabe de logout
+Coluna `sessao_fim`. Online = esteve ativo em 30 min **e** não encerrou depois disso.
+⚠️ O logout usa `clock_timestamp()`, não `NOW()`: o `NOW()` é o instante da **transação**, e
+com ele os dois carimbos saíam iguais — a pessoa ficava fora da lista mesmo tendo voltado.
+
 ---
 
 ## AS QUATRO ARMADILHAS QUE CUSTARAM CARO HOJE
@@ -106,14 +130,18 @@ todas foi rodar contra o Postgres — ou, no caso da rota, subir o Express de ve
 ## O QUE FALTA, E DE QUEM DEPENDE
 
 ### Depende de você
-- [ ] **Modo preparação x Controle Interno** — desligar o modo, ou isentar o perfil.
-- [ ] **A Aline (67)** — aviso FORTE contra a id 7 Aline (413 PCs). Mesclar ou aprovar.
-- [ ] **6 usuários sem CPF** não conseguem entrar (o login é por CPF). Franciani, Marlene,
-      Ana Letícia e Daniela resolveram sozinhas pelo Primeiro Acesso — os outros podem fazer
-      igual, e aí é só mesclar na fila.
-- [ ] **Eduardo (52)** — inativo. Entra ou não?
+- [ ] **Scheila (49)** — sem CPF, não entra. Primeiro Acesso ou inserção direta.
+- [ ] **Eduardo (52)** — sem CPF **e** inativo. Duas decisões.
 - [ ] **A sua senha** ainda é `704342`, agora em bcrypt. Esteve pública por meses; troque em
       Meu Perfil.
+- [ ] **Se religar o modo preparação**, decidir se o Controle Interno fica isento.
+- [x] ~~Fila de aprovação~~ — **vazia**. Sete mesclagens, duas rejeições, duas aprovações.
+- [x] ~~Grazielly e Nayara~~ — resolvidas: senha e CPF.
+
+### Não testado em navegador
+- [ ] **Modo "ver como"** e **lista de online** — validados por teste e pelo arquivo servido,
+      não clicando. O Richard achou três defeitos testando na tela em 12/08, todos
+      corrigidos; é sinal de que vale abrir as telas.
 
 ### Técnico
 - [ ] **A camada de autorização** continua sendo o buraco de fundo: quem montar um pedido

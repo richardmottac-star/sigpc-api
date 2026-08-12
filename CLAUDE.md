@@ -6,9 +6,11 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
 **Última sessão:** 12/08/2026 — ver `SESSAO.md` para o estado do dia.
 
-> ⚠️ **O MODO PREPARAÇÃO ESTÁ LIGADO.** Nenhum analista trabalha enquanto estiver, e os três
-> técnicos do Controle Interno **também estão barrados** (só superadmin e coordenador são
-> isentos). Desliga-se em Configurações → Modo preparação.
+> **O sistema está ABERTO** — o modo preparação foi desligado em 12/08 e a equipe trabalha.
+> O interruptor segue em Configurações → Modo preparação.
+>
+> ⚠️ Se religar, saiba que ele **barra também os três técnicos do Controle Interno**: só
+> superadmin e coordenador são isentos (`ISENTOS`, em `lib/preparacao.js`).
 
 ---
 
@@ -70,6 +72,18 @@ ciclo mencionar `baixada`, `data_baixa` ou `enviado_ci`.
 ### `config_sistema` — 1 linha, `id = 1`
 
 `modo_preparacao` (bool), `mensagem`, `atualizado_por/_nome/_em`. `CHECK (id = 1)`.
+
+### Quem está online — `usuarios.sessao_fim`
+
+Online = `ultimo_acesso >= agora − 30 min` **E** `(sessao_fim IS NULL OR sessao_fim < ultimo_acesso)`.
+Lê-se: *esteve ativo há pouco e não encerrou a sessão depois disso*.
+
+⚠️ **Nunca recuar `ultimo_acesso` para tirar alguém da lista** — o Painel ADMIN mostra essa
+coluna, e ela passaria a mentir. Foi por isso que a `sessao_fim` existe.
+
+⚠️ **O logout grava `clock_timestamp()`, não `NOW()`.** No Postgres o `NOW()` é o instante em
+que a **transação** começou; com ele os dois carimbos saíam iguais e a pessoa ficava fora da
+lista mesmo tendo voltado. Só apareceu no teste contra o banco.
 
 ### `usuarios` — 54 registros
 
@@ -169,6 +183,21 @@ lista de **inclusão** (`perfil === 'analista'`), que exclui qualquer perfil nov
     derivada. Ainda em 12/08, reverter com `ci_rodada <> 1` casou as 14.639 PCs que tinham
     o valor padrão `0` e carimbou todas — de 7 linhas para 14.639.
     O certo é `WHERE codigo_pc = ANY($1)` com a lista capturada **antes** da escrita.
+
+13. **Rota de nome fixo vem ANTES da rota com `:id`.** O Express casa na ordem de
+    declaração: `/usuarios/pendentes` declarada depois de `/usuarios/:id` caía nela com
+    id `"pendentes"` e devolvia HTTP 500 em produção. **O dublê não pega — dublê não
+    roteia.** Há teste de posição e um HTTP que sobe o servidor de verdade.
+
+14. **Ordem importa quando há `UNIQUE`.** A mesclagem copiava o CPF para a conta antiga e só
+    então apagava a nova: as duas ficavam com o mesmo CPF por um instante e o Postgres
+    recusava. **Apaga primeiro, copia depois.** O dublê também não pega — dublê não tem
+    restrição de unicidade.
+
+15. **Botão que aceita clique e não responde é pior que botão cinza.** O Confirmar do modal
+    Assumir só era ajustado no caminho de sucesso; no erro continuava aceso, e clicar não
+    fazia nada. Todo botão de ação nasce desabilitado e é habilitado no caminho que o
+    autoriza — com o motivo no `title` quando não estiver.
 
 ---
 

@@ -125,6 +125,18 @@ Coordenadores não contam produtividade e não aparecem no Quadro 2 do relatóri
     `` `...` `` fecha a string e o arquivo deixa de compilar. Aconteceu duas vezes em
     11/08, no `server.js` e no `index.html`. Escrever `FALSE`, não `` `false` ``.
 
+11. **NUNCA testar contra o banco real uma função que gerencia a própria transação.**
+    O `COMMIT` interno dela **confirma a transação externa**, e o `ROLLBACK` do teste não
+    tem mais o que desfazer. Em 12/08/2026 isto gravou 7 PCs como `encerrado` e 14
+    mensagens em produção, num teste que parecia isolado.
+    **Ou** se testa a função com dublê de banco, **ou** se testa o SQL cru dentro de
+    `BEGIN/ROLLBACK` — nunca as duas coisas misturadas.
+
+12. **`WHERE` de reversão SEMPRE por lista explícita de chaves.** Nunca por condição
+    derivada. Ainda em 12/08, reverter com `ci_rodada <> 1` casou as 14.639 PCs que tinham
+    o valor padrão `0` e carimbou todas — de 7 linhas para 14.639.
+    O certo é `WHERE codigo_pc = ANY($1)` com a lista capturada **antes** da escrita.
+
 ---
 
 ## Método: TRABALHAR EM BLOCO, NÃO PASSO A PASSO (desde 12/08/2026)

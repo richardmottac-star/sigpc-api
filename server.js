@@ -16,6 +16,7 @@ const { HOJE_BR } = require('./lib/datas');
 const faixa = require('./lib/faixa');
 const auth = require('./lib/auth');
 const prep = require('./lib/preparacao');
+const ci = require('./lib/ci');
 
 const app = express();
 app.use(cors());
@@ -1413,6 +1414,118 @@ app.patch('/config_sistema', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════
+//  CONTROLE INTERNO
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/ci.js. ⚠️ NADA aqui toca em `baixada`, `data_baixa` nem
+// `enviado_ci`: a baixa é mantida em todo o ciclo, qualquer que seja o desfecho.
+
+// GET /ci/fila?situacao=na_fila|com_analista|encerrado
+app.get('/ci/fila', async (req, res) => {
+  try {
+    const [rows, cont] = await Promise.all([
+      ci.fila(pool, req.query.situacao),
+      ci.contagens(pool),
+    ]);
+    const links = await linksDeLinhas(pool, rows, ['processo_pc', 'processo_mae']);
+    res.json({ data: rows, count: rows.length, contagens: cont, links, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /ci/mensagens?codigos_pc=a,b,c — a conversa
+app.get('/ci/mensagens', async (req, res) => {
+  try {
+    const lista = String(req.query.codigos_pc || '').split(',').map(s => s.trim()).filter(Boolean);
+    res.json({ data: await ci.mensagens(pool, lista), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /ci/decidir  body { codigos_pc[], decisao: 'de_acordo'|'ressalva', texto?, autor_id }
+app.post('/ci/decidir', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const erro = ci.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    if (!ci.DECISOES.includes(b.decisao))
+      return res.status(400).json({ data: null, error: { message: 'decisao é obrigatória' } });
+
+    // Quem decide é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
+    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const autor = q.rows[0];
+    if (!autor || !['controle_interno', 'coordenador', 'superadmin'].includes(autor.perfil))
+      return res.status(403).json({ data: null, error: { message: 'Só o Controle Interno decide sobre esta fila.' } });
+
+    const { pcs, jaDecidido } = await ci.decidir(pool, {
+      codigos_pc: b.codigos_pc, decisao: b.decisao, texto: b.texto, autor,
+    });
+    if (jaDecidido)
+      return res.status(409).json({ data: null, error: { message: 'Estas PCs já saíram da fila — recarregue a tela.' } });
+
+    // Uma notificação POR ENCAMINHAMENTO. Ver o comentário de `agruparPorParcela`.
+    if (b.decisao === 'ressalva') {
+      for (const g of ci.agruparPorParcela(pcs)) {
+        if (!g.analista_id) continue;
+        await notif.criar(pool, {
+          destinatario_id: g.analista_id,
+          tipo: 'diligencia',
+          titulo: 'Controle Interno devolveu com ressalvas',
+          mensagem: `${g.tr} · Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
+                    `${g.entidade ? ` (${g.entidade})` : ''}.\n\n${String(b.texto || '').trim()}`,
+          link: '#planilha', ref_tipo: 'pc',
+          // ⚠️ A rodada no ref_id é o que faz a SEGUNDA volta avisar. Sem ela o dedupe
+          // leria a devolução nova como repetição da primeira. Lição do `num_diligencia`.
+          ref_id: `${g.pcs[0]}|ci_ressalva|${(g.rodada || 1) + 1}`,
+        });
+      }
+    }
+    res.json({ data: { afetadas: pcs.length }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /ci/responder  body { codigos_pc[], texto, autor_id } — o analista responde
+app.post('/ci/responder', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const erro = ci.validar({ ...b, exigeTexto: true });
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const autor = q.rows[0];
+    if (!autor) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+
+    const { pcs, jaRespondido } = await ci.responder(pool, {
+      codigos_pc: b.codigos_pc, texto: b.texto, autor,
+    });
+    if (jaRespondido)
+      return res.status(409).json({ data: null, error: { message: 'Estas PCs não estão aguardando sua resposta — recarregue a tela.' } });
+
+    // Avisa o CI. Sem destinatário cadastrado ainda, não há a quem avisar — e isso não pode
+    // derrubar a resposta do analista, que já foi gravada.
+    const tecnicos = await pool.query(`SELECT id FROM usuarios WHERE perfil = 'controle_interno' AND ativo = true`);
+    if (tecnicos.rows.length) {
+      for (const g of ci.agruparPorParcela(pcs)) {
+        await notif.criarVarios(pool, tecnicos.rows.map(t => t.id), {
+          tipo: 'diligencia',
+          titulo: 'Analista respondeu ao Controle Interno',
+          mensagem: `${g.tr} · Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
+                    `${g.entidade ? ` (${g.entidade})` : ''}.\n\n${String(b.texto || '').trim()}`,
+          link: '#ci', ref_tipo: 'pc',
+          ref_id: `${g.pcs[0]}|ci_resposta|${g.rodada || 1}`,
+        });
+      }
+    }
+    res.json({ data: { afetadas: pcs.length }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // GET /limite_tr_excecao — exceções com nome e grupo vindos de usuarios (nunca duplicados)
 app.get('/limite_tr_excecao', async (req, res) => {
   try {
@@ -2223,6 +2336,11 @@ app.post('/parcela/ci', async (req, res) => {
           SET enviado_ci = true,
               dt_envio_ci = NOW(),
               parecer_ci = COALESCE($1, parecer_ci),
+              -- Entra na fila do CI. A coluna enviado_ci continua dizendo "foi ao CI" e
+              -- sustenta a baixa; ci_situacao diz onde está no ciclo. Sem esta linha o
+              -- encaminhamento não apareceria na tela do CI, que lista por ci_situacao.
+              ci_situacao = 'na_fila',
+              ci_rodada = GREATEST(ci_rodada, 1),
               atualizado_em = NOW()
         WHERE setorial_id = $2 AND tr = $3 AND parcial_num = $4
         RETURNING codigo_pc`,
@@ -2713,6 +2831,47 @@ async function garantirColunasUsuarios() {
 }
 
 // ══════════════════════════════════════
+//  MIGRAÇÃO — Controle Interno
+// ══════════════════════════════════════
+// Rodado à mão em 12/08/2026 com autorização do Richard; fica aqui para o ambiente nascer
+// pronto e para o boot reparar o que faltar. Idempotente.
+//
+// ⚠️ `ci_situacao` fica NULL para quem nunca foi ao CI — a coluna não inventa estado para
+// as 14.639 PCs que não têm nada a ver com isso.
+async function garantirCi() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ci_mensagem (
+        id           SERIAL    PRIMARY KEY,
+        codigo_pc    TEXT      NOT NULL,
+        rodada       INTEGER   NOT NULL DEFAULT 1,
+        direcao      TEXT      NOT NULL,
+        texto        TEXT      NOT NULL,
+        autor_id     INTEGER,
+        autor_nome   TEXT,
+        autor_perfil TEXT,
+        criado_em    TIMESTAMP NOT NULL DEFAULT NOW(),
+        CONSTRAINT ci_msg_direcao CHECK (direcao IN ('ci_para_analista','analista_para_ci')),
+        CONSTRAINT ci_msg_texto   CHECK (length(btrim(texto)) > 0)
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ci_msg_pc ON ci_mensagem (codigo_pc, criado_em)`);
+    await pool.query(`
+      ALTER TABLE prestacoes_contas
+        ADD COLUMN IF NOT EXISTS ci_situacao      TEXT,
+        ADD COLUMN IF NOT EXISTS ci_rodada        INTEGER   NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS ci_encerrado_em  TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS ci_encerrado_por INTEGER`);
+    // Rede: PC encaminhada antes desta versão entraria na fila sem situação e sumiria da tela.
+    await pool.query(`
+      UPDATE prestacoes_contas SET ci_situacao = 'na_fila', ci_rodada = 1
+       WHERE enviado_ci = true AND ci_situacao IS NULL`);
+    console.log('Controle Interno (ci_mensagem + colunas do ciclo) verificado.');
+  } catch (e) {
+    console.error('Erro ao garantir Controle Interno:', e.message);
+  }
+}
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — configuração do sistema (modo preparação)
 // ══════════════════════════════════════
 // Tabela NOVA, então `CREATE TABLE IF NOT EXISTS` basta (a armadilha 2 do CLAUDE.md só vale
@@ -2859,6 +3018,7 @@ async function garantirTabelaSgpe() {
 const PORT = process.env.PORT || 3000;
 garantirColunasUsuarios()
   .then(garantirTabelaConfigSistema)
+  .then(garantirCi)
   .then(garantirTabelaSgpe)
   .then(garantirTabelaPreferenciaTr)
   .then(verificarColunaInicioAnalise)

@@ -171,6 +171,20 @@ setTimeout(async () => {
       conf(!!grav && /senha_provisoria = false/.test(grav.sql), 'e desligou a senha provisoria');
     }
 
+    console.log('\n═══ 8b. ROTAS DE NOME FIXO NAO CAEM EM /usuarios/:id ═══');
+    {
+      // ⚠️ Dublê não roteia — quem roteia é o Express. Este teste sobe o servidor de
+      // verdade, e por isso enxerga o que os outros não enxergam: em 12/08,
+      // '/usuarios/pendentes' caía em '/usuarios/:id' com id = "pendentes" e devolvia
+      // HTTP 500 em produção. Toda rota de nome fixo sob /usuarios entra aqui.
+      for (const rota of ['/usuarios/pendentes']) {
+        const r = await pedir(rota);
+        conf(r.status === 200, `GET ${rota} responde 200, nao cai no /:id`, `veio ${r.status}`);
+        conf(!/invalid input syntax for type integer/.test(r.texto),
+             `e nao vaza erro de tipo do Postgres`);
+      }
+    }
+
     console.log('\n═══ 9. COMPRESSAO ═══');
     {
       // corpo pequeno não é comprimido por padrão (limiar de 1KB), então o que se confere é

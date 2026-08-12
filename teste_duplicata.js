@@ -150,6 +150,14 @@ console.log('\n═══ 8. TRAVAS NO server.js ═══');
   conf(!/Cadastro atualizado! Aguarde a aprovação/.test(src),
        'e o caminho antigo, que atualizava em silencio, saiu');
   conf(/app\.get\('\/usuarios\/pendentes'/.test(src), 'GET /usuarios/pendentes existe');
+  // ⚠️ ORDEM DE ROTA. O Express casa na ordem de declaracao: com '/usuarios/:id' antes,
+  // '/usuarios/pendentes' cai nela com id = "pendentes" e o Postgres responde
+  // "invalid input syntax for type integer". Deu HTTP 500 em producao em 12/08.
+  const iPend = src.indexOf("app.get('/usuarios/pendentes'");
+  const iId   = src.indexOf("app.get('/usuarios/:id'");
+  conf(iPend > 0 && iId > 0 && iPend < iId,
+       "'/usuarios/pendentes' e declarada ANTES de '/usuarios/:id'",
+       `pendentes em ${iPend}, :id em ${iId}`);
   conf(/app\.post\('\/usuarios\/mesclar'/.test(src), 'POST /usuarios/mesclar existe');
   // A mesclagem apaga — e apagar so por id explicito.
   conf(/DELETE FROM usuarios WHERE id = \$1`, \[novo\.id\]/.test(src),

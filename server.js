@@ -106,6 +106,40 @@ app.get('/usuarios', async (req, res) => {
   }
 });
 
+// ⚠️ ESTA ROTA TEM DE VIR ANTES DE "/usuarios/:id" — NÃO É ESTILO, É OBRIGATÓRIO.
+//
+// O Express casa na ORDEM em que as rotas são declaradas. Com "/usuarios/:id" declarada
+// primeiro, "/usuarios/pendentes" caía nela com id = "pendentes", e o Postgres respondia
+// `invalid input syntax for type integer`.
+//
+// Foi exatamente o que aconteceu no deploy de 12/08: HTTP 500 em produção. O teste com
+// dublê não pegou porque dublê não roteia — quem roteia é o Express. Há teste em
+// teste_duplicata.js que falha se a ordem inverter, e um HTTP em teste_http_auth.js.
+// GET /usuarios/pendentes — os que aguardam aprovação, já com os candidatos a duplicata
+// e a contagem de PCs de cada lado. É o que a fila do Painel ADMIN consome.
+app.get('/usuarios/pendentes', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT u.*,
+             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
+             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id AND baixada) AS baixas
+        FROM usuarios u
+       ${req.query.setorial_id ? 'WHERE u.setorial_id = $1' : ''}
+       ORDER BY u.criado_em`, req.query.setorial_id ? [req.query.setorial_id] : []);
+
+    const pendentes = rows.filter(u => u.aguardando_aprovacao);
+    const analisados = dup.analisar(pendentes, rows).map(p => ({
+      ...auth.semSegredo(p),
+      candidatos: p.candidatos.map(c => ({
+        nivel: c.nivel, motivo: c.motivo, usuario: auth.semSegredo(c.usuario),
+      })),
+    }));
+    res.json({ data: analisados, count: analisados.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 app.get('/usuarios/:id', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM usuarios WHERE id = $1', [req.params.id]);
@@ -369,31 +403,6 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
 //  DUPLICIDADE DE CADASTRO
 // ══════════════════════════════════════
 // A regra e o porquê estão em lib/duplicata.js — inclusive o falso positivo que ela evita.
-
-// GET /usuarios/pendentes — os que aguardam aprovação, já com os candidatos a duplicata
-// e a contagem de PCs de cada lado. É o que a fila do Painel ADMIN consome.
-app.get('/usuarios/pendentes', async (req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT u.*,
-             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
-             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id AND baixada) AS baixas
-        FROM usuarios u
-       ${req.query.setorial_id ? 'WHERE u.setorial_id = $1' : ''}
-       ORDER BY u.criado_em`, req.query.setorial_id ? [req.query.setorial_id] : []);
-
-    const pendentes = rows.filter(u => u.aguardando_aprovacao);
-    const analisados = dup.analisar(pendentes, rows).map(p => ({
-      ...auth.semSegredo(p),
-      candidatos: p.candidatos.map(c => ({
-        nivel: c.nivel, motivo: c.motivo, usuario: auth.semSegredo(c.usuario),
-      })),
-    }));
-    res.json({ data: analisados, count: analisados.length, error: null });
-  } catch (e) {
-    res.status(500).json({ data: null, error: { message: e.message } });
-  }
-});
 
 // POST /usuarios/mesclar  body { id_novo, id_existente, autor_id }
 //

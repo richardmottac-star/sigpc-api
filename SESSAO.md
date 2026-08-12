@@ -37,6 +37,79 @@ estavam presas desde 14/06).
 
 ---
 
+---
+
+## ⚠️ O `parcial_num` NÃO É O NÚMERO DA PARCIAL DO SIGEF (13/08/2026)
+
+**Conferido no SIGEF pela analista, nas duas TRs:**
+
+| TR | SIGEF | nosso sistema |
+|---|---|---|
+| 2020TR000637 | **1 a 19, contínuo** | 20 parciais, lacunas em 6, 7, 8, 16, 18, indo até **25** |
+| 2020TR000704 | **1 a 57, contínuo** | 57 parciais, **sem a 1** e sem a 30, indo até **59** |
+
+### De onde veio o número — está escrito no próprio script
+
+`backfill_parcial_num.js`, de 05/08, no cabeçalho:
+
+> *"a numeração atribuída aqui NÃO vem da planilha do analista; é derivada de `parcela_seq`.
+> Pode divergir do número que o analista conhece."*
+
+O campo tem **duas origens**:
+
+1. **As baixadas** receberam número na recarga de 05/08, vindo da planilha.
+2. **As pendentes** foram numeradas por esse backfill, que — nas palavras do próprio código —
+   numera *"continuando a partir do maior número já existente naquele TR"*.
+
+**É isso que produz as lacunas e os números acima do total.** A parcela que não tinha PC
+baixada ficou sem número na recarga e depois recebeu 20, 21, 22… em vez do número real.
+
+**Prova:** as parciais acima do total do SIGEF são **todas não baixadas** — 9 de 9 na 637,
+2 de 2 na 704.
+
+### O que está certo, e o que está errado
+
+| | |
+|---|---|
+| **A CONTAGEM está certa** | agrupar por `parcial_num` ou por `processo_pc` dá o mesmo em **1.552 das 1.554 TRs** |
+| **A NUMERAÇÃO está errada** | **60 TRs** têm `parcial_num` acima do total de parciais |
+| 704 | 57 grupos = 57 do SIGEF ✓ — só os rótulos estão trocados |
+| 637 | 20 grupos ≠ 19 do SIGEF — sobra uma, e é a do `processo_pc = '-1'` |
+
+### `parcela_seq` não é o número da parcial
+
+É sequência **por PC**, não por parcela: 1..44 na 637 (que tem 19 parcelas) e 1..83 na 704
+(57 parcelas). Limpa, sem lacuna e sem repetição — mas conta outra coisa.
+
+**O que ela serve:** dar a ORDEM. Renumerar os grupos por `parcela_seq` produziria 1..N
+contínuo, que é a forma do SIGEF.
+
+### A regra que o backfill assumiu, e que se confirma
+
+**Uma parcial = (tr, processo_pc).** O SGPe é o identificador da parcela; as várias PCs de
+uma parcela compartilham o mesmo processo. Agrupar por SGPe dá o mesmo número que agrupar
+por `parcial_num` em 1.552 TRs — os dois caminhos concordam.
+
+### O que NÃO fazer
+
+⚠️ **Não apagar a "parcial 51" da 704.** Ela é a PC `2020PC000474`, `parcela_seq = 1` — a
+primeira PC da TR, que deveria ser a parcial 1. Apagá-la apagaria a parcial 1.
+
+⚠️ **Não confiar no `parcial_num` para conversar com o analista.** Ele não é o número que
+está no SIGEF. Enquanto não for renumerado, a referência é o **processo SGPe**.
+
+⚠️ **E isto põe em dúvida a leitura das 79 PCs com `processo_pc = '-1'`.** Se `parcial_num`
+veio errado, um campo ruim não prova linha inventada. A conferência dos analistas contra o
+SIGEF passa a ser indispensável — ver `pcs_sgpe_-1.csv`.
+
+### O caminho, quando for a hora
+
+Renumerar `parcial_num` por TR, na ordem de `parcela_seq`, agrupando por `processo_pc`:
+1..N contínuo. Resolve os rótulos das 60 TRs. **Não resolve** a PC a mais da 637, que é
+outro problema (dado, não numeração).
+
+⚠️ Existe backup da numeração anterior: `_backup_parcial_num_20260805`.
+
 ## O QUE FOI FEITO EM 12/08
 
 ### Controle Interno virou perfil, com fila, conversa e duas saídas

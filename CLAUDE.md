@@ -199,6 +199,15 @@ lista de **inclusão** (`perfil === 'analista'`), que exclui qualquer perfil nov
     fazia nada. Todo botão de ação nasce desabilitado e é habilitado no caminho que o
     autoriza — com o motivo no `title` quando não estiver.
 
+16. **⚠️ `parcial_num` NÃO é o número da parcial do SIGEF.** Ele tem duas origens: a recarga
+    de 05/08 (nas baixadas) e o `backfill_parcial_num.js` (nas pendentes), que numera
+    *"continuando a partir do maior número já existente naquele TR"* — está escrito no
+    cabeçalho do próprio script. Daí as lacunas e os números acima do total, em **60 TRs**.
+    A **contagem** está certa em 1.552 de 1.554 TRs; os **rótulos** é que não são os do
+    SIGEF. **Uma parcial = (tr, processo_pc)** — o SGPe é o identificador da parcela, e é a
+    referência para conversar com o analista. Conferido com o SIGEF em 13/08; detalhe e
+    caminho de correção no `SESSAO.md`.
+
 ---
 
 ## Método: TRABALHAR EM BLOCO, NÃO PASSO A PASSO (desde 12/08/2026)

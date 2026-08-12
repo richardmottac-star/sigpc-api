@@ -15,6 +15,7 @@ const notif = require('./lib/notificacao');
 const { HOJE_BR } = require('./lib/datas');
 const faixa = require('./lib/faixa');
 const auth = require('./lib/auth');
+const prep = require('./lib/preparacao');
 
 const app = express();
 app.use(cors());
@@ -1029,6 +1030,7 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
 app.patch('/prestacoes_contas/baixar', async (req, res) => {
   try {
     const { codigos_pc, parecer_tipo, analista_id, registrado_por, override } = req.body;
+    if (await barrouPreparacao(res, analista_id)) return;
     if (!Array.isArray(codigos_pc) || codigos_pc.length === 0)
       return res.status(400).json({ data: null, error: { message: 'codigos_pc é obrigatório' } });
     const params = [parecer_tipo, registrado_por, codigos_pc];
@@ -1344,6 +1346,68 @@ app.patch('/config_limite_tr', async (req, res) => {
        atualizado_por ?? null, atualizado_por_nome ?? null]
     );
     res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
+//  MODO PREPARAÇÃO
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/preparacao.js. É uma CORTINA, não uma tranca — ler o
+// aviso de lá antes de confiar nisto como controle de acesso.
+
+/**
+ * Barra a rota de trabalho enquanto o modo preparação está ligado.
+ *
+ * Devolve `true` quando JÁ respondeu — quem chama faz `if (await barrouPreparacao(...)) return;`
+ * e não escreve mais nada. Uma linha por rota; sem isto, esconder o menu na tela seria só
+ * esconder, e a URL antiga continuaria trabalhando.
+ */
+async function barrouPreparacao(res, usuarioId) {
+  const msg = await prep.bloqueio(pool, usuarioId);
+  if (!msg) return false;
+  res.status(403).json({ data: null, error: { message: msg, preparacao: true } });
+  return true;
+}
+
+// GET /config_sistema — TODA tela chama isto ao entrar. Nunca dá erro: sem tabela ou com o
+// banco fora, devolve o modo desligado e o sistema abre normalmente.
+app.get('/config_sistema', async (req, res) => {
+  res.json({ data: await prep.ler(pool), error: null });
+});
+
+// PATCH /config_sistema  body { modo_preparacao, mensagem, atualizado_por, atualizado_por_nome }
+// Só superadmin — conferido pelo BANCO, a partir do id, e não pelo `perfil` do corpo.
+app.patch('/config_sistema', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const erro = prep.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+                               [parseInt(b.atualizado_por) || 0]);
+    const quem = q.rows[0];
+    if (!quem || quem.perfil !== 'superadmin')
+      return res.status(403).json({ data: null, error: { message: 'Só o superadmin liga e desliga o modo preparação.' } });
+
+    // O par (informou, valor) em vez de COALESCE: `modo_preparacao = false` é um valor
+    // válido — é justamente o de desligar — e um COALESCE o descartaria como "não
+    // informado". Seria impossível desligar pela tela. Mesma armadilha do limite_padrao.
+    const { rows } = await pool.query(
+      `UPDATE config_sistema
+          SET modo_preparacao = CASE WHEN $1::boolean THEN $2::boolean ELSE modo_preparacao END,
+              mensagem        = CASE WHEN $3::boolean THEN $4::text    ELSE mensagem        END,
+              atualizado_por      = $5,
+              atualizado_por_nome = $6,
+              atualizado_em       = NOW()
+        WHERE id = 1
+        RETURNING *`,
+      [b.modo_preparacao !== undefined, b.modo_preparacao === true,
+       b.mensagem !== undefined, b.mensagem === undefined || b.mensagem === null ? null : String(b.mensagem),
+       quem.id, quem.nome]
+    );
+    res.json({ data: rows[0] || null, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
@@ -1696,6 +1760,12 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
   try {
     const campos = req.body;
 
+    // ── MODO PREPARAÇÃO ─────────────────────────────────────────────────────
+    // Vem ANTES da trava de TRs: na manhã da preparação ninguém assume TR nenhuma, esteja
+    // dentro ou fora do limite. Esconder o menu na tela não bastaria — este PATCH é o único
+    // caminho por onde uma TR muda de dono, e a URL antiga continuaria funcionando.
+    if (campos.analista_id && await barrouPreparacao(res, campos.analista_id)) return;
+
     // ── TRAVA DE TRs ────────────────────────────────────────────────────────
     // Conferida AQUI, e não só na tela: a tela pode ser contornada, e este PATCH é o único
     // caminho por onde uma TR muda de dono. Só entra quando o corpo é o de "assumir"
@@ -1779,6 +1849,7 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
 app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
   try {
     const { codigo_pc, parecer_tipo, analista_nome, baixar_nl_completa } = req.body;
+    if (await barrouPreparacao(res, req.body.analista_id)) return;
     if (!codigo_pc)
       return res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório' } });
 
@@ -1887,6 +1958,7 @@ app.get('/parcela/historico', async (req, res) => {
 // Baixa TODAS as PCs da parcial, numa transacao. D1: data_baixa = agora (data real do parecer).
 app.post('/parcela/parecer', async (req, res) => {
   const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
   const erro = faltaChave(b);
   if (erro) return res.status(400).json({ data: null, error: { message: erro } });
   if (!PARECERES_VALIDOS.includes(b.parecer_tipo))
@@ -2055,6 +2127,7 @@ app.post('/parcela/resposta_diligencia', async (req, res) => {
 // Acompanhamento: NAO baixa, nao mexe em baixada/data_baixa. Pode ir e voltar quantas vezes precisar.
 app.post('/parcela/situacao', async (req, res) => {
   const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
   const erro = faltaChave(b);
   if (erro) return res.status(400).json({ data: null, error: { message: erro } });
   if (!SITUACOES_VALIDAS.includes(b.situacao))
@@ -2123,6 +2196,7 @@ app.post('/parcela/situacao', async (req, res) => {
 // D2: CI e campo proprio. Exige parecer previo e NAO apaga parecer_tipo.
 app.post('/parcela/ci', async (req, res) => {
   const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
   const erro = faltaChave(b);
   if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
@@ -2639,6 +2713,33 @@ async function garantirColunasUsuarios() {
 }
 
 // ══════════════════════════════════════
+//  MIGRAÇÃO — configuração do sistema (modo preparação)
+// ══════════════════════════════════════
+// Tabela NOVA, então `CREATE TABLE IF NOT EXISTS` basta (a armadilha 2 do CLAUDE.md só vale
+// para tabela que já existe). Nasce com o modo DESLIGADO: criar a tabela não pode, sozinha,
+// trancar a equipe fora do sistema.
+async function garantirTabelaConfigSistema() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS config_sistema (
+        id                  INTEGER PRIMARY KEY DEFAULT 1,
+        modo_preparacao     BOOLEAN   NOT NULL DEFAULT false,
+        mensagem            TEXT,
+        atualizado_por      INTEGER,
+        atualizado_por_nome TEXT,
+        atualizado_em       TIMESTAMP NOT NULL DEFAULT NOW(),
+        CONSTRAINT config_sistema_linha_unica CHECK (id = 1)
+      )`);
+    // A linha 1 é o registro. Sem ela o PATCH não teria o que atualizar e a tela ficaria
+    // ligando um interruptor que não existe.
+    await pool.query(`INSERT INTO config_sistema (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    console.log('Tabela config_sistema (modo preparacao) verificada.');
+  } catch (e) {
+    console.error('Erro ao garantir config_sistema:', e.message);
+  }
+}
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — preferências do painel por analista
 // ══════════════════════════════════════
 // Guarda, por analista e por TR, o que é escolha DELE e não do dado: se a TR está fixada no
@@ -2757,6 +2858,7 @@ async function garantirTabelaSgpe() {
 // ══════════════════════════════════════
 const PORT = process.env.PORT || 3000;
 garantirColunasUsuarios()
+  .then(garantirTabelaConfigSistema)
   .then(garantirTabelaSgpe)
   .then(garantirTabelaPreferenciaTr)
   .then(verificarColunaInicioAnalise)

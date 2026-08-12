@@ -106,6 +106,60 @@ app.get('/usuarios', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════
+//  QUEM ESTÁ ONLINE
+// ══════════════════════════════════════
+// ⚠️ TAMBÉM ANTES DE "/usuarios/:id" — ver o aviso longo logo abaixo.
+//
+// "Online" é: esteve ativo nos últimos 30 min **E** não encerrou a sessão depois disso.
+//
+// A segunda metade é a novidade de 12/08. Antes, quem clicava em Sair continuava na lista
+// por meia hora, porque `ultimo_acesso` não sabia que a sessão tinha acabado.
+//
+// ⚠️ POR QUE UMA COLUNA NOVA, E NÃO RECUAR `ultimo_acesso` NO LOGOUT:
+// o Painel ADMIN mostra "Último Acesso" numa coluna. Recuá-lo resolveria a lista e faria
+// aquela coluna mentir — trocar informação verdadeira por efeito de tela.
+//
+// E o estado se cura sozinho: ao entrar de novo, `ultimo_acesso` passa a ser maior que
+// `sessao_fim` e a pessoa volta à lista. Não há nada para limpar.
+const ONLINE_MIN = 30;
+
+app.get('/usuarios/online', async (req, res) => {
+  try {
+    const cond = [`ultimo_acesso >= NOW() - INTERVAL '${ONLINE_MIN} minutes'`,
+                  `(sessao_fim IS NULL OR sessao_fim < ultimo_acesso)`,
+                  `ativo = true`];
+    const val = [];
+    if (req.query.setorial_id) { val.push(req.query.setorial_id); cond.push(`setorial_id = $${val.length}`); }
+    // Só o que a lista desenha. `foto_base64` é pesado (até 200 KB por pessoa) e por isso
+    // vem apenas de quem está online — tipicamente menos de dez.
+    const { rows } = await pool.query(
+      `SELECT id, nome, perfil, grupo, foto_base64, ultimo_acesso
+         FROM usuarios WHERE ${cond.join(' AND ')} ORDER BY nome`, val);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    // A lista é adorno do cabeçalho: erro nela não pode derrubar nada.
+    res.json({ data: [], count: 0, error: null });
+  }
+});
+
+// POST /usuarios/logout  body { id } — encerra a sessão e tira da lista na hora.
+app.post('/usuarios/logout', async (req, res) => {
+  try {
+    const id = parseInt((req.body || {}).id) || 0;
+    if (!id) return res.status(400).json({ data: null, error: { message: 'id é obrigatório' } });
+    // ⚠️ clock_timestamp(), nao NOW(): no Postgres o NOW() e o instante em que a
+    // TRANSACAO comecou, e nao o do comando. Com NOW() dos dois lados, sair e entrar no
+    // mesmo instante daria carimbos IGUAIS e o `sessao_fim < ultimo_acesso` nao valeria —
+    // a pessoa ficaria fora da lista mesmo tendo voltado. Apareceu no teste contra o banco.
+    await pool.query(`UPDATE usuarios SET sessao_fim = clock_timestamp() WHERE id = $1`, [id]);
+    res.json({ data: { id }, error: null });
+  } catch (e) {
+    // Sair nunca pode falhar por causa disto — quem sai, sai.
+    res.json({ data: null, error: null });
+  }
+});
+
 // ⚠️ ESTA ROTA TEM DE VIR ANTES DE "/usuarios/:id" — NÃO É ESTILO, É OBRIGATÓRIO.
 //
 // O Express casa na ORDEM em que as rotas são declaradas. Com "/usuarios/:id" declarada
@@ -2932,7 +2986,10 @@ async function garantirColunasUsuarios() {
         -- Troca obrigatória no primeiro acesso. Nasce FALSE de propósito: ligar a coluna
         -- não pode, sozinha, trancar 50 pessoas na tela de troca de senha. Quem marca quem
         -- precisa trocar é o UPDATE de migracao_senhas.sql, que o Richard autoriza.
-        ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT false
+        ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT false,
+        -- Fim de sessão: quem clica em Sair some da lista de online na hora. NULL = nunca
+        -- encerrou, que é o estado de quem nunca saiu. Ver GET /usuarios/online.
+        ADD COLUMN IF NOT EXISTS sessao_fim TIMESTAMP
     `);
     console.log('Colunas de usuarios (Primeiro Acesso / Perfil / senha provisoria) verificadas.');
   } catch (e) {

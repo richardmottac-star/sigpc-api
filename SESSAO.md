@@ -1,337 +1,144 @@
-# SIGPC-API — ESTADO EM 11/08/2026
+# SIGPC-API — ESTADO EM 12/08/2026
 
-Cole no início do chat novo.
+Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
 ---
 
-## A LIÇÃO DE 10–11/08: TESTE COM DUBLÊ NÃO É TESTE DE SQL
+## ⚠️ O QUE ESTÁ LIGADO AGORA, E O QUE ISSO IMPEDE
 
-**Quatro defeitos em dois dias, todos passando por 220 testes verdes, todos aparecendo no
-primeiro contato com o Postgres.** O dublê de banco aceita qualquer string como SQL.
+**O MODO PREPARAÇÃO ESTÁ LIGADO.** Enquanto estiver, **nenhum analista trabalha** — eles
+entram, trocam a senha e param numa tela restrita com o Meu Perfil.
 
-| defeito | onde |
+⚠️ **Os três técnicos do Controle Interno TAMBÉM ESTÃO BARRADOS.** Só superadmin e
+coordenador são isentos (`ISENTOS` em `lib/preparacao.js`). Se eles forem começar, ou você
+desliga o modo em Configurações → Modo preparação, ou se acrescenta `controle_interno` à
+lista de isentos. **Decisão pendente.**
+
+Desligar abre o sistema para todos de uma vez, e quem estiver com a tela aberta entra
+sozinho em até 1 minuto.
+
+---
+
+## ESTADO DO BANCO — medido em 12/08 ao fim do dia
+
+| | |
 |---|---|
-| `inconsistent types deduced for parameter $2` | INSERT do pedido de vaga |
-| `operator is not unique: date + unknown` | `CURRENT_DATE + $1` no job |
-| `dt_situacao` NULL fazia o NOT EXISTS nunca casar | cobrança da diligência |
-| coluna `date` chega como objeto `Date` | `String(d).slice(0,10)` → `"Fri Aug 14"` |
+| usuários | **54** · 52 ativos · **1 aguardando aprovação** |
+| perfis | 47 analista · 3 coordenador · **3 controle_interno** · 1 superadmin |
+| senhas | 24 em bcrypt · **30 ainda provisórias** |
+| **sem CPF** | **7** — ids 5 Nayara, 7 Aline, 11 Daniela, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo |
+| PCs | 14.652 · 3.619 baixadas · 13 no Controle Interno |
+| fila do CI | 13 PCs `na_fila`, em 6 encaminhamentos · `ci_mensagem` vazia |
 
-**Duas regras que saíram disso, e valem para código novo:**
-
-1. **Todo parâmetro em conta aritmética leva o tipo escrito** — `$1::int`, `$2::text`.
-   Há teste que falha se sobrar parâmetro sem tipo na consulta do job.
-2. **Coluna `date` não é texto.** Use `dataIso()` (em `job_notificacoes.js`), que usa getters
-   locais — `toISOString()` empurra o dia para trás em fuso negativo.
-
-E a terceira, de método: **rodar contra o banco antes de publicar.** Foi assim que os quatro
-apareceram. O Richard autoriza escrita caso a caso; leitura é livre.
+**O pendente é o id 66, Daniela Tavares Fiorentin** — autocadastro com aviso FORTE de
+duplicidade contra a **id 11 Daniela (200 PCs, 167 baixas)**. **Não mesclei**: você
+autorizou três mesclagens e esta apareceu depois. O botão está na fila, testado.
 
 ---
 
-## ⚠️ RITMO: EM BLOCO, NÃO PASSO A PASSO (a partir de 12/08/2026)
+## O QUE FOI FEITO EM 12/08
 
-**Em 10/08 o passo a passo — mockup, parar, implementar uma tela, parar, reportar — consumiu
-o dia inteiro e cansou o Richard sem necessidade.** A partir de 12/08:
+### Controle Interno virou perfil, com fila, conversa e duas saídas
+`ci_mensagem` (conversa por PC) + `ci_situacao`/`ci_rodada`/`ci_encerrado_em`/`ci_encerrado_por`.
+Rotas `GET /ci/fila`, `GET /ci/mensagens`, `POST /ci/decidir`, `POST /ci/responder`.
 
-- agrupar frentes relacionadas num **único ciclo**;
-- **parar só** quando a decisão for realmente dele: regra de negócio, prioridade, dado de
-  analista real;
-- **não parar** por detalhe de implementação, texto de mensagem ou escolha técnica — decidir,
-  seguir, reportar depois;
-- **reportar em bloco no fim**, não a cada etapa.
+- **`enviado_ci` continua sustentando a baixa**; `ci_situacao` diz onde está no ciclo. Antes
+  uma coluna só respondia as duas perguntas, e devolver apagava a passagem pelo CI.
+- **A baixa nunca é tocada** em nenhum caminho — há teste que lê o código e falha se um
+  UPDATE do ciclo mencionar `baixada`, `data_baixa` ou `enviado_ci`.
+- **A rodada sobe só na devolução**, e vai no `ref_id` da notificação: sem ela a segunda
+  volta não avisaria ninguém (lição do `num_diligencia`).
+- **Uma notificação por parcela**, não por PC — a parcela de 7 PCs mandaria 7 avisos iguais.
 
-Rodar contra o banco antes de publicar **continua valendo**.
-E isto não afrouxa a autorização de escrita — muda o ritmo, não a permissão.
+### Três técnicos criados
+ids **62 Marcia Terezinha Miranda · 63 Atemilson Bispo dos Santos · 64 Sirene Wolf dos
+Santos**. Perfil `controle_interno`, FCEE, sem grupo, `meta_mensal = 0`, senha `Sigpc@2026`
+provisória.
 
----
+### Duplicidade de cadastro
+`lib/duplicata.js` + `GET /usuarios/pendentes` + `POST /usuarios/mesclar`.
+Primeiro Acesso passou a **recusar CPF que já existe**, em qualquer estado.
 
-## MÉTODO DE TRABALHO (mudou em 11/08)
+**Três mesclagens feitas** (o cadastro antigo é o que fica, sempre):
 
-- **SELECT e testes: rodar direto**, sem pedir. `DATABASE_URL` já está no ambiente da máquina.
-- **INSERT / UPDATE / DELETE / ALTER / CREATE: mostrar o comando e ESPERAR.** Autorizado,
-  quem executa sou eu — o Richard não roda mais nada à mão.
-- **Nunca alterar dado de analista real sem autorização expressa.** Para teste, existe o
-  usuário **`ZZ TESTE TRAVA` (id 57)**, criado para isso.
-- Mockup antes de implementar. Parar entre as partes.
-
----
-
-## CONCLUÍDO EM 11/08
-
-### Reserva de TR, expiração e cancelamento
-Pedido pendente **segura a TR** — sem isso o analista pede, espera e um colega leva.
-A checagem vem **antes da conta do limite**: quem tem 1 TR de 5 também não fura a fila.
-Expira em 3 dias; **o que solta a TR é o filtro de tempo NA CONSULTA**, não o UPDATE — senão
-a TR ficaria presa o fim de semana inteiro porque ninguém abriu o sistema. O UPDATE existe
-para o estado gravado alcançar a realidade, e a linha fica como `'expirada'`, que é o que dá
-ao analista com que cobrar.
-**Uma pendente por TR, garantida DENTRO do INSERT** (`INSERT ... SELECT ... WHERE NOT EXISTS`):
-conferir e depois inserir deixava a fresta de dois cliques simultâneos.
-
-### Sino de notificações
-Quatro tipos: `aprovacao`, `prazo`, `diligencia`, `recado`. **Gravadas no evento**, nunca
-calculadas na leitura.
-**O dedupe (`destinatario_id + tipo + ref_id`) é o que mantém o sino vivo** — sem ele o job
-horário geraria 24 avisos por dia por PC.
-Notificação lida **sai da vista na hora** e é apagada em `DIAS_GUARDA_LIDA = 15` dias **após a
-leitura**; não lida nunca é apagada. `limparLidas` roda no mesmo job.
-⚠️ **O dedupe mora na tabela `notificacao`**: apagá-la faz o job esquecer o que já avisou.
-
-### Prazo da diligência (canal novo)
-Três avisos por PC: −3 dias, no dia, +7 dias. **A cobrança não sai** se houve
-`resposta_diligencia` ou `situacao` em `parcela_historico` depois de `dt_situacao`.
-**Teto de 21 dias**, e ele existe porque o dedupe some junto com a notificação lida — sem
-teto, a PC esquecida viraria cobrança a cada 15 dias, para sempre.
-`POST /parcela/resposta_diligencia` **não muda a situação**: a parcial segue em Diligência
-enquanto o analista avalia. Sem coluna nova — `parcela_historico` aceita qualquer `evento`.
-
----
-
-## POR QUE OS CANAIS DE PRAZO ESTÃO MUDOS (e devem ficar)
-
-Não é defeito. **`dt_limite_pc` histórico não é prazo — é cálculo em lote** (decisão do
-Richard, 10/08): 29/07/2024 é a data mais recente de *todos* os 44 analistas e as 231 de 2027
-caem *todas* em 30/01/2027. Daí `CORTE_PRAZO = '2026-08-01'`.
-**`prazo_diligencia` está vazio nas 14.652 linhas** porque as 1.236 diligências vieram da
-carga; a tela existe e **exige** o prazo, então a primeira diligência registrada pelo sistema
-já nasce válida.
-
-**Não baixar o `CORTE_PRAZO`.** Baixá-lo faz o sino cobrar prazo que ninguém definiu.
-
----
-
-## CRON NO RAILWAY
-
-| job | agenda | comando |
+| novo | → antigo | copiado |
 |---|---|---|
-| `job_sgpe_links` | de hora em hora | `node job_sgpe_links.js --limite=200` |
-| `job_notificacoes` | de hora em hora, **minuto 20** | `npm run job:notif` |
+| 65 Franciani Mary Daniel Pereira | **12 Franciani** (111 PCs) | CPF, e-mail, telefone |
+| 60 Marlene Teodoro Ramos da Silva | **46 Marlene** (48 PCs) | CPF, e-mail, telefone |
+| 61 Ana Letícia Wloch de Oliveira | **23 Ana Leticia** (147 PCs) | CPF, e-mail, telefone |
 
-Minuto 20 para não disputar conexão com o outro no início da hora.
+**Duas aprovações:** **22 Ana Claudia** (106 PCs) e **24 Elisandra** (210 PCs) — estavam
+presas na fila desde 14/06 e não tinham duplicata.
 
----
-
-## CONCLUÍDO EM 10/08 — trava de TRs por analista (`a3e9ee3`, no ar)
-
-Commitado, empurrado e **publicado no Railway** (confirmado por `GET /limite_tr/situacao`).
-
-### As decisões, que valem mais que o código
-
-| decisão | valor | por quê |
-|---|---|---|
-| limite padrão | **5** | mas fica **NULL no banco** — o Richard digita na tela |
-| quando confere | **só no ato de assumir** | ligar a trava não tira TR de ninguém |
-| libera vaga | **TR inteira baixada** | `'parcial'` existe na config, não é a escolhida |
-| quem aprova | **coordenador** | vê só o próprio grupo; superadmin vê tudo |
-| superadmin | **nunca trava** | verificado antes de tudo, sem depender de exceção |
-
-**`limite_padrao` está NULL agora — nada trava até alguém digitar o número na tela.**
-Isso é intencional: o Richard quis ver a tela funcionando antes de ligar.
-
-### Três coisas que não são óbvias no código
-
-1. **`null` é sem limite; `0` é bloqueio total.** Não são a mesma coisa em lugar nenhum.
-   Confundir os dois libera ou trava a equipe inteira — há teste para cada.
-
-2. **A aprovação AUTORIZA A TR, não soma +1.** Mudei isso no meio do teste: a Grazielly tem
-   54 TRs num limite de 5 — aprovada, iria para 6 e continuaria travada, o que tornava o
-   pedido inútil justamente para quem precisa. Quem aprova vê quantas TRs a pessoa já tem.
-   A autorização vira `'usada'` ao ser gasta.
-
-3. **A trava vive no `PATCH /prestacoes_contas/:codigo_pc`**, não na tela. É o único caminho
-   por onde uma TR muda de dono. A tela só pergunta antes, por conveniência — e `limiteChecar`
-   devolve "pode" quando a rede falha, porque quem decide é o servidor na hora de gravar.
-   Como o front manda **um PATCH por PC**, há o caminho "a TR já é dele": sem ele, a segunda
-   PC de uma TR sendo assumida seria barrada e o analista ficaria com metade da TR.
-
-### Rotas
-
-`GET /limite_tr/situacao` · `GET|PATCH /config_limite_tr` ·
-`GET|PATCH|DELETE /limite_tr_excecao` · `GET|POST /solicitacao_vaga` ·
-`PATCH /solicitacao_vaga/:id`
-
-`PATCH /config_limite_tr` usa um par `(informou, valor)` em vez de COALESCE, porque
-`limite_padrao = null` é um valor válido e COALESCE o descartaria como "não informado".
-
-### Banco (já rodado pelo Richard em 10/08)
-
-`config_limite_tr` (1 linha, `limite_padrao` NULL) · `limite_tr_excecao` (0 linhas) ·
-`solicitacao_vaga` (0 linhas). SQL em `trava_trs.sql`, idempotente, com bloco de reverter.
-
-### Testado contra o banco de produção, e revertido
-
-Limite 5 barrou a Grazielly (54 TRs), deixou o Eduardo (1 TR) passar, superadmin isento;
-pedido duplicado recusado, negar sem motivo recusado, aprovar duas vezes recusado;
-autorização aprovada liberou a TR e virou `usada`.
-**Revertido:** 2 PCs de volta ao estoque, solicitações apagadas, config de volta a NULL.
-
-`teste_limite_tr.js` — 22 testes com dublê de banco, inclusive tabela ausente (tem de se
-comportar como "sem limite", nunca derrubar a tela). Suítes: 39+39+50+22.
-
-### O que falta
-
-- [ ] **Definir o limite na tela** (Configurações → Limite de TRs). Nada trava até lá.
-- [ ] Abas 2 e 3 de Configurações — a barra já monta a partir de `CFG_ABAS`, é só somar.
-- [ ] Notificar o analista quando o pedido for decidido (hoje ele só descobre tentando de novo).
+### Menu em três blocos, e o Online agora no cabeçalho
+Ver o `CLAUDE.md`. `SB_BLOCOS` + `SB_ITENS` no `index.html` são a fonte única.
 
 ---
 
-## CONCLUÍDO EM 08/08 — link do SGPe vem pronto no GET
+## AS QUATRO ARMADILHAS QUE CUSTARAM CARO HOJE
 
-O link deixou de ser carregado progressivamente pela tela. As **três** rotas que alimentam
-os números de processo passam a devolver um mapa `links` ao lado de `data`:
+Todas viraram teste. As duas primeiras viraram regra no `CLAUDE.md` (11 e 12).
 
-| rota | campos |
-|---|---|
-| `GET /prestacoes_contas` | `processo_pc` + `processo_mae` |
-| `GET /prestacoes_contas/resumo_tr` | `processo_mae` |
-| `GET /prestacoes_contas/alertas_prazo` | `processo_pc` do `top10` |
+**1. Testar contra o banco real função que gerencia a própria transação.**
+O `COMMIT` interno confirma a transação externa e o `ROLLBACK` não desfaz nada. Gravou 7 PCs
+como `encerrado` e 14 mensagens em produção. Restaurado.
 
-**A chave do mapa é o VALOR CRU** (`links["SCC2146/2020"]`), não a forma canônica. É o que
-permite ao front fazer `links[p.processo_pc]` sem regex — e é o que vai matar a REGRA CRÍTICA
-abaixo quando a Fase 6 (front) entrar.
+**2. `WHERE` de reversão por condição derivada.**
+Reverter com `ci_rodada <> 1` pegou as 14.639 PCs que tinham o padrão `0`. **De 7 linhas para
+14.639.** Sempre por lista explícita de chaves, capturada antes.
 
-Nenhuma das três consulta o SGPe: só leem o cache. Quem consulta é `job_sgpe_links.js`.
+**3. Ordem de rota no Express.**
+`/usuarios/pendentes` foi declarada depois de `/usuarios/:id` e caía nela com id
+`"pendentes"` → `invalid input syntax for type integer` → **HTTP 500 em produção**. O dublê
+não pega: **dublê não roteia**.
 
-- **Negativa gravada** — `origem = 'NAO_ENCONTRADO'` com `nu_processo` NULL. Processo que o
-  SGPe não tem para de ser reconsultado a cada sessão. Precedência entre estados:
-  `CONFERIDO` > `SGPE` > `NAO_ENCONTRADO` > `ERRO` (provisório, volta com recuo).
-- **`ERRO`** é falha de rede: volta para a fila em 15 min / 1 h / 6 h / 24 h e desiste na 5ª.
-- **`POST /sgpe/links` continua no ar**, agora ciente da negativa — é a rede de segurança
-  até o front trocar.
+**4. `UNIQUE (cpf)` e a ordem da mesclagem.**
+Copiar o CPF para a conta antiga antes de apagar a nova deixa as duas com o mesmo CPF por um
+instante → `duplicate key`. **Apaga primeiro, copia depois.** O dublê não pega: dublê não tem
+restrição de unicidade.
 
-### PARADO DE PROPÓSITO (combinado com o Richard em 08/08)
-
-- **Fase 6 — front (`sigpc-gt/index.html`)**: não começou.
-- **Job de carga (~1h15)**: não rodou. Fila em 7.317, para rodar acompanhado.
+**A lição comum às quatro:** o dublê de banco valida a forma, não a realidade. O que pegou
+todas foi rodar contra o Postgres — ou, no caso da rota, subir o Express de verdade.
 
 ---
 
-## A REGRA CRÍTICA ACABOU — 08/08
+## O QUE FALTA, E DE QUEM DEPENDE
 
-Era esta: *"a regex do `index.html` e a de `lib/sgpe-link.js` são a mesma regra em dois
-lugares; mexeu numa, mexa na outra"*. **Não vale mais** — o front não tem mais regex.
+### Depende de você
+- [ ] **Modo preparação x Controle Interno** — desligar o modo, ou isentar o perfil.
+- [ ] **A Daniela (66)** — mesclar em 11 ou aprovar como conta nova.
+- [ ] **7 usuários sem CPF** não conseguem entrar (o login é por CPF). A Franciani, a Marlene
+      e a Ana Letícia resolveram pelo Primeiro Acesso — os outros podem fazer igual.
+- [ ] **Eduardo (52)** — inativo. Entra ou não?
+- [ ] **A sua senha** ainda é `704342`, agora em bcrypt. Esteve pública por meses; troque em
+      Meu Perfil.
 
-A API passou a devolver o link pronto num mapa `links`, indexado pelo **valor cru**, e a tela
-virou um `Map.get`. `SGPE_PADRAO`, `sgpeChave`, o resolvedor e o observador saíram do
-`index.html` em 08/08 (sigpc-gt `main`), junto com o `sgpe-link-standalone.js`.
-
-**A regra agora tem um dono só: `lib/sgpe-link.js`.** O teste de paridade foi aposentado — não
-há mais o que comparar. No lugar dele, `sigpc-gt/teste_front_links.js` falha se a
-normalização voltar a aparecer na tela.
-
-Continua valendo o aviso do topo de `lib/sgpe-link.js`: **não existe fórmula** para o
-`nuProcesso` interno. Medido em 08/08 sobre 7.699 pares reais, o deslocamento vai de 0 a 171,
-sem regra. Errar não dá erro — abre outro processo em silêncio.
-
----
-
-## CONCLUÍDO EM 06/08
-
-- **Tabela de 183 `cdOrgaosetor`** extraída do SGPe e no ar
-  (`9938571`, `feature/baixa-por-parcial`)
-- **Regex da sigla aceita região** (ADR20, SDR13) com separador
-- **Trava de ambiguidade corrigida** para avaliar dígitos crus antes da remoção de zeros
-  (`1cf8a0f`) — 39 testes passando
-- **22 ADRs validadas** contra o SGPe por `sgOrgaosetor`
-- **UPDATE do grupo A no banco:** 76 valores, 1.641 linhas
-- **Paridade front/servidor restaurada** (sigpc-gt `61e0d62`, `main`) — 8.159/8.159,
-  0 divergências
-
-### ⚠️ Correção ao registro do UPDATE
-
-A tabela `prestacoes_contas_bkp_processo_pc` **não existe**. Conferido em 06/08 com
-`to_regclass`: as únicas tabelas de backup no banco são `_backup_baixada_20260805` e
-`_backup_parcial_num_20260805`, ambas de outra frente.
-
-O UPDATE do grupo A foi aplicado **sem esse backup** — ou ele foi removido depois. O dado
-está correto (a transformação foi validada valor a valor antes de rodar, e o
-`ainda_colados` zerou), e o rollback continua trivial: basta remover o espaço inserido
-entre região e número. Mas a rede de segurança prevista no plano não está lá.
-
----
-
-## PENDENTE
-
-- **Skill `sgpe-link` (SKILL.md)** — a fazer hoje à noite
-- **22 valores dos grupos B e C** (ano grudado / ambíguos) em `adr_sdr_sem_link.csv`,
-  neste repositório — conferência manual. Atingem 345 PCs.
-  Composição: 18 com ano grudado, 1 com barra extra, 1 com ponto no ano, 2 sem região.
-- ~~Merge da feature na main do sigpc-api~~ — **feito em 08/08** (`0285939`, fast-forward).
-  ⚠️ Produção continua rodando da **`feature/baixa-por-parcial`**, não da `main` — confirmado
-  no painel do Railway, e o cron do job também aponta para ela. Não há registro dessa
-  configuração no código. Quem for mexer: publicar na main **não** publica em produção.
-- **Sondar `cdOrgaosetor` das 9 regionais** agora testáveis: ADR01, 18, 21, 22, 24, 26,
-  28, 29, 32. A ADR22 (`13580`) nunca foi verificada — foi ela que originou a frente.
-
----
-
-## O QUE ESTÁ NO AR
-
-| Peça | Onde | Commit |
-|---|---|---|
-| `POST /sgpe/links` | Railway, roda da `feature/baixa-por-parcial` | `1cf8a0f` |
-| Mapa de 183 órgãos | `lib/sgpe-link.js` | `9938571` |
-| Cache de links | tabela `sgpe_processo_ref` | criada no boot |
-| Mapa `links` nas 3 rotas | `server.js` + `lib/sgpe-lote.js` | 08/08 |
-| Colunas de negativa | `tentativas`, `ultima_tentativa`, `motivo`; `nu_processo` passou a aceitar NULL | ALTER aplicado à mão em 08/08 e no boot |
-| Job | `job_sgpe_links.js` + cron de hora em hora no Railway (`--limite=200`) | 08/08 |
-| Front sem regex | `sigpc-gt/index.html` — `procHtml` virou `Map.get` | sigpc-gt `94bae1a` |
-
-`main` e `feature/baixa-por-parcial` estão **iguais** em `0285939` (merge de 08/08).
-Produção roda da **feature** — ver a observação em PENDENTE.
-
-### Cache em 08/08
-
-388 resolvidos · **7.317 na fila** · 7.700 processos linkáveis no acervo.
-Fora de alcance para sempre: 72 que não casam a regex + 4 de sigla desconhecida
-(`ADR`, `SCCSCC`, `AR19`) — esses nem chegam a consultar o SGPe.
-
-### O job
-
-```bash
-node job_sgpe_links.js --dry-run          # mostra a fila, não toca em nada
-node job_sgpe_links.js --limite=200       # o que o cron vai rodar
-node job_sgpe_links.js --somente-novos    # fim de carga
-node job_sgpe_links.js --retentar-erros   # força os que falharam por rede
-```
-
-Ritmo medido: **0,59 s por processo** (mediana), p90 0,79 s. A fila cheia leva **~1h15**.
-Ctrl+C encerra depois do processo corrente, sem escrita pela metade.
-
-**FALTA CRIAR:** serviço separado no Railway para o cron (de hora em hora,
-`--limite=200`). Não há `railway.json` no repositório — é configuração de painel.
-
----
-
-## ARMADILHAS DESTA FRENTE
-
-1. **Não existe fórmula** para o `nuProcesso` interno do SGPe. Só consulta. Errar não dá
-   erro: abre outro processo, em silêncio.
-2. **Região colada ao número é ambígua** e a trava devolve `null` de propósito.
-   `ADR223151/2017` pode ser região 22 nº 3151 ou região 2 nº 23151. Não adivinhar.
-3. **A trava sai do mapa, não de sigla chumbada.** Entrou chave nova, a proteção passa a
-   valer sozinha.
-4. **`SIGLAS_AMBIGUAS` conflita com o mapa novo:** `DC`, `SAN`, `SAP` e `SAS` estão nas
-   duas listas. `siglaConhecida` devolve `true` e `orgaoDaSigla` lança `SiglaAmbigua`;
-   a rota captura e joga em `naoEncontrados`. Não quebra, mas é incoerente. Mantido
-   intacto por decisão expressa de 06/08.
-5. **O deploy do Railway não é imediato.** Em 05/08 levou ~10 minutos de 404 antes de
-   publicar. Não há `railway.json`, `nixpacks.toml` nem qualquer config no repositório.
+### Técnico
+- [ ] **A camada de autorização** continua sendo o buraco de fundo: quem montar um pedido
+      HTTP e se declarar coordenador passa. O modo preparação é cortina, não tranca.
+- [ ] **11,3 MB por tela** — a compressão resolveu o transporte (−96%), mas seis telas ainda
+      baixam o acervo inteiro para filtrar no cliente.
+- [ ] `GET /notificacao?destinatario_id=X` não confere se quem pede é o X.
+- [ ] `POST /notificacao` com `alvo:'analista'` escapa da conferência de grupo.
 
 ---
 
 ## COMO TESTAR
 
 ```bash
-npm run teste               # 39 + 33 testes, sem rede e sem banco
-node --check server.js lib/*.js job_sgpe_links.js
+npm run teste     # 11 suítes, 481 testes, sem rede e sem banco
+node --check server.js lib/*.js
 ```
 
-Produção:
+⚠️ **Antes de publicar, rode contra o banco** — foi o que pegou os oito defeitos de 10–12/08,
+todos invisíveis para o dublê.
 
-```bash
-curl -s -X POST https://sigpc-api-production.up.railway.app/sgpe/links \
-  -H "Content-Type: application/json" \
-  -d '{"processos":["ADR20 1225/2017","SCC2146/2020"]}'
-```
+⚠️ **Nunca teste função que abre a própria transação de dentro de outra** (regra 11).
+
+## O QUE ESTÁ NO AR
+
+`sigpc-api dcb7680` · `sigpc-gt` — `main` e `feature/baixa-por-parcial` iguais nos dois.
+**Produção roda da `feature`**; publicar só na `main` não publica.
+
+⚠️ **O Railway travou um deploy hoje** e ficou 15 min servindo a versão anterior. Não era o
+código — o redeploy pelo painel resolveu. Se `GET /ci/fila` voltar 404, é isso.

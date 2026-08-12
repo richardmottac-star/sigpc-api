@@ -4,7 +4,11 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 19/07/2026
+**Última sessão:** 12/08/2026 — ver `SESSAO.md` para o estado do dia.
+
+> ⚠️ **O MODO PREPARAÇÃO ESTÁ LIGADO.** Nenhum analista trabalha enquanto estiver, e os três
+> técnicos do Controle Interno **também estão barrados** (só superadmin e coordenador são
+> isentos). Desliga-se em Configurações → Modo preparação.
 
 ---
 
@@ -44,7 +48,30 @@ TR ──── processo mãe (1:1)
 
 ## Banco de dados
 
-### `usuarios` — 50 registros
+### `ci_mensagem` — a conversa do Controle Interno (12/08/2026)
+
+Uma linha **por PC por mensagem**: `codigo_pc`, `rodada`, `direcao`
+(`ci_para_analista` | `analista_para_ci`), `texto`, autor, `criado_em`.
+
+⚠️ **A conversa é por PC, mas o encaminhamento é por PARCELA** — `POST /parcela/ci` manda a
+parcela inteira, e há parcela com 7 PCs. A tela agrupa e o técnico escreve uma vez; grava-se
+uma mensagem por PC, mesmo texto, mesma rodada.
+
+O estado do ciclo fica em `prestacoes_contas`: `ci_situacao`
+(`na_fila` | `com_analista` | `encerrado`, **NULL para quem nunca foi ao CI**), `ci_rodada`,
+`ci_encerrado_em`, `ci_encerrado_por`.
+
+⚠️ **`enviado_ci` NÃO mudou de significado**: diz "foi ao CI" e **sustenta a baixa**.
+`ci_situacao` diz onde está no ciclo. Confundir as duas foi o defeito que este ciclo corrigiu.
+
+⚠️ **A baixa nunca é tocada** em nenhum caminho do CI. Há teste que falha se um UPDATE do
+ciclo mencionar `baixada`, `data_baixa` ou `enviado_ci`.
+
+### `config_sistema` — 1 linha, `id = 1`
+
+`modo_preparacao` (bool), `mensagem`, `atualizado_por/_nome/_em`. `CHECK (id = 1)`.
+
+### `usuarios` — 54 registros
 
 Além do cadastro: `senha_hash` (bcrypt desde 11/08/2026) e **`senha_provisoria`** — quando
 `true`, o login desvia para a tela de troca antes de abrir o painel. Criada no boot por
@@ -82,9 +109,15 @@ Campos: `codigo_pc`, `codigo_nl`, `tipo`, `tr`, `processo_pc`, `processo_mae`,
 |---|---|---|
 | 1 | Nayara Limas Ferreira | 15 |
 | 2 | Zadir T. Machado Ferreira | 14 |
-| 3 | Gustavo (**sem cadastro em `usuarios`**) | 17 |
+| 3 | Gustavo Hallack Porto (id 56) | 17 |
 
-Coordenadores não contam produtividade e não aparecem no Quadro 2 do relatório CGE.
+**Controle Interno** — 3 técnicos, perfil `controle_interno`, sem grupo, `meta_mensal = 0`:
+ids **62 Marcia Terezinha Miranda · 63 Atemilson Bispo dos Santos · 64 Sirene Wolf dos Santos**.
+
+⚠️ **Coordenadores E técnicos do C.I. não entram em relatório de produtividade.** Não é meta
+zero — é não aparecer. A regra é `contaProdutividade(u)` no `index.html`, usada pela
+Produtividade, pela Gestão Grupo e pelo Board. O Quadro 2 do CGE resolve por outro caminho:
+lista de **inclusão** (`perfil === 'analista'`), que exclui qualquer perfil novo sozinha.
 
 ---
 
@@ -173,15 +206,17 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
 > Conferida contra o banco em **11/08/2026**. O que está marcado `[x]` foi verificado, não
 > presumido — a consulta que provou está escrita ao lado. Não reabrir sem medir de novo.
 
-### ABERTURA AOS 47 ANALISTAS — o que trava (varredura de 11/08/2026)
-- [ ] **Nove analistas sem CPF não conseguem entrar. O login é por CPF.**
-      Nayara (**coordenadora do G1**), Aline, Daniela, Franciani, Marisa, Ana Leticia,
-      Miriam, Marlene, Scheila. Mais a **Grazielly** (id 42, `senha_hash` NULL) e o
-      **Eduardo** (id 52, `ativo = false`). **Entram 39 de 50.** Falta o dado, só.
-- [ ] **`migracao_senhas.sql` não foi executado** — sem ele ninguém é obrigado a trocar a
-      senha, e as 44 senhas iguais continuam valendo.
-- [ ] **`migracao_senhas_hash.js` (opcional)** — converte de uma vez o texto puro que
-      sobrar. O login já converte a de quem entra.
+### ABERTURA — o que ainda trava (conferido em 12/08/2026)
+- [ ] **7 sem CPF não conseguem entrar. O login é por CPF.** ids 5 Nayara (**coordenadora do
+      G1**), 7 Aline, 11 Daniela, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo.
+      Franciani, Marlene e Ana Letícia resolveram sozinhas pelo **Primeiro Acesso** — os
+      outros podem fazer igual, e aí é só mesclar na fila.
+- [ ] **Eduardo (52)** — `ativo = false`. Entra ou não?
+- [ ] **Daniela (66)** aguardando aprovação, com aviso FORTE contra a **id 11 Daniela
+      (200 PCs, 167 baixas)**. Mesclar ou aprovar como conta nova.
+- [ ] **Modo preparação x Controle Interno** — os 3 técnicos estão barrados. Desligar o modo
+      ou isentar o perfil.
+- [x] `migracao_senhas.sql` — **executado em 11/08**, 47 marcados. 30 ainda provisórias.
 
 ### Aberto — precisa de decisão do Richard
 - [ ] **Caroline** — meta 27 vigente, **sem usuário em `usuarios`**. É a única meta vigente

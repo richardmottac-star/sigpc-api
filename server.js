@@ -21,6 +21,7 @@ const ci = require('./lib/ci');
 const devol = require('./lib/devolucao');
 const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
+const bg = require('./lib/busca-global');
 const dup = require('./lib/duplicata');
 
 const app = express();
@@ -2243,6 +2244,75 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
+});
+
+// ══════════════════════════════════════
+//  BUSCA GLOBAL — só superadmin
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/busca-global.js.
+//
+// ⚠️ A GUARDA É AQUI, NÃO NO MENU. Esconder o item de menu não impede ninguém de chamar a
+// rota — e esta devolve o acervo inteiro de qualquer analista, que é justamente o que o
+// recorte por `analista_id` das outras telas existe para não fazer.
+
+// GET /busca_global?termo=X&usuario_id=N
+app.get('/busca_global', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = { termo: req.query.termo, usuario_id: req.query.usuario_id };
+    const erro = bg.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const { rows: u } = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+                                        [parseInt(b.usuario_id) || 0]);
+    if (!u.length || u[0].perfil !== 'superadmin')
+      return res.status(403).json({ data: null, error: { message: 'A busca global é exclusiva do superadmin.' } });
+
+    const termo = String(b.termo).trim();
+
+    // ── quais TRs, e quais PCs casaram ───────────────────────────────────────
+    // Duas perguntas, dois usos: o `IN` escolhe as TRs (e as agregações continuam vendo
+    // TODAS as linhas de cada uma — o defeito de 09/08); o conjunto de `codigo_pc` é o que
+    // destaca as parciais dentro do card.
+    const vCasa = [];
+    const rc = bg.condicaoBusca(termo, vCasa, 1);
+    const { rows: casaram } = await cli.query(
+      `SELECT codigo_pc, tr FROM prestacoes_contas WHERE setorial_id='FCEE' AND ${rc.condicao}`, vCasa);
+    if (!casaram.length)
+      return res.json({ data: { termo, total_trs: 0, mostrando: 0, cards: [] }, links: {}, error: null });
+
+    const trsTodas = [...new Set(casaram.map(r => r.tr))];
+    const trs = trsTodas.slice(0, bg.MAX_TRS);
+    const setCasaram = new Set(casaram.map(r => r.codigo_pc));
+
+    const { rows } = await cli.query(
+      `SELECT codigo_pc, codigo_nl, tipo, tr, parcial_num, processo_pc, processo_mae, entidade,
+              cnpj_cpf, status, situacao_atual, parecer_tipo, baixada, analista_id, analista_nome,
+              grupo, dt_assumida, dt_inicio_analise, dt_limite_pc,
+              ci_situacao, ci_rodada, dt_envio_ci, ci_encerrado_em
+         FROM prestacoes_contas
+        WHERE setorial_id='FCEE' AND tr = ANY($1)
+        ORDER BY tr, parcial_num, codigo_pc`, [trs]);
+
+    const hoje = (await cli.query(`SELECT ${HOJE_BR}::text d`)).rows[0].d;
+
+    // "No estoque desde" — só existe quando a TR JÁ FOI devolvida por alguém. A esmagadora
+    // maioria das TRs livres nunca teve dono, e para essas não há data nenhuma: inventar uma
+    // (a da carga, por exemplo) seria mostrar um número que não quer dizer o que parece.
+    const { rows: dev } = await cli.query(
+      `SELECT DISTINCT ON (tr) tr, criado_em FROM parcela_historico
+        WHERE tr = ANY($1) AND evento = 'devolucao_tr'
+        ORDER BY tr, criado_em DESC`, [trs]);
+    const devolvidaEm = new Map(dev.map(d => [d.tr, d.criado_em]));
+
+    const cards = bg.montarCards(rows, setCasaram, hoje, devolvidaEm);
+    const links = await linksDeLinhas(pool, rows, ['processo_pc', 'processo_mae']);
+
+    res.json({ data: { termo, total_trs: trsTodas.length, mostrando: cards.length,
+                       teto: bg.MAX_TRS, cards }, links, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
 });
 
 // ══════════════════════════════════════

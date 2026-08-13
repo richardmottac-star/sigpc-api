@@ -78,6 +78,35 @@ metade. Agora é conferida UMA vez, dentro da transação.
 O **nome curto** (`analista_nome` = "Richard", não "Richard Motta Coelho") saiu do
 `index.html` e virou `lib/assumir.js`.
 
+### 🔍 Busca global — localizar qualquer TR ou PC numa tela só. SÓ SUPERADMIN.
+Menu → bloco Superadmin. Um campo, seis identificadores (TR, PC, NL, processo mãe,
+processo da PC, entidade). **Um card por TR, nunca uma linha solta.**
+
+⚠️ **A guarda é da ROTA, não do menu.** `GET /busca_global` devolve o acervo de qualquer
+analista — o oposto do recorte por `analista_id` das outras telas. O perfil vem do banco;
+coordenador, analista e C.I. levam 403 (conferido em produção).
+
+⚠️ **`tr = ANY(...)`, e não o termo no `WHERE` das agregações** — o defeito de 09/08. Com o
+filtro junto, as contagens veriam só as linhas que casaram: a 2019TR000168 tem 20 PCs e
+aparecia com 2.
+
+⚠️ **O prazo antigo quase voltou.** O `pg` devolve `date` como **objeto `Date`**, e
+`String(d).slice(0,10)` num Date dá `"Thu Mar 31"` — que, comparado como TEXTO contra
+`"2026-08-01"`, PASSA no corte. A busca chegou a mostrar **9.221 dias de atraso**. Corrigido
+com `paraIso()`. Ver a armadilha 18: é a mesma família de erro do fuso.
+
+**O encaminhamento** sai por `window.print()` (PDF) e `Blob application/msword` (.doc), com o
+cabeçalho institucional do CGE. **Sem biblioteca nova** — o `package.json` continua com seis
+dependências. Um botão abre a janela com o documento pronto e as duas ações no topo, que
+somem no papel.
+
+**A coluna "Código da PC" é dimensionada pela FINAL**: `2018TR000093-PFINAL` tem 19
+caracteres contra 12 de `2018PC000015`. `nowrap` na tela e no papel.
+
+⚠️ **"No estoque desde" só nas devolvidas.** Das 795 TRs sem dono, **793 nunca tiveram um** —
+para essas não existe "desde quando", e usar a data da carga (18/07, igual para todas) daria
+um número que parece resposta e não é.
+
 ---
 
 ## ⚠️ OS 11 PROCESSOS SGPe QUE FICARAM PENDENTES
@@ -136,7 +165,7 @@ processo morreu antes de seguir.**
 ## COMO TESTAR
 
 ```bash
-npm run teste     # 15 suítes, sem rede e sem banco
+npm run teste     # 16 suítes, sem rede e sem banco
 node --check server.js lib/*.js
 ```
 
@@ -167,13 +196,24 @@ pergunte o resultado antes de mexer nessas telas.**
 
 1. **Assumir uma TR** — a mais usada, e reescrita em 13/08. A TR **inteira** tem de aparecer
    na Minha Planilha, não parte dela. No erro o modal fica aberto com o motivo.
-2. **Devolver a TR ao estoque** — no cartão, só superadmin. Contagens, motivo obrigatório,
-   "Outro" exigindo descrição, e baixada não voltando.
+2. **Devolver a TR ao estoque** — ✅ **ELE TESTOU, E FUNCIONOU.** Há duas devoluções reais no
+   histórico: `2020TR001601` e `2020TR001599`, ambas com motivo "TESTE DO SISTEMA", 2 PCs
+   cada. As duas estão livres no estoque — se ele quiser desfazer, é só reassumir.
 3. **O lápis do processo SGPe** — em 11 telas; âmbar onde não há link.
-4. **Modo manutenção** — ficou para o **fim do expediente**: ligar derruba a equipe na hora.
+4. **A busca global** — nunca aberta. É a tela mais nova.
+5. **Modo manutenção** — ficou para o **fim do expediente**: ligar derruba a equipe na hora.
 
 Faltam também, com menos risco: o cabeçalho do cartão ("assumida em" + ✨ NOVA) e a seta do
 indicador de online (fechar pelo botão, clicando fora e com Esc).
+
+---
+
+## ⚠️ O QUE AINDA NÃO CHEGOU
+
+O **print do mockup** e o **modelo do documento em PDF** que o Richard ia colar na pasta.
+Procurados nos dois repositórios em 13/08: não estão lá. O layout do encaminhamento seguiu a
+especificação escrita dele e o cabeçalho do relatório CGE. **Quando o modelo chegar, ajustar
+SÓ o documento** () — a busca e o card não mudam.
 
 ---
 

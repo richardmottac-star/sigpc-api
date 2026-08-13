@@ -169,6 +169,7 @@ a lib é testar a regra.
 | `manutencao.js` | o modo manutenção — isento: **só superadmin**; e o carimbo que derruba |
 | `limite-tr.js` | quantas TRs cada um pode ter, e a reserva de quem pediu antes |
 | `assumir.js` | assumir a TR inteira, e o **nome curto** do analista |
+| `busca-global.js` | o card por TR da busca global, e o que pode ser mostrado como prazo |
 | `devolucao.js` | devolver ao estoque, e o bloqueio quando há PC no C.I. |
 | `processo-edit.js` | corrigir o processo SGPe, e ler o link colado |
 | `ci.js` | o ciclo do Controle Interno |
@@ -179,6 +180,7 @@ a lib é testar a regra.
 ### Rotas que escrevem em bloco — todas transacionais
 
 ```
+GET  /busca_global                          localiza qualquer TR ou PC (só superadmin)
 POST /tr/assumir                            assume a TR inteira
 POST /tr/devolver                           devolve ao estoque (só superadmin)
 GET  /tr/:tr/assumir  ·  GET /tr/:tr/devolucao      as prévias, pela MESMA regra
@@ -336,6 +338,13 @@ job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
     contava como assumida, o limite podia estourar no meio e deixar a TR pela metade,
     justamente por causa da trava que existe para organizar a carga. Numa transação, a
     conferência é UMA, antes de escrever.
+
+25. **⚠️ `String(d).slice(0,10)` num `Date` NÃO dá uma data ISO — dá `"Thu Mar 31"`.**
+    O `pg` devolve coluna `date`/`timestamp` como **objeto `Date`**. Comparado como texto
+    contra `'2026-08-01'`, `"Thu Mar 31"` **passa** em qualquer corte por data, porque `T` > `2`.
+    Foi assim que a busca global mostrou **9.221 dias de atraso** sobre um `dt_limite_pc` que
+    a trava existia justamente para esconder. Use uma função que trate `Date` e string
+    (`paraIso` em `lib/busca-global.js`). É a mesma família de erro da armadilha 18.
 
 ---
 

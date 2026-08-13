@@ -160,6 +160,23 @@ _backup_processo_pc_20260813     ← antes da correção dos processos
 _backup_processo_20260813b       ← antes da rodada final
 ```
 
+## ⚠️ O QUE O RICHARD IA TESTAR NA TELA (13/08, fim da manhã)
+
+Ele ficou de abrir os três primeiros e avisar o que encontrasse. **Se este chat é novo,
+pergunte o resultado antes de mexer nessas telas.**
+
+1. **Assumir uma TR** — a mais usada, e reescrita em 13/08. A TR **inteira** tem de aparecer
+   na Minha Planilha, não parte dela. No erro o modal fica aberto com o motivo.
+2. **Devolver a TR ao estoque** — no cartão, só superadmin. Contagens, motivo obrigatório,
+   "Outro" exigindo descrição, e baixada não voltando.
+3. **O lápis do processo SGPe** — em 11 telas; âmbar onde não há link.
+4. **Modo manutenção** — ficou para o **fim do expediente**: ligar derruba a equipe na hora.
+
+Faltam também, com menos risco: o cabeçalho do cartão ("assumida em" + ✨ NOVA) e a seta do
+indicador de online (fechar pelo botão, clicando fora e com Esc).
+
+---
+
 ## O QUE FALTA
 
 - [ ] **Os 11 processos SGPe** acima — pelo lápis, com o número do SGPe em mãos.

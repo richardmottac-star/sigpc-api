@@ -4,13 +4,22 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 12/08/2026 — ver `SESSAO.md` para o estado do dia.
+**Última sessão:** 13/08/2026 — ver `SESSAO.md` para o estado do dia.
 
-> **O sistema está ABERTO** — o modo preparação foi desligado em 12/08 e a equipe trabalha.
-> O interruptor segue em Configurações → Modo preparação.
+> **O sistema está ABERTO.** Os dois interruptores estão **desligados** e a equipe trabalha.
 >
-> ⚠️ Se religar, saiba que ele **barra também os três técnicos do Controle Interno**: só
-> superadmin e coordenador são isentos (`ISENTOS`, em `lib/preparacao.js`).
+> **Configurações tem TRÊS abas:** Limite de TRs · Modo preparação · Modo manutenção.
+>
+> | | preparação | **manutenção** |
+> |---|---|---|
+> | o analista **entra**? | sim, e a tela limita | **não** |
+> | isentos | superadmin **e coordenador** | **só superadmin** |
+> | quem já está dentro | vira tela restrita | **cai a sessão** |
+> | efeito no "online" | nenhum | **zera na hora** |
+>
+> ⚠️ **A manutenção derruba TODO MUNDO** — coordenadores e o Controle Interno inclusive.
+> É ela que abre a janela segura de escrita. A preparação barra os três técnicos do C.I.
+> como efeito colateral (`ISENTOS`, em `lib/preparacao.js`).
 
 ---
 
@@ -104,7 +113,20 @@ Campos: `codigo_pc`, `codigo_nl`, `tipo`, `tr`, `processo_pc`, `processo_mae`,
 `analista_nome`, `analista_id`, `grupo`, `conflito`, `parecer_tipo`, `baixada`,
 `data_baixa`, `origem_baixa`, `registrado_por`, `setorial_id`, `dt_limite_pc`,
 `dt_recebimento_pc`, `prazo_analise_dias`, `dias_atraso`, `prazo_diligencia`,
-`num_diligencia`, `enviado_ci`, `dt_envio_ci`
+`num_diligencia`, `enviado_ci`, `dt_envio_ci`, `parecer_ci`, `situacao_atual`,
+`ci_situacao`, `ci_rodada`, `ci_encerrado_em`, `ci_encerrado_por`,
+`dt_inicio_analise`, `dt_assumida`
+
+⚠️ **`dt_inicio_analise` e `dt_assumida` respondem perguntas DIFERENTES.**
+
+| | responde | reinicia ao reassumir? |
+|---|---|---|
+| `dt_inicio_analise` | quando a análise **começou** — o relógio do prazo | **não** (`COALESCE` no servidor) |
+| `dt_assumida` | quando **este** analista pegou a TR | **sim**, e volta a `NULL` na devolução |
+
+A diferença só passou a importar quando a devolução ganhou botão: depois de devolver e outro
+assumir, `dt_inicio_analise` mostraria a data do analista **anterior**. Criada em 13/08 **sem
+backfill** — as 761 TRs de antes não têm data, e o cartão simplesmente omite a linha.
 
 ### Outras
 - `metas_analistas` — 46 analistas, `vigente = true`, período Nov/2025 a Abr/2026
@@ -132,6 +154,53 @@ ids **62 Marcia Terezinha Miranda · 63 Atemilson Bispo dos Santos · 64 Sirene 
 zero — é não aparecer. A regra é `contaProdutividade(u)` no `index.html`, usada pela
 Produtividade, pela Gestão Grupo e pelo Board. O Quadro 2 do CGE resolve por outro caminho:
 lista de **inclusão** (`perfil === 'analista'`), que exclui qualquer perfil novo sozinha.
+
+---
+
+## As libs, e o que cada uma decide
+
+A regra mora na lib; o `server.js` só abre a transação, confere quem pede e responde. Testar
+a lib é testar a regra.
+
+| lib | decide |
+|---|---|
+| `auth.js` | quem entra, e a senha (`senha_hash` NUNCA sai do servidor) |
+| `preparacao.js` | o modo preparação — isentos: superadmin **e** coordenador |
+| `manutencao.js` | o modo manutenção — isento: **só superadmin**; e o carimbo que derruba |
+| `limite-tr.js` | quantas TRs cada um pode ter, e a reserva de quem pediu antes |
+| `assumir.js` | assumir a TR inteira, e o **nome curto** do analista |
+| `devolucao.js` | devolver ao estoque, e o bloqueio quando há PC no C.I. |
+| `processo-edit.js` | corrigir o processo SGPe, e ler o link colado |
+| `ci.js` | o ciclo do Controle Interno |
+| `sgpe-link.js` | o mapa de **183 órgãos** e a URL do SGPe |
+| `sgpe-lote.js` / `sgpe-dwr.js` | o cache de links e a consulta ao SGPe |
+| `datas.js` | `HOJE_BR` — prazo é data civil brasileira, nunca `CURRENT_DATE` |
+
+### Rotas que escrevem em bloco — todas transacionais
+
+```
+POST /tr/assumir                            assume a TR inteira
+POST /tr/devolver                           devolve ao estoque (só superadmin)
+GET  /tr/:tr/assumir  ·  GET /tr/:tr/devolucao      as prévias, pela MESMA regra
+PATCH /prestacoes_contas/:codigo_pc/processo        corrige o processo SGPe
+POST /sgpe/link_manual                      grava o link colado (origem MANUAL)
+POST /parcela/parecer · /situacao · /ci · /estornar · /resposta_diligencia
+POST /ci/decidir  ·  /ci/responder
+PATCH /config_sistema                       os dois interruptores
+```
+
+⚠️ **A prévia e a gravação usam a MESMA função de regra.** Se cada uma calculasse do seu
+jeito, o modal prometeria um número e o banco faria outro.
+
+### Scripts de manutenção (dry-run por padrão, só gravam com `--gravar`)
+
+```
+janela_livre.js                  "dá para gravar agora?" — três sinais
+renumerar_parcial_num.js         a renumeração das parciais
+corrigir_processo_pc.js          correção em lote (aceita --mae)
+resolver_processos_restantes.js  os casos que a regra recusou
+job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
+```
 
 ---
 
@@ -301,37 +370,74 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
 
 ## Pendências
 
-> Conferida contra o banco em **11/08/2026**. O que está marcado `[x]` foi verificado, não
-> presumido — a consulta que provou está escrita ao lado. Não reabrir sem medir de novo.
+> Conferida contra o banco em **13/08/2026**. O que está `[x]` foi verificado, não presumido.
+> **Estado medido:** 53 usuários (46 analista · 3 coordenador · 3 controle_interno ·
+> 1 superadmin) · **2 sem CPF** · 0 aguardando aprovação · 15 senhas provisórias ·
+> 14.652 PCs · 3.645 baixadas · 13 no ciclo do C.I. · 1.559 TRs · 46 metas vigentes.
 
-### ABERTURA — o que ainda trava (conferido em 12/08/2026)
-- [ ] **6 sem CPF não conseguem entrar. O login é por CPF.** ids 5 Nayara (**coordenadora do
-      G1**), 7 Aline, 17 Marisa, 30 Miriam, 49 Scheila, 52 Eduardo.
-      Franciani, Marlene, Ana Letícia e Daniela resolveram sozinhas pelo **Primeiro
-      Acesso** — os outros podem fazer igual, e aí é só mesclar na fila.
-- [ ] **Eduardo (52)** — `ativo = false`. Entra ou não?
-- [ ] **Aline (67)** aguardando aprovação, com aviso FORTE contra a **id 7 Aline
-      (413 PCs, 169 baixas)**. Mesclar ou aprovar como conta nova.
-- [ ] **Modo preparação x Controle Interno** — os 3 técnicos estão barrados. Desligar o modo
-      ou isentar o perfil.
-- [x] `migracao_senhas.sql` — **executado em 11/08**, 47 marcados. 30 ainda provisórias.
+### ⚠️ NÃO TESTADO EM NAVEGADOR — o que foi feito em 12–13/08
+Nada disto foi clicado por uma pessoa; tudo foi validado por teste e contra o banco. Em 12/08
+o Richard achou três defeitos abrindo as telas que os testes não pegaram.
+
+- [ ] **Assumir uma TR** — reescrito em 13/08, e é a ação mais usada. A TR inteira tem de
+      aparecer na Minha Planilha, não parte dela. No erro o modal FICA ABERTO.
+- [ ] **Devolver a TR ao estoque** — botão no cartão, só superadmin. Conferir as contagens,
+      o motivo obrigatório, o "Outro" exigindo descrição, e que **baixada não volta**.
+- [ ] **O lápis do processo SGPe** — em 11 telas. Onde não há link, o número sai em âmbar.
+      Corrigir e ver o link nascer sozinho.
+- [ ] **Cabeçalho do cartão** — "assumida em" e a etiqueta ✨ NOVA (7 dias). Nas TRs antigas
+      não aparece nada, e isso é proposital.
+- [ ] **Indicador de online** — rótulo e seta. Fechar pelo botão, clicando fora e com **Esc**:
+      a seta tem de voltar nos três.
+- [ ] **Modo manutenção** — ⚠️ ligar **derruba a equipe na hora**. Testar fora do expediente.
+      Conferir: 0 online no cartão, painel vermelho sem formulário, e o link "Acesso do
+      administrador" revelando o campo.
+
+### ⚠️ Os 11 processos SGPe que não deram para resolver
+Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe no `SESSAO.md`.
+
+- [ ] **O SGPe não tem o processo** (6): `ADR05 00011020/2017` · `ADR07 1064/2016` ·
+      `SDR05 001028/2017` · `SDR13 458/2017` · `fcee 6291/2024` · `fcee 7198/2024`
+- [ ] **Nenhuma leitura plausível** (4): `AR355478172` (333 candidatos testados) ·
+      `ADR19 0011181.2017` · `ADR 1181/2017` · `ER221202154` (só na coluna mãe)
+- [ ] **Ambíguos** (2): `SCC7537` existe em 7 anos · `SCC 6579` em 6. **Escolher seria chutar.**
+
+### Abertura — o que ainda trava
+- [ ] **2 sem CPF não conseguem entrar. O login é por CPF.** ids **49 Scheila** (ativa) e
+      **52 Eduardo** (também `ativo = false` — duas decisões). Resolve pelo Primeiro Acesso,
+      como sete colegas fizeram, ou inserindo o CPF direto.
+- [x] ~~Fila de aprovação~~ — **vazia**. Sete mesclagens, duas rejeições, duas aprovações (12/08).
+- [x] ~~Modo preparação x Controle Interno~~ — o modo está **desligado**. Se religar, a decisão
+      volta: isentar o perfil ou aceitar que os três técnicos fiquem de fora.
 
 ### Aberto — precisa de decisão do Richard
-- [ ] **Caroline** — meta 27 vigente, **sem usuário em `usuarios`**. É a única meta vigente
-      nessa situação (conferido: 46 metas vigentes, 45 com usuário).
+- [ ] **Caroline** — meta 27 vigente, **sem usuário em `usuarios`**. É a única nessa situação.
 - [ ] **Meta vigente: CGE (Ago/25) ou Monitoramento (Nov/25)** — nunca decidido.
 - [ ] **Gustavo: nome completo e portaria.** O cadastro existe (id 56, coordenador, grupo 3),
       mas a assinatura segue comentada no PDF do relatório CGE.
+- [ ] **A sua senha** ainda é a antiga, agora em bcrypt. Esteve pública por meses.
 
 ### Aberto — trabalho técnico
+- [ ] **A fusão de parcelas** está implementada e testada por unidade, mas **nunca foi
+      exercitada contra o banco** — não há hoje correção que a dispare. Quando aparecer, o
+      caminho é 409 → confirmação → junta e iguala o `parcial_num` na mesma transação.
+- [ ] **A camada de autorização** continua sendo o buraco de fundo: quem montar um pedido HTTP
+      e se declarar coordenador passa. Preparação e manutenção são **cortina, não tranca**.
+- [ ] **11,3 MB por tela** — a compressão resolveu o transporte (−96%), mas seis telas ainda
+      baixam o acervo inteiro para filtrar no cliente.
+- [ ] `GET /notificacao?destinatario_id=X` não confere se quem pede é o X.
+- [ ] `POST /notificacao` com `alvo:'analista'` escapa da conferência de grupo.
 - [ ] **Quadro 2 do relatório CGE** lista os 45 servidores? (estava truncando em 5) — nunca
       conferido depois da correção.
-- [ ] **Estoque no Quadro 1.** A anotação antiga diz 11.552; o banco tem **11.033 abertas**
-      (14.652 total − 3.619 baixadas). Os números não batem: conferir de onde sai o 11.552.
-- [ ] **Código morto no `index.html`:** `confDev` e modal `moDev` — 14 ocorrências.
+- [ ] **Estoque no Quadro 1.** A anotação antiga diz 11.552; o banco tem **11.007 abertas**
+      (14.652 − 3.645). Conferir de onde sai o 11.552.
+- [ ] **Código morto no `index.html`:** `confDev` e modal `moDev` — a "Solicitar Devolução" do
+      analista, que nunca teve rota. ⚠️ **Não confundir com `moDevM`/`confDevM`**, que é a
+      devolução do superadmin e está VIVA.
 - [ ] **`identidade_sigpc.css` e `logo_sc_base64.js`** (no `sigpc-gt`): nenhum `<script>` ou
-      `<link>` os carrega. Mesmo caso do `sgpe-link-standalone.js` que foi removido —
-      candidatos a exclusão, **confirmar com o Richard antes**.
+      `<link>` os carrega — candidatos a exclusão, **confirmar antes**.
+- [ ] **`ZZ TESTE TRAVA`** (analista) continua entrando no sistema. Se não é conta de teste,
+      vale olhar quem é.
 
 ### Resolvido — não reabrir
 - [x] **16 TRs com 2+ analistas** — `SELECT COUNT(DISTINCT tr) WHERE conflito = true` → **0**.

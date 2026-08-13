@@ -26,6 +26,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GRAVAR = process.argv.includes('--gravar');
+// ⚠️ `--mae` corrige `processo_mae` com as MESMAS duas peneiras. A coluna mãe tem textos
+// próprios — em 13/08 eram 20, três deles inexistentes na coluna da PC. E não há fusão a
+// conferir: quem define a parcial é (tr, processo_pc); o processo mãe não agrupa nada.
+const CAMPO = process.argv.includes('--mae') ? 'processo_mae' : 'processo_pc';
 const TAB_BK = '_backup_processo_pc_20260813';
 
 const { Pool } = require('pg');
@@ -100,15 +104,15 @@ function propor(bruto) {
     if (!bk[0].n) { console.log(`>> ${TAB_BK} NÃO EXISTE. Crie o backup antes.`); process.exitCode = 2; return; }
     const { rows: div } = await cli.query(
       `SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.codigo_pc=p.codigo_pc
-        WHERE p.processo_pc IS DISTINCT FROM b.processo_pc`);
+        WHERE p.${CAMPO} IS DISTINCT FROM b.${CAMPO}`);
     console.log(`backup ${TAB_BK}: ${div[0].n} PCs já divergem dele`);
 
     // ── 1. quem precisa de correção ──────────────────────────────────────────
     const { rows: pcs } = await cli.query(
-      `SELECT codigo_pc, tr, parcial_num, processo_pc FROM prestacoes_contas WHERE setorial_id='FCEE'`);
+      `SELECT codigo_pc, tr, parcial_num, ${CAMPO} AS valor FROM prestacoes_contas WHERE setorial_id='FCEE'`);
     const porTexto = new Map();
     for (const p of pcs) {
-      const b = (p.processo_pc ?? '').toString();
+      const b = (p.valor ?? '').toString();
       if (!b.trim() || b.trim() === '-1') continue;
       if (L.normalizarProcesso(b)) continue;          // já é processo válido
       if (!porTexto.has(b)) porTexto.set(b, { bruto: b, pcs: [], trs: new Set() });
@@ -147,19 +151,26 @@ function propor(bruto) {
     // Corrigir o texto muda o par (tr, processo_pc), que é a definição de parcial. Se o
     // corrigido já existir na mesma TR, duas parcelas viram uma — e o parcial_num renumerado
     // em 12/08 deixa de bater. Aqui isso ABORTA: fundir é decisão de tela, com aviso.
+    //
+    // ⚠️ SÓ VALE PARA `processo_pc`. O processo mãe não agrupa parcela nenhuma, e conferir
+    // fusão nele dá ALARME FALSO garantido: o `processo_pc` daquela TR já foi corrigido para
+    // o mesmo valor numa rodada anterior, então a "colisão" é com a própria correção.
+    // Aconteceu de verdade em 13/08 — a rodada da coluna mãe abortou com 17 fusões falsas.
     const fusoes = [];
-    for (const c of certos) {
-      for (const tr of c.trs) {
-        const { rows } = await cli.query(
-          `SELECT DISTINCT processo_pc FROM prestacoes_contas
-            WHERE setorial_id='FCEE' AND tr=$1 AND processo_pc <> $2`, [tr, c.bruto]);
-        for (const o of rows) {
-          const on = L.normalizarProcesso(o.processo_pc);
-          if (on && L.formatarProcesso(on) === c.chave) fusoes.push({ tr, de: c.bruto, para: c.proposta });
+    if (CAMPO === 'processo_pc') {
+      for (const c of certos) {
+        for (const tr of c.trs) {
+          const { rows } = await cli.query(
+            `SELECT DISTINCT processo_pc FROM prestacoes_contas
+              WHERE setorial_id='FCEE' AND tr=$1 AND processo_pc <> $2`, [tr, c.bruto]);
+          for (const o of rows) {
+            const on = L.normalizarProcesso(o.processo_pc);
+            if (on && L.formatarProcesso(on) === c.chave) fusoes.push({ tr, de: c.bruto, para: c.proposta });
+          }
         }
       }
     }
-    console.log(`parcelas que seriam FUNDIDAS: ${fusoes.length}`);
+    console.log(`parcelas que seriam FUNDIDAS: ${CAMPO === 'processo_pc' ? fusoes.length : 'n/a (processo_mae nao agrupa parcial)'}`);
     if (fusoes.length) {
       console.log(JSON.stringify(fusoes, null, 1));
       console.log('\n>> ABORTADO: fusão de parcela não passa por aqui. Corrija essas pela tela.');
@@ -167,46 +178,60 @@ function propor(bruto) {
     }
 
     // ── 5. a escrita ─────────────────────────────────────────────────────────
+    // A foto do inicio: e com ela que as conferencias c1/c3 comparam.
+    const fotografar = async () => new Map((await cli.query(
+      `SELECT codigo_pc, processo_pc, processo_mae FROM prestacoes_contas WHERE setorial_id='FCEE'`
+    )).rows.map(r => [r.codigo_pc, r]));
+    const antesDaRodada = await fotografar();
+
     await cli.query('BEGIN');
     let tocadas = 0;
     for (const c of certos) {
       // Lista explícita de chaves (regra 12), capturada ANTES — não por `WHERE processo_pc = <texto>`,
       // que é condição derivada e casaria com linha que tenha mudado no meio.
       const { rowCount } = await cli.query(
-        `UPDATE prestacoes_contas SET processo_pc = $2, atualizado_em = NOW()
+        `UPDATE prestacoes_contas SET ${CAMPO} = $2, atualizado_em = NOW()
           WHERE codigo_pc = ANY($1)`, [c.pcs, c.proposta]);
       tocadas += rowCount;
       // O rastro, uma linha por texto corrigido.
       await cli.query(
         `INSERT INTO parcela_historico
            (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
-         VALUES ($1, NULL, 'FCEE', 'processo_pc', $2, $3, NULL, $4)`,
+         VALUES ($1, NULL, 'FCEE', $5, $2, $3, NULL, $4)`,
         [[...c.trs][0], c.bruto, c.proposta,
-         `correção em lote de 13/08 (regra: ${c.regra}, confirmado no SGPe) · ${c.pcs.length} PCs`]);
+         `correção em lote de 13/08 (regra: ${c.regra}, confirmado no SGPe) · ${c.pcs.length} PCs`, CAMPO]);
     }
     console.log(`\nPCs atualizadas: ${tocadas}`);
 
     // ── 6. validação ─────────────────────────────────────────────────────────
     const un = async (sql, p) => (await cli.query(sql, p)).rows[0];
+    const depoisDaRodada = await fotografar();
     const todasPcs = certos.flatMap(c => c.pcs);
 
-    const c1 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.codigo_pc=p.codigo_pc
-                          WHERE p.processo_pc IS DISTINCT FROM b.processo_pc AND NOT (p.codigo_pc = ANY($1))`, [todasPcs]);
+    // ⚠️ c1 e c3 comparam com a FOTO DO INÍCIO DESTA RODADA, não com `_backup_..._20260813`.
+    //
+    // O backup é de antes de TODAS as correções de 13/08. Compará-lo aqui acusaria como
+    // "alterado" tudo o que rodadas anteriores já corrigiram de propósito — falso negativo
+    // barulhento que esconderia o defeito de verdade. A pergunta certa é "esta rodada mexeu
+    // em algo que não devia?", e só a foto do início responde isso.
+    const OUTRA = CAMPO === 'processo_pc' ? 'processo_mae' : 'processo_pc';
+    const c1 = { n: [...antesDaRodada].filter(([cod, v]) =>
+                   !todasPcs.includes(cod) && v[CAMPO] !== depoisDaRodada.get(cod)[CAMPO]).length };
+    const c3 = { n: [...antesDaRodada].filter(([cod, v]) =>
+                   v[OUTRA] !== depoisDaRodada.get(cod)[OUTRA]).length };
     const c2 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.codigo_pc=p.codigo_pc
                           WHERE p.parcial_num IS DISTINCT FROM b.parcial_num`);
-    const c3 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.codigo_pc=p.codigo_pc
-                          WHERE p.processo_mae IS DISTINCT FROM b.processo_mae`);
     const c4 = await un(`SELECT COUNT(*)::int n FROM (
                            SELECT tr, processo_pc FROM prestacoes_contas
                             WHERE setorial_id='FCEE' AND tipo <> 'final'
                             GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`);
     const c5 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas WHERE codigo_pc = ANY($1)
-                          AND processo_pc !~ '^[A-Z]+[0-9]* [0-9]+/[0-9]{4}$'`, [todasPcs]);
+                          AND ${CAMPO} !~ '^[A-Z]+[0-9]* [0-9]+/[0-9]{4}$'`, [todasPcs]);
 
     const checks = [
       ['PC fora da lista alterada',              c1.n === 0, c1.n],
       ['parcial_num alterado',                   c2.n === 0, c2.n],
-      ['processo_mae alterado',                  c3.n === 0, c3.n],
+      [(CAMPO === 'processo_pc' ? 'processo_mae' : 'processo_pc') + ' alterado',                  c3.n === 0, c3.n],
       ['parcela partida em 2 numeros',           c4.n === 0, c4.n],
       ['corrigida que nao virou processo valido', c5.n === 0, c5.n],
       ['PCs tocadas == esperadas',               tocadas === todasPcs.length, `${tocadas}/${todasPcs.length}`],

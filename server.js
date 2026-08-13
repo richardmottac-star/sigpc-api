@@ -19,6 +19,7 @@ const prep = require('./lib/preparacao');
 const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
 const devol = require('./lib/devolucao');
+const procEdit = require('./lib/processo-edit');
 const dup = require('./lib/duplicata');
 
 const app = express();
@@ -2241,6 +2242,185 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
+});
+
+// ══════════════════════════════════════
+//  CORRIGIR O PROCESSO SGPe DE UMA PC
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/processo-edit.js.
+// Analista, coordenador e superadmin podem — decisão do Richard, 13/08.
+
+const PERFIS_EDITAM_PROCESSO = ['analista', 'coordenador', 'superadmin'];
+
+async function quemEdita(cli, usuarioId) {
+  const { rows } = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+                                   [parseInt(usuarioId) || 0]);
+  return rows[0] && PERFIS_EDITAM_PROCESSO.includes(rows[0].perfil) ? rows[0] : null;
+}
+
+/** Resolve o processo: mapa → cache → SGPe ao vivo. Devolve { link, motivo }. */
+async function resolverProcesso(texto) {
+  const p = normalizarProcesso(texto);
+  if (!p) return { link: null, motivo: 'O texto não forma um processo.' };
+  if (!siglaConhecida(p.sigla))
+    return { link: null, motivo: `A sigla "${p.sigla}" não está no mapa de órgãos.` };
+
+  const chave = formatarProcesso(p);
+  const { rows } = await pool.query(
+    `SELECT nu_processo, cd_orgaosetor, ano FROM sgpe_processo_ref
+      WHERE sigla=$1 AND numero_oficial=$2 AND ano=$3`, [p.sigla, p.numero, p.ano]);
+  if (rows.length && rows[0].nu_processo != null)
+    return { link: montarUrlSgpe(rows[0].nu_processo, rows[0].cd_orgaosetor, rows[0].ano), chave };
+  if (rows.length) return { link: null, chave, motivo: 'O SGPe já respondeu que não tem este processo.' };
+
+  // Não está no cache: pergunta ao SGPe. Um processo só — é o caminho do analista corrigindo
+  // à mão, não o job.
+  try {
+    const r = await resolverNoSgpe(p);
+    if (r && r.nuProcesso) {
+      await pool.query(
+        `INSERT INTO sgpe_processo_ref (sigla, numero_oficial, ano, nu_processo, cd_orgaosetor, origem)
+         VALUES ($1,$2,$3,$4,$5,'SGPE')
+         ON CONFLICT (sigla, numero_oficial, ano) DO UPDATE
+           SET nu_processo = EXCLUDED.nu_processo, cd_orgaosetor = EXCLUDED.cd_orgaosetor,
+               origem = 'SGPE', motivo = NULL`,
+        [p.sigla, p.numero, p.ano, r.nuProcesso, r.cdOrgaosetor]);
+      return { link: montarUrlSgpe(r.nuProcesso, r.cdOrgaosetor, p.ano), chave };
+    }
+    return { link: null, chave, motivo: 'O SGPe não devolveu este processo.' };
+  } catch (e) {
+    return { link: null, chave, motivo: 'O SGPe não tem este processo, ou não respondeu agora.' };
+  }
+}
+
+// PATCH /prestacoes_contas/:codigo_pc/processo
+//   body { campo: 'processo_pc'|'processo_mae', sigla, numero, ano, usuario_id, juntar? }
+app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = { ...(req.body || {}), codigo_pc: req.params.codigo_pc };
+    const erro = procEdit.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const quem = await quemEdita(cli, b.usuario_id);
+    if (!quem) return res.status(403).json({ data: null, error: { message: 'Você não pode corrigir o processo.' } });
+    if (await barrouPreparacao(res, b.usuario_id)) return;
+
+    const { rows: alvo } = await cli.query(
+      `SELECT codigo_pc, tr, parcial_num, processo_pc, processo_mae FROM prestacoes_contas
+        WHERE codigo_pc = $1`, [b.codigo_pc]);
+    if (!alvo.length) return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+    const pc = alvo[0];
+    const antes = pc[b.campo];
+    const novo = procEdit.montar(b);
+    if (antes === novo) return res.json({ data: { texto: novo, mudou: false, ...(await resolverProcesso(novo)) }, error: null });
+
+    // ── quais PCs mudam ──────────────────────────────────────────────────────
+    // A correção vale para TODAS as PCs que hoje têm o mesmo texto errado na mesma TR: o erro
+    // é do processo, não da PC, e corrigir uma a uma deixaria as irmãs erradas.
+    const { rows: irmas } = await cli.query(
+      `SELECT codigo_pc FROM prestacoes_contas
+        WHERE setorial_id='FCEE' AND tr = $1 AND ${b.campo} IS NOT DISTINCT FROM $2`, [pc.tr, antes]);
+    const codigos = irmas.map(r => r.codigo_pc);
+
+    // ── fusão de parcela ─────────────────────────────────────────────────────
+    // Só faz sentido para processo_pc: o processo_mae não agrupa parcial nenhuma.
+    let fusao = null;
+    if (b.campo === 'processo_pc') {
+      const { rows: outras } = await cli.query(
+        `SELECT DISTINCT parcial_num FROM prestacoes_contas
+          WHERE setorial_id='FCEE' AND tr = $1 AND processo_pc = $2 AND tipo <> 'final'`, [pc.tr, novo]);
+      if (outras.length) {
+        fusao = { tr: pc.tr, parcial_destino: outras[0].parcial_num, parcial_atual: pc.parcial_num,
+                  pcs: codigos.length };
+        if (b.juntar !== true)
+          return res.status(409).json({ data: { fusao }, error: {
+            message: `A TR ${pc.tr} já tem a parcial ${outras[0].parcial_num} com o processo ${novo}. ` +
+                     `Salvar vai juntar estas ${codigos.length} PCs naquela parcial.`, fusao } });
+      }
+    }
+
+    await cli.query('BEGIN');
+    await cli.query(
+      `UPDATE prestacoes_contas SET ${b.campo} = $2, atualizado_em = NOW()
+        WHERE codigo_pc = ANY($1)`, [codigos, novo]);
+    // Junta na parcela de destino: sem isto as PCs teriam o mesmo (tr, processo_pc) e
+    // parcial_num diferente — o invariante que a renumeração de 12/08 deixou em zero.
+    if (fusao && b.juntar === true)
+      await cli.query(
+        `UPDATE prestacoes_contas SET parcial_num = $2, atualizado_em = NOW()
+          WHERE codigo_pc = ANY($1) AND tipo <> 'final'`, [codigos, fusao.parcial_destino]);
+
+    await cli.query(
+      `INSERT INTO parcela_historico
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
+       VALUES ($1, $2, 'FCEE', $3, $4, $5, $6, $7)`,
+      [pc.tr, pc.parcial_num, b.campo, antes, novo, quem.id,
+       `${codigos.length} PC${codigos.length > 1 ? 's' : ''}` + (fusao && b.juntar ? ` · juntadas na parcial ${fusao.parcial_destino}` : '')]);
+    await cli.query('COMMIT');
+
+    // Resolver o link vem DEPOIS do COMMIT: a correção do dado não pode depender do SGPe
+    // estar no ar. Se o link não vier agora, a tela oferece colar — e o texto já está salvo.
+    const resolucao = await resolverProcesso(novo);
+    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, fusao: fusao && b.juntar ? fusao : null,
+                       ...resolucao }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /sgpe/link_manual  body { processo, url, usuario_id, codigo_pc? }
+// Só quando o automático não resolveu — é a segunda etapa, nunca a primeira.
+app.post('/sgpe/link_manual', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const quem = await quemEdita(cli, b.usuario_id);
+    if (!quem) return res.status(403).json({ data: null, error: { message: 'Você não pode gravar o link.' } });
+
+    const p = normalizarProcesso(b.processo);
+    if (!p) return res.status(400).json({ data: null, error: { message: 'Processo inválido.' } });
+
+    const lido = procEdit.lerLink(b.url);
+    if (lido.erro) return res.status(400).json({ data: null, error: { message: lido.erro } });
+
+    // ⚠️ O ano da URL tem de bater com o do processo. Colar o link de OUTRO processo é o
+    // engano mais fácil de cometer — a pessoa está com várias abas do SGPe abertas.
+    if (lido.ano !== p.ano)
+      return res.status(400).json({ data: null, error: {
+        message: `O endereço é de um processo de ${lido.ano}, e este é de ${p.ano}. Confira a aba do SGPe.` } });
+
+    await cli.query('BEGIN');
+    await cli.query(
+      `INSERT INTO sgpe_processo_ref (sigla, numero_oficial, ano, nu_processo, cd_orgaosetor, origem, motivo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (sigla, numero_oficial, ano) DO UPDATE
+         SET nu_processo = EXCLUDED.nu_processo, cd_orgaosetor = EXCLUDED.cd_orgaosetor,
+             origem = EXCLUDED.origem, motivo = EXCLUDED.motivo, tentativas = 0`,
+      [p.sigla, p.numero, p.ano, lido.nu_processo, lido.cd_orgaosetor, procEdit.ORIGEM_MANUAL,
+       `colado por ${quem.nome} (id ${quem.id})`]);
+
+    // Quem colou fica no histórico — `sgpe_processo_ref` não tem coluna de autor, e o Richard
+    // decidiu em 13/08 não criar uma: o histórico já responde.
+    const { rows: pcRows } = b.codigo_pc
+      ? await cli.query(`SELECT tr, parcial_num FROM prestacoes_contas WHERE codigo_pc = $1`, [b.codigo_pc])
+      : { rows: [] };
+    await cli.query(
+      `INSERT INTO parcela_historico
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
+       VALUES ($1, $2, 'FCEE', 'sgpe_link_manual', NULL, $3, $4, $5)`,
+      [pcRows[0]?.tr ?? null, pcRows[0]?.parcial_num ?? null,
+       formatarProcesso(p), quem.id,
+       `link colado à mão · processoPK=${lido.nu_processo},${lido.cd_orgaosetor},${lido.ano}`]);
+    await cli.query('COMMIT');
+
+    res.json({ data: { processo: formatarProcesso(p),
+                       link: montarUrlSgpe(lido.nu_processo, lido.cd_orgaosetor, lido.ano) }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
 });
 
 // ══════════════════════════════════════

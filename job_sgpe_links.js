@@ -64,6 +64,14 @@ function montarFila(alvos, existentes, { somenteNovos = false, retentarErros = f
     if (!ja) { fila.push({ chave, p }); continue; }
 
     // Estados definitivos. NAO_ENCONTRADO é o ponto inteiro da negativa: não reconsultar.
+    //
+    // ⚠️ 'MANUAL' É INTOCÁVEL, E É A TRAVA MAIS IMPORTANTE DESTA FUNÇÃO.
+    //
+    // É o link que um analista abriu no SGPe, copiou e colou — justamente porque o automático
+    // NÃO resolveu. Se o job reprocessasse, ele consultaria o SGPe, tomaria o mesmo "não
+    // tenho" de sempre e gravaria a negativa por cima: o trabalho da pessoa desapareceria em
+    // silêncio. E ninguém reclama de um link que voltou a não existir, porque ninguém percebe.
+    if (ja.origem === 'MANUAL') continue;
     if (ja.origem === 'SGPE' || ja.origem === 'CONFERIDO' || ja.origem === 'NAO_ENCONTRADO') continue;
 
     // Sobrou 'ERRO': falha de rede, estado provisório.

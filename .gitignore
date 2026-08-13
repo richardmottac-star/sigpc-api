@@ -20,3 +20,6 @@ nomes_antes.json
 # A lista de reversao da renumeracao: 1.189 codigos de PC, dado operacional.
 # Nao se perde se apagar — sai de _backup_parcial_num_20260813 comparado com o vivo.
 reverter_renumeracao_*.json
+# Lista de reversao da correcao em lote de processo_pc — dado operacional, recuperavel
+# de _backup_processo_pc_20260813 comparado com o vivo.
+reverter_processo_pc_*.json

@@ -16,6 +16,7 @@ const { HOJE_BR } = require('./lib/datas');
 const faixa = require('./lib/faixa');
 const auth = require('./lib/auth');
 const prep = require('./lib/preparacao');
+const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
 const dup = require('./lib/duplicata');
 
@@ -251,8 +252,21 @@ app.post('/usuarios/login', async (req, res) => {
 
     // A senha confere. Agora as regras de entrada — que davam mensagem própria antes e
     // continuam dando: quem acertou a senha merece saber por que ainda não entrou.
-    const recusa = auth.podeEntrar(u, setorial);
-    if (recusa) return res.status(403).json({ data: null, error: { message: recusa } });
+    //
+    // ⚠️ A MANUTENÇÃO É CONFERIDA AQUI, e não antes da senha: a recusa por manutenção conta
+    // que o sistema está fechado, e contar isso a quem nem provou a senha entrega estado do
+    // sistema a qualquer um que bata na porta. Quem errou a senha continua lendo só
+    // "CPF ou senha incorretos".
+    const cfg = await prep.ler(pool);
+    const emManutencao = manut.barra(cfg, u) ? manut.recusa(cfg) : null;
+    const recusa = auth.podeEntrar(u, setorial, emManutencao);
+    if (recusa)
+      return res.status(403).json({
+        data: null,
+        // `manutencao: true` é o que faz a tela de login desenhar o cadeado em vez de uma
+        // faixa de erro vermelha. É recado do sistema, não erro da pessoa.
+        error: { message: recusa, manutencao: !!emManutencao },
+      });
 
     // ⚠️ A SENHA EM TEXTO PURO VIRA HASH AQUI, no login que a provou.
     //
@@ -343,6 +357,24 @@ const USUARIOS_PATCH_PERMITIDOS = [
 
 app.patch('/usuarios/:id', async (req, res) => {
   try {
+    // ⚠️ ESTA ROTA É O HEARTBEAT, E SEM ESTA TRAVA O MODO MANUTENÇÃO NÃO SEGURA.
+    //
+    // `onlineCarregar()` no index.html roda de 5 em 5 minutos e a primeira coisa que faz é
+    // PATCH /usuarios/:id com `ultimo_acesso = agora`. Ligar a manutenção carimba
+    // `sessao_fim` em todo mundo e zera a lista de online — mas o próximo heartbeat de
+    // QUALQUER aba ainda aberta levantaria `ultimo_acesso` acima de `sessao_fim` e a pessoa
+    // reapareceria online, sem ninguém ter feito nada. A janela de escrita se fecharia
+    // sozinha em até cinco minutos.
+    //
+    // Barrando aqui, o carimbo não se desfaz e o zero é estável.
+    //
+    // Barra pelo ALVO do PATCH (`:id`), não por quem pediu: o corpo não traz autor, e o
+    // heartbeat de cada pessoa escreve na própria linha. O superadmin segue passando —
+    // inclusive para redefinir a senha de alguém durante a manutenção, se precisar.
+    const cfgM = await prep.ler(pool);
+    const barrado = await manut.bloqueio(pool, cfgM, req.params.id);
+    if (barrado) return res.status(503).json({ data: null, error: { message: barrado, manutencao: true } });
+
     const b = req.body;
     const sets = [];
     const values = [];
@@ -1530,6 +1562,16 @@ app.patch('/config_limite_tr', async (req, res) => {
  * esconder, e a URL antiga continuaria trabalhando.
  */
 async function barrouPreparacao(res, usuarioId) {
+  // ⚠️ MANUTENÇÃO PRIMEIRO — é a mais restritiva das duas, e a resposta dela é outra
+  // (503 + `manutencao: true`, que a tela trata derrubando a sessão). Se a preparação
+  // fosse conferida antes, um analista em manutenção receberia "o sistema abre à tarde" e
+  // continuaria dentro, tentando de novo.
+  const cfg = await prep.ler(pool);
+  const emManutencao = await manut.bloqueio(pool, cfg, usuarioId);
+  if (emManutencao) {
+    res.status(503).json({ data: null, error: { message: emManutencao, manutencao: true } });
+    return true;
+  }
   const msg = await prep.bloqueio(pool, usuarioId);
   if (!msg) return false;
   res.status(403).json({ data: null, error: { message: msg, preparacao: true } });
@@ -1545,36 +1587,62 @@ app.get('/config_sistema', async (req, res) => {
 // PATCH /config_sistema  body { modo_preparacao, mensagem, atualizado_por, atualizado_por_nome }
 // Só superadmin — conferido pelo BANCO, a partir do id, e não pelo `perfil` do corpo.
 app.patch('/config_sistema', async (req, res) => {
+  const cli = await pool.connect();
   try {
     const b = req.body || {};
-    const erro = prep.validar(b);
+    const erro = prep.validar(b) || manut.validar(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
-    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
-                               [parseInt(b.atualizado_por) || 0]);
+    const q = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+                              [parseInt(b.atualizado_por) || 0]);
     const quem = q.rows[0];
     if (!quem || quem.perfil !== 'superadmin')
-      return res.status(403).json({ data: null, error: { message: 'Só o superadmin liga e desliga o modo preparação.' } });
+      return res.status(403).json({ data: null, error: { message: 'Só o superadmin liga e desliga os modos do sistema.' } });
+
+    // ⚠️ TRANSAÇÃO: ligar o modo e derrubar as sessões são UMA coisa só.
+    //
+    // Se o carimbo falhasse depois do modo ligar, o sistema ficaria fechado com 9 pessoas
+    // ainda contando como online — e o janela_livre.js diria OCUPADO para sempre, sem
+    // ninguém entender por quê, já que ninguém consegue mais entrar para "sair direito".
+    await cli.query('BEGIN');
 
     // O par (informou, valor) em vez de COALESCE: `modo_preparacao = false` é um valor
     // válido — é justamente o de desligar — e um COALESCE o descartaria como "não
     // informado". Seria impossível desligar pela tela. Mesma armadilha do limite_padrao.
-    const { rows } = await pool.query(
+    const { rows } = await cli.query(
       `UPDATE config_sistema
-          SET modo_preparacao = CASE WHEN $1::boolean THEN $2::boolean ELSE modo_preparacao END,
-              mensagem        = CASE WHEN $3::boolean THEN $4::text    ELSE mensagem        END,
-              atualizado_por      = $5,
-              atualizado_por_nome = $6,
+          SET modo_preparacao     = CASE WHEN $1::boolean THEN $2::boolean ELSE modo_preparacao     END,
+              mensagem            = CASE WHEN $3::boolean THEN $4::text    ELSE mensagem            END,
+              modo_manutencao     = CASE WHEN $5::boolean THEN $6::boolean ELSE modo_manutencao     END,
+              mensagem_manutencao = CASE WHEN $7::boolean THEN $8::text    ELSE mensagem_manutencao END,
+              atualizado_por      = $9,
+              atualizado_por_nome = $10,
               atualizado_em       = NOW()
         WHERE id = 1
         RETURNING *`,
       [b.modo_preparacao !== undefined, b.modo_preparacao === true,
        b.mensagem !== undefined, b.mensagem === undefined || b.mensagem === null ? null : String(b.mensagem),
+       b.modo_manutencao !== undefined, b.modo_manutencao === true,
+       b.mensagem_manutencao !== undefined,
+       b.mensagem_manutencao === undefined || b.mensagem_manutencao === null ? null : String(b.mensagem_manutencao),
        quem.id, quem.nome]
     );
-    res.json({ data: rows[0] || null, error: null });
+
+    // Só ao LIGAR. Desligar não precisa desfazer carimbo nenhum: quem entra de novo passa a
+    // ter `ultimo_acesso > sessao_fim` e volta à lista de online sozinho.
+    let derrubados = 0;
+    if (b.modo_manutencao === true) {
+      const d = await cli.query(manut.SQL_DERRUBAR);
+      derrubados = d.rowCount;
+    }
+
+    await cli.query('COMMIT');
+    res.json({ data: rows[0] || null, derrubados, error: null });
   } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }
     res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
   }
 });
 
@@ -3056,10 +3124,18 @@ async function garantirTabelaConfigSistema() {
         atualizado_em       TIMESTAMP NOT NULL DEFAULT NOW(),
         CONSTRAINT config_sistema_linha_unica CHECK (id = 1)
       )`);
+    // ⚠️ O CREATE TABLE acima NÃO altera tabela que já existe (armadilha 2 do CLAUDE.md).
+    // A config_sistema nasceu em 12/08 sem as colunas de manutenção, então elas precisam
+    // vir por ALTER — senão o modo só funcionaria em banco novo.
+    // Nascem DESLIGADAS: publicar isto não tranca ninguém.
+    await pool.query(`
+      ALTER TABLE config_sistema
+        ADD COLUMN IF NOT EXISTS modo_manutencao     BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS mensagem_manutencao TEXT`);
     // A linha 1 é o registro. Sem ela o PATCH não teria o que atualizar e a tela ficaria
     // ligando um interruptor que não existe.
     await pool.query(`INSERT INTO config_sistema (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
-    console.log('Tabela config_sistema (modo preparacao) verificada.');
+    console.log('Tabela config_sistema (modos preparacao e manutencao) verificada.');
   } catch (e) {
     console.error('Erro ao garantir config_sistema:', e.message);
   }

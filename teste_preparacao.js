@@ -149,7 +149,9 @@ console.log('\n═══ 7. TRAVAS NO server.js ═══');
 
   // ⚠️ Sem o par (informou, valor), `modo_preparacao = false` seria lido como "não
   // informado" e DESLIGAR pela tela seria impossível. É a mesma armadilha do limite_padrao.
-  conf(/modo_preparacao = CASE WHEN \$1::boolean THEN \$2::boolean ELSE modo_preparacao END/.test(src),
+  // \s+ e nao ' ': as colunas do UPDATE sao alinhadas, e alinhamento nao e' propriedade.
+  // O que importa e' o par (informou, valor), nao quantos espacos ha antes do '='.
+  conf(/modo_preparacao\s*=\s*CASE WHEN \$\d+::boolean THEN \$\d+::boolean ELSE modo_preparacao\s+END/.test(src),
        'o PATCH usa par (informou, valor) — da para DESLIGAR');
   conf(!/modo_preparacao\s*=\s*COALESCE/.test(src), 'e nao usa COALESCE, que impediria desligar');
 

@@ -239,6 +239,35 @@ lista de **inclusão** (`perfil === 'analista'`), que exclui qualquer perfil nov
     O `lib/datas.js` usa um passo só porque converte `NOW()`, que é `timestamptz` — não
     copiar de lá para coluna gravada. Em 12/08 isto mostrou 03:31 às 21:31.
 
+19. **⚠️ UM CANDIDATO SÓ ESCONDE A AMBIGUIDADE.** Ao deduzir dado (processo SGPe, número,
+    ano), gere **vários** candidatos e aceite só quando **exatamente um** se confirmar. Em
+    13/08 o `SCC7537` não tinha ano; testar só o ano da TR confirmou e quase gravou — o SGPe
+    tem `SCC 7537` em **sete** anos diferentes, e o `SCC 6579` em seis. **Link para o processo
+    errado não dá erro na tela, e ninguém percebe.** Duas confirmações são ambiguidade, não
+    confirmação.
+
+20. **⚠️ Confirmar no SGPe e não gravar em `sgpe_processo_ref` deixa o texto certo e a tela
+    SEM LINK.** O cache é o que faz o link existir — `procHtml` é um `Map.get` e nada mais.
+    Corrigir o `processo_pc` sem popular o cache não resolve nada para quem olha a tela.
+
+21. **⚠️ Validação que compara com backup antigo acusa o que rodadas anteriores fizeram de
+    propósito.** Numa correção em várias etapas, compare com uma **foto do início da rodada** —
+    a pergunta é "esta rodada mexeu no que não devia?", não "algo mudou desde ontem?".
+
+22. **⚠️ Conferência de fusão de parcela só vale para `processo_pc`, e nunca quando o valor
+    novo é igual ao antigo.** O `processo_mae` não agrupa parcial nenhuma. Em 13/08 isso
+    abortou duas rodadas com "fusões" que eram a própria PC colidindo consigo mesma.
+
+23. **⚠️ `kill` pode não pegar.** Em 13/08 uma rodada que mandei parar seguiu até o fim e só
+    notificou depois. Era dry-run e não houve dano — foi sorte de sequência. **Antes de
+    seguir, confirme que o processo morreu** (`Get-Process node`).
+
+24. **⚠️ Ao tirar um laço de requisições, confira o que era feito DENTRO dele.** O "assumir"
+    fazia um PATCH por PC — e a trava de limite era conferida a cada um. Como a PC 1 já
+    contava como assumida, o limite podia estourar no meio e deixar a TR pela metade,
+    justamente por causa da trava que existe para organizar a carga. Numa transação, a
+    conferência é UMA, antes de escrever.
+
 ---
 
 ## Método: TRABALHAR EM BLOCO, NÃO PASSO A PASSO (desde 12/08/2026)

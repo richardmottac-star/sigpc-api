@@ -20,6 +20,7 @@ const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
 const devol = require('./lib/devolucao');
 const procEdit = require('./lib/processo-edit');
+const assumir = require('./lib/assumir');
 const dup = require('./lib/duplicata');
 
 const app = express();
@@ -2242,6 +2243,101 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
+});
+
+// ══════════════════════════════════════
+//  ASSUMIR A TR INTEIRA — numa transação
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/assumir.js. Substitui o laço de PATCH por PC que a tela
+// fazia: 83 requisições em série, sem transação, com a trava de limite conferida 83 vezes.
+
+// GET /tr/:tr/assumir?usuario_id=N — a prévia do modal: quantas PCs, e se pode.
+app.get('/tr/:tr/assumir', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`,
+                                        [parseInt(req.query.usuario_id) || 0]);
+    if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+
+    const { rows: livres } = await cli.query(
+      `SELECT codigo_pc, codigo_nl FROM prestacoes_contas
+        WHERE setorial_id='FCEE' AND tr = $1 AND status = 'livre' AND analista_id IS NULL
+        ORDER BY codigo_pc`, [req.params.tr]);
+    const chk = await limiteTr.podeAssumirTr(cli, u[0], req.params.tr);
+
+    res.json({ data: { tr: req.params.tr, livres: livres.length,
+                       codigos: livres.map(r => r.codigo_pc),
+                       nls: [...new Set(livres.map(r => r.codigo_nl).filter(Boolean))],
+                       pode: chk.pode, motivo: chk.pode ? null : chk.motivo,
+                       limite: chk.limite, ocupadas: chk.ocupadas,
+                       reserva: chk.reserva || null, jaMinha: chk.jaMinha,
+                       autorizacao: chk.autorizacao ? true : false }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /tr/assumir  body { tr, usuario_id, setorial_id? }
+app.post('/tr/assumir', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const erro = assumir.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    // Preparação/manutenção antes de tudo: na manhã da preparação ninguém assume TR nenhuma.
+    if (await barrouPreparacao(res, b.usuario_id)) return;
+
+    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`,
+                                        [parseInt(b.usuario_id) || 0]);
+    if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    const quem = u[0];
+    const setorial_id = b.setorial_id || 'FCEE';
+
+    await cli.query('BEGIN');
+
+    // ⚠️ A TRAVA DE LIMITE É CONFERIDA UMA VEZ, DENTRO DA TRANSAÇÃO.
+    // No caminho antigo ela rodava a cada PATCH — e como a PC 1 já contava como assumida,
+    // uma TR podia ser aceita pela metade e recusada no resto.
+    const chk = await limiteTr.podeAssumirTr(cli, quem, b.tr);
+    if (!chk.pode) {
+      await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: {
+        message: chk.motivo, limite: chk.limite, ocupadas: chk.ocupadas, trava: true,
+        reserva: chk.reserva || null } });
+    }
+
+    const { rows: livres } = await cli.query(assumir.SQL_LIVRES, [setorial_id, b.tr]);
+    if (!livres.length) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: 'Nenhuma PC livre nesta TR — outra pessoa pode ter assumido agora.' } });
+    }
+    const codigos = livres.map(r => r.codigo_pc);
+
+    const { rows: feitas } = await cli.query(
+      assumir.SQL_ASSUMIR, [codigos, quem.id, assumir.nomeCurto(quem.nome)]);
+
+    // A autorização só é gasta quando foi ELA que liberou. Se ele estava abaixo do limite,
+    // continua guardada para a próxima — mesma regra do caminho antigo.
+    if (chk.autorizacao)
+      await cli.query(`UPDATE solicitacao_vaga SET status = 'usada' WHERE id = $1 AND status = 'aprovada'`,
+                      [chk.autorizacao.id]);
+
+    await cli.query(
+      `INSERT INTO parcela_historico
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
+       VALUES ($1, NULL, $2, 'assumir_tr', 'livre', $3, $4, $5)`,
+      [b.tr, setorial_id, assumir.nomeCurto(quem.nome), quem.id,
+       `${feitas.length} PCs assumidas` + (chk.autorizacao ? ' · com autorização de vaga extra' : '')]);
+
+    await cli.query('COMMIT');
+    res.json({ data: { tr: b.tr, assumidas: feitas.length, codigos: feitas.map(r => r.codigo_pc),
+                       analista_nome: assumir.nomeCurto(quem.nome) }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
 });
 
 // ══════════════════════════════════════

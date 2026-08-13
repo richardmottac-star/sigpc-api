@@ -134,11 +134,27 @@ const ESCRITA_RECENTE = `
     // 0. A TRAVA DE JANELA. Roda ANTES do BEGIN, e so barra quem vai gravar.
     const { rows: online } = await cli.query(ONLINE)
     const { rows: esc }    = await cli.query(ESCRITA_RECENTE)
+
+    // ⚠️ O SUPERADMIN NAO BLOQUEIA — mesma regra do janela_livre.js, e pelo mesmo motivo.
+    //
+    // O modo manutencao carimba `sessao_fim` em todos MENOS no superadmin, de proposito: e
+    // ele quem precisa continuar entrando. So que e' o mesmo que acabou de ligar o modo e
+    // esta rodando este script — contando-o, a trava recusaria para sempre, e o modo
+    // manutencao nao serviria para nada. Aconteceu de verdade em 12/08, na primeira
+    // gravacao: janela_livre disse LIVRE e o script recusou, porque so um dos dois tinha
+    // sido corrigido. Os dois criterios TEM de ser o mesmo.
+    //
+    // Seguro porque quem grava e' ele, sabendo o que faz — e uma escrita real dele ainda
+    // aparece em ESCRITA_RECENTE.
+    const bloqueiam = online.filter(u => u.perfil !== 'superadmin')
+    const admins    = online.filter(u => u.perfil === 'superadmin')
+
     console.log('── JANELA ────────────────────────────────────────────')
-    console.log(`   online agora .......... ${online.length}`)
-    online.forEach(u => console.log(`      ${u.nome} (${u.perfil}) — visto ${u.visto}`))
+    console.log(`   online agora .......... ${bloqueiam.length}`)
+    bloqueiam.forEach(u => console.log(`      ${u.nome} (${u.perfil}) — visto ${u.visto}`))
+    admins.forEach(u => console.log(`      ${u.nome} (superadmin — nao bloqueia) — visto ${u.visto}`))
     console.log(`   PCs escritas em 30 min  ${esc[0].n}${esc[0].ultima ? '   ultima: ' + esc[0].ultima : ''}`)
-    const ocupado = online.length > 0 || esc[0].n > 0
+    const ocupado = bloqueiam.length > 0 || esc[0].n > 0
     if (GRAVAR && ocupado && !FORCAR) {
       console.log('\n>> RECUSADO: ha gente trabalhando. Nada gravado.')
       console.log('   Rode `node janela_livre.js` ate dar LIVRE, ou force com --forcar.')

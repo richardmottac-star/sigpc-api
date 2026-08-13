@@ -1,4 +1,4 @@
-# SIGPC-API — ESTADO EM 12/08/2026
+# SIGPC-API — ESTADO EM 12/08/2026 (noite)
 
 Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
@@ -39,76 +39,115 @@ estavam presas desde 14/06).
 
 ---
 
-## ⚠️ O `parcial_num` NÃO É O NÚMERO DA PARCIAL DO SIGEF (13/08/2026)
+## ✅ AS PARCIAIS FORAM RENUMERADAS (12/08/2026, 22:28)
 
-**Conferido no SIGEF pela analista, nas duas TRs:**
-
-| TR | SIGEF | nosso sistema |
-|---|---|---|
-| 2020TR000637 | **1 a 19, contínuo** | 20 parciais, lacunas em 6, 7, 8, 16, 18, indo até **25** |
-| 2020TR000704 | **1 a 57, contínuo** | 57 parciais, **sem a 1** e sem a 30, indo até **59** |
-
-### De onde veio o número — está escrito no próprio script
-
-`backfill_parcial_num.js`, de 05/08, no cabeçalho:
-
-> *"a numeração atribuída aqui NÃO vem da planilha do analista; é derivada de `parcela_seq`.
-> Pode divergir do número que o analista conhece."*
-
-O campo tem **duas origens**:
-
-1. **As baixadas** receberam número na recarga de 05/08, vindo da planilha.
-2. **As pendentes** foram numeradas por esse backfill, que — nas palavras do próprio código —
-   numera *"continuando a partir do maior número já existente naquele TR"*.
-
-**É isso que produz as lacunas e os números acima do total.** A parcela que não tinha PC
-baixada ficou sem número na recarga e depois recebeu 20, 21, 22… em vez do número real.
-
-**Prova:** as parciais acima do total do SIGEF são **todas não baixadas** — 9 de 9 na 637,
-2 de 2 na 704.
-
-### O que está certo, e o que está errado
+`parcial_num` voltou a ser o número do SIGEF em **1.545 das 1.554 TRs**.
+Gravado com o sistema em **modo manutenção**, com 0 analistas online.
 
 | | |
 |---|---|
-| **A CONTAGEM está certa** | agrupar por `parcial_num` ou por `processo_pc` dá o mesmo em **1.552 das 1.554 TRs** |
-| **A NUMERAÇÃO está errada** | **60 TRs** têm `parcial_num` acima do total de parciais |
-| 704 | 57 grupos = 57 do SIGEF ✓ — só os rótulos estão trocados |
-| 637 | 20 grupos ≠ 19 do SIGEF — sobra uma, e é a do `processo_pc = '-1'` |
+| PCs renumeradas | **1.189** em 70 TRs |
+| linhas de `parcela_historico` realinhadas | **9** |
+| rótulos do SIGEF destruídos | **0** |
+| `baixada`, `data_baixa`, `enviado_ci`, PCs finais | **intactos** |
+| 2020TR000704 | **1..57 contíguo** — bate com o SIGEF ✓ |
+| 2020TR000637 | 1..20 — a sobra é a PC de `processo_pc = '-1'` |
 
-### `parcela_seq` não é o número da parcial
+### O caminho que NÃO se usou, e por quê
 
-É sequência **por PC**, não por parcela: 1..44 na 637 (que tem 19 parcelas) e 1..83 na 704
-(57 parcelas). Limpa, sem lacuna e sem repetição — mas conta outra coisa.
+O `SESSAO.md` mandava renumerar por `parcela_seq`. Foi **medido contra gabarito e
+reprovado**: reescreveria **592 parcelas** (1.017 PCs, 67 TRs) cujo rótulo veio da planilha
+do analista — que é o número do SIGEF. Na própria 704, 44 dos 48 rótulos conferidos mudariam.
 
-**O que ela serve:** dar a ORDEM. Renumerar os grupos por `parcela_seq` produziria 1..N
-contínuo, que é a forma do SIGEF.
+**`parcela_seq` não é a ordem do SIGEF**: na 704 a parcial 2 tem `parcela_seq` 10 e a
+parcial 3 tem `parcela_seq` 2.
 
-### A regra que o backfill assumiu, e que se confirma
+O gabarito: as **3.281 PCs** baixadas que já tinham número **antes** do backfill de 05/08 —
+**1.792 parcelas em 529 TRs**. Está no `_backup_parcial_num_20260805`. **Não apagar.**
 
-**Uma parcial = (tr, processo_pc).** O SGPe é o identificador da parcela; as várias PCs de
-uma parcela compartilham o mesmo processo. Agrupar por SGPe dá o mesmo número que agrupar
-por `parcial_num` em 1.552 TRs — os dois caminhos concordam.
+O que se fez: **preservar o rótulo da planilha e preencher só a lacuna.** E se provou
+sozinho — a `SCC14533/2022` caiu no 30, vizinha da `SCC14522/2022` que é 29; as de 2023
+fecharam monotônicas no SGPe (18668→47, 18699→48, 18715→49, 18788→50, 18792→51).
 
-### O que NÃO fazer
+### Reverter
 
-⚠️ **Não apagar a "parcial 51" da 704.** Ela é a PC `2020PC000474`, `parcela_seq = 1` — a
-primeira PC da TR, que deveria ser a parcial 1. Apagá-la apagaria a parcial 1.
+```
+_backup_parcial_num_20260813        (14.652 linhas, com codigo_pc)
+_backup_parcela_historico_20260813  (24 linhas)
+reverter_renumeracao_20260813.json  (a lista explícita — regra 12)
+```
 
-⚠️ **Não confiar no `parcial_num` para conversar com o analista.** Ele não é o número que
-está no SIGEF. Enquanto não for renumerado, a referência é o **processo SGPe**.
+### As 9 TRs de fora — problema de DADO, não de numeração
 
-⚠️ **E isto põe em dúvida a leitura das 79 PCs com `processo_pc = '-1'`.** Se `parcial_num`
-veio errado, um campo ruim não prova linha inventada. A conferência dos analistas contra o
-SIGEF passa a ser indispensável — ver `pcs_sgpe_-1.csv`.
+7 têm rótulo acima do total de parcelas — o SIGEF tem parcela que a base **não tem**:
+623 (44,45), **638 (27 a 33 — faltam 7)**, 681 (25), 718 (17), 722 (47,48,49), 809 (12),
+2385 (3). E 2 têm o mesmo SGPe em duas grafias: **791** (`SCC 4813/2024` e
+`SCC 00004813/2024`) e **967** (`SCC15029/2022` e `SCC 00015029/2022`) — normalizar o
+`processo_pc` resolve as duas e elas passam a fechar 1..N sozinhas.
 
-### O caminho, quando for a hora
+---
 
-Renumerar `parcial_num` por TR, na ordem de `parcela_seq`, agrupando por `processo_pc`:
-1..N contínuo. Resolve os rótulos das 60 TRs. **Não resolve** a PC a mais da 637, que é
-outro problema (dado, não numeração).
+## 🔒 MODO MANUTENÇÃO — no ar desde 12/08/2026
 
-⚠️ Existe backup da numeração anterior: `_backup_parcial_num_20260805`.
+A janela segura de escrita. Antes dele, gravar dependia de pedir no WhatsApp e esperar 30
+min de inércia do `ultimo_acesso`. **Funcionou na primeira: de 3 analistas online para 0.**
+
+Configurações → **Modo manutenção**. Liga, escreve a mensagem, grava, desliga.
+
+### Manutenção ≠ preparação
+
+| | preparação | manutenção |
+|---|---|---|
+| entra? | sim, e a tela limita | **não** |
+| isentos | superadmin **e coordenador** | **só superadmin** |
+| quem já está dentro | vira tela restrita | **cai a sessão** |
+
+### ⚠️ São TRÊS mecanismos, e os três são necessários
+
+1. **`sessao_fim = clock_timestamp()`** em todos menos o superadmin, na MESMA transação que
+   liga o modo. `clock_timestamp()` e não `NOW()` — o `NOW()` é o instante da transação, e
+   carimbos iguais fariam `sessao_fim < ultimo_acesso` não valer.
+2. **`PATCH /usuarios/:id` recusa quem não é superadmin.** **SEM ISTO O ITEM 1 NÃO SEGURA:**
+   `onlineCarregar()` bate de 5 em 5 min e levantaria `ultimo_acesso` de volta,
+   ressuscitando a pessoa na lista. A janela se fecharia sozinha em cinco minutos.
+3. **O polling de `config_sistema`, agora de 20 s**, derruba a tela de quem está dentro.
+
+⚠️ **O `POST /usuarios/logout` NUNCA é barrado** — se recusasse, `sair()` falharia justo
+quando é mais necessária.
+
+⚠️ **Continua sendo CORTINA, não tranca.** Sem camada de autorização, quem montar um pedido
+HTTP passa. Antes de gravar, o `janela_livre.js` é a conferência final.
+
+### Como saber se pode gravar
+
+```bash
+node janela_livre.js            # uma foto
+node janela_livre.js --vigiar   # reconsulta a cada 2 min até dar LIVRE
+```
+
+Três sinais: online, PC escrita em 30 min, evento de parcela em 30 min.
+
+⚠️ **O superadmin NÃO bloqueia a janela** — nem aqui nem no `renumerar_parcial_num.js`.
+Ele nunca é derrubado (de propósito), mas é o mesmo que ligou o modo e está rodando o
+script. **Custou uma recusa em 12/08: um dos dois critérios tinha sido corrigido e o outro
+não.** Se houver dois critérios de "pode gravar", eles têm de ser o mesmo.
+
+---
+
+## ⚠️ O FUSO — defeito de 12/08, corrigido
+
+`usuarios.ultimo_acesso`, `sessao_fim`, `prestacoes_contas.atualizado_em` e
+`parcela_historico.criado_em` são `timestamp WITHOUT time zone` **guardando UTC**.
+
+`col AT TIME ZONE 'America/Sao_Paulo'` num naive **interpreta** o valor como sendo de
+Brasília e **soma 3 h**. Mostrou 03:31 às 21:31. O certo:
+
+```sql
+(col AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'
+```
+
+O `lib/datas.js` usa um passo só porque converte `NOW()`, que é `timestamptz`. **Não copiar
+de lá para coluna gravada.**
 
 ## O QUE FOI FEITO EM 12/08
 

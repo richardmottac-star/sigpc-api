@@ -199,14 +199,45 @@ lista de **inclusão** (`perfil === 'analista'`), que exclui qualquer perfil nov
     fazia nada. Todo botão de ação nasce desabilitado e é habilitado no caminho que o
     autoriza — com o motivo no `title` quando não estiver.
 
-16. **⚠️ `parcial_num` NÃO é o número da parcial do SIGEF.** Ele tem duas origens: a recarga
-    de 05/08 (nas baixadas) e o `backfill_parcial_num.js` (nas pendentes), que numera
-    *"continuando a partir do maior número já existente naquele TR"* — está escrito no
-    cabeçalho do próprio script. Daí as lacunas e os números acima do total, em **60 TRs**.
-    A **contagem** está certa em 1.552 de 1.554 TRs; os **rótulos** é que não são os do
-    SIGEF. **Uma parcial = (tr, processo_pc)** — o SGPe é o identificador da parcela, e é a
-    referência para conversar com o analista. Conferido com o SIGEF em 13/08; detalhe e
-    caminho de correção no `SESSAO.md`.
+16. **`parcial_num` VOLTOU a ser o número do SIGEF — em 1.545 das 1.554 TRs.**
+    Renumerado em 12/08/2026 (`renumerar_parcial_num.js`). **Uma parcial = (tr, processo_pc)**.
+
+    ⚠️ **NÃO renumerar por `parcela_seq`.** Era o caminho escrito aqui até 12/08, e foi
+    **medido e reprovado**: reescrevia **592 parcelas** (1.017 PCs, 67 TRs) cujo rótulo veio
+    da planilha do analista — que é o número do SIGEF. `parcela_seq` **não é a ordem do
+    SIGEF**: na 2020TR000704 a parcial 2 tem `parcela_seq` 10 e a parcial 3 tem `parcela_seq` 2.
+
+    O que se fez: **preservar o rótulo da planilha e preencher só a lacuna.** Os números
+    livres de 1..N vão para as parcelas sem rótulo, na ordem de `parcela_seq`, com o grupo
+    `processo_pc = '-1'` por último.
+
+    ⚠️ **O gabarito é o `_backup_parcial_num_20260805`** — os rótulos numéricos dele são os
+    do SIGEF (3.281 PCs, 1.792 parcelas, 529 TRs). **Não apagar essa tabela.**
+
+    ⚠️ **9 TRs ficaram de fora, e nenhuma é problema de numeração:** 7 têm rótulo acima do
+    total de parcelas (o SIGEF tem parcela que a base não tem — a 2020TR000638 tem 7
+    faltando: 623, 638, 681, 718, 722, 809, 2385) e 2 têm o mesmo SGPe em duas grafias
+    (791: `SCC 4813/2024` e `SCC 00004813/2024`; 967: `SCC15029/2022` e `SCC 00015029/2022`).
+    Nelas a referência continua sendo o processo SGPe.
+
+    ⚠️ **A 2020TR000637 fecha 1..20, mas o SIGEF tem 19.** A sobra é a PC de
+    `processo_pc = '-1'`, isolada no 20 de propósito. É problema de DADO — ver `pcs_sgpe_-1.csv`.
+
+17. **⚠️ Ao criar trava de janela de escrita, o superadmin NÃO bloqueia.** O modo manutenção
+    carimba `sessao_fim` em todos menos nele, de propósito — é ele quem precisa continuar
+    entrando. Mas é o mesmo que acabou de ligar o modo e está rodando o script: contando-o,
+    a trava recusa para sempre. Aconteceu em 12/08, na primeira gravação: o `janela_livre.js`
+    dizia LIVRE e o `renumerar_parcial_num.js` recusava, porque só um dos dois tinha sido
+    corrigido. **Se houver dois critérios de "pode gravar", eles têm de ser o mesmo.**
+
+18. **⚠️ `AT TIME ZONE` sozinho está errado para coluna `timestamp` que guarda UTC.**
+    `usuarios.ultimo_acesso`, `sessao_fim`, `prestacoes_contas.atualizado_em` e
+    `parcela_historico.criado_em` são `timestamp WITHOUT time zone` **com valor em UTC**.
+    Para um naive, `col AT TIME ZONE 'America/Sao_Paulo'` **interpreta** o valor como sendo
+    de Brasília e SOMA 3 h. O certo são dois passos:
+    `(col AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'`.
+    O `lib/datas.js` usa um passo só porque converte `NOW()`, que é `timestamptz` — não
+    copiar de lá para coluna gravada. Em 12/08 isto mostrou 03:31 às 21:31.
 
 ---
 

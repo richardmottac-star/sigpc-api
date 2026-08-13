@@ -18,6 +18,7 @@ const auth = require('./lib/auth');
 const prep = require('./lib/preparacao');
 const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
+const devol = require('./lib/devolucao');
 const dup = require('./lib/duplicata');
 
 const app = express();
@@ -2157,6 +2158,20 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
     // já tinha começado. E nunca sobrescreve o que foi definido à mão.
     if (campos.status === 'analise' && await temInicioAnalise()) sets.push(`dt_inicio_analise = COALESCE(dt_inicio_analise, NOW())`);
 
+    // ⚠️ `dt_assumida` É O OPOSTO DA DE CIMA, E DE PROPÓSITO.
+    //
+    // Sem COALESCE: ela responde "quando ESTE analista pegou a TR", e por isso REINICIA a
+    // cada assunção. `dt_inicio_analise` responde "quando a análise começou" e não reinicia
+    // nunca — é o relógio do prazo. Duas perguntas diferentes, dois campos.
+    //
+    // A distinção passou a importar quando a devolução ganhou botão: depois de devolver e
+    // outro analista assumir, `dt_inicio_analise` continuaria mostrando a data do analista
+    // ANTERIOR. Usá-la como "assumida em" seria mostrar data errada no cartão.
+    //
+    // A condição é a mesma da trava de TRs — analista + status 'analise' é a forma do
+    // "assumir". Mudar de situação ou enviar ao C.I. não passa por aqui.
+    if (campos.analista_id && campos.status === 'analise') sets.push(`dt_assumida = NOW()`);
+
     sets.push(`atualizado_em = NOW()`);
     values.push(req.params.codigo_pc);
     const { rows } = await pool.query(
@@ -2226,6 +2241,128 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
+});
+
+// ══════════════════════════════════════
+//  DEVOLVER A TR AO ESTOQUE — só superadmin
+// ══════════════════════════════════════
+// A regra e o histórico dos três defeitos estão em lib/devolucao.js. Aqui só a transação,
+// a conferência de quem pede e o registro.
+
+/** Lê as PCs da TR e resume. Usado pela prévia E pela gravação — uma conta só. */
+async function lerTrParaDevolucao(cli, tr, comLock) {
+  const { rows } = await cli.query(
+    `SELECT codigo_pc, baixada, ci_situacao, analista_id, analista_nome
+       FROM prestacoes_contas
+      WHERE setorial_id = 'FCEE' AND tr = $1
+      ORDER BY codigo_pc${comLock ? ' FOR UPDATE' : ''}`, [tr]);
+  return { pcs: rows, resumo: devol.resumir(rows) };
+}
+
+/** Quem pede é superadmin? Conferido pelo BANCO, nunca pelo corpo do pedido. */
+async function ehSuperadmin(cli, usuarioId) {
+  const { rows } = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+                                   [parseInt(usuarioId) || 0]);
+  return rows[0] && rows[0].perfil === 'superadmin' ? rows[0] : null;
+}
+
+// GET /tr/:tr/devolucao?usuario_id=N — a prévia que o modal desenha.
+// ⚠️ A PRÉVIA E A GRAVAÇÃO USAM A MESMA CONTA (`devol.resumir` + `devol.impedimento`). Se
+// cada uma calculasse do seu jeito, o modal diria 71 e o banco devolveria outro número.
+app.get('/tr/:tr/devolucao', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await ehSuperadmin(cli, req.query.usuario_id);
+    if (!quem)
+      return res.status(403).json({ data: null, error: { message: 'Só o superadmin devolve TR ao estoque.' } });
+
+    const { resumo } = await lerTrParaDevolucao(cli, req.params.tr, false);
+    if (!resumo.total)
+      return res.status(404).json({ data: null, error: { message: 'TR não encontrada.' } });
+
+    res.json({ data: { ...resumo, tr: req.params.tr, motivos: devol.MOTIVOS,
+                       impedimento: devol.impedimento(resumo) }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /tr/devolver  body { tr, usuario_id, motivo, detalhe? }
+app.post('/tr/devolver', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const erro = devol.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const quem = await ehSuperadmin(cli, b.usuario_id);
+    if (!quem)
+      return res.status(403).json({ data: null, error: { message: 'Só o superadmin devolve TR ao estoque.' } });
+
+    await cli.query('BEGIN');
+
+    // ⚠️ FOR UPDATE, e a lista capturada ANTES de escrever (regra 12). Sem o lock, duas
+    // devoluções simultâneas — ou uma devolução e um "assumir" — leriam o mesmo estado e a
+    // segunda escreveria por cima de decisão tomada sobre dado velho.
+    const { resumo } = await lerTrParaDevolucao(cli, b.tr, true);
+    if (!resumo.total) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'TR não encontrada.' } });
+    }
+
+    // Reconferido DENTRO da transação, e não só na prévia: entre abrir o modal e clicar,
+    // uma PC pode ter ido para o Controle Interno.
+    const imped = devol.impedimento(resumo);
+    if (imped) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: imped, resumo } });
+    }
+
+    const { rows: devolvidas } = await cli.query(devol.SQL_DEVOLVER, [resumo.codigos]);
+
+    // O rastro. Sem ele, uma TR sumia da planilha do analista sem que nada dissesse por quê.
+    const texto = devol.motivoTexto(b);
+    const { rows: hist } = await cli.query(
+      `INSERT INTO parcela_historico
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
+       VALUES ($1, NULL, 'FCEE', 'devolucao_tr', $2, 'livre', $3, $4)
+       RETURNING id`,
+      [b.tr,
+       resumo.analista_nome ? `${resumo.analista_nome} (id ${resumo.analista_id})` : 'sem dono',
+       quem.id,
+       `${texto} · ${devolvidas.length} PCs devolvidas · ${resumo.baixadas} baixadas mantidas`]);
+
+    await cli.query('COMMIT');
+
+    // Avisa DEPOIS do COMMIT: notificação de algo que não foi gravado é pior que nenhuma.
+    // Uma por TR, não por PC — 71 avisos iguais fariam o sino deixar de ser lido.
+    if (resumo.analista_id) {
+      notif.criar(pool, {
+        destinatario_id: resumo.analista_id,
+        tipo: 'recado',
+        titulo: `TR ${b.tr} devolvida ao estoque`,
+        mensagem: `${devolvidas.length} PC${devolvidas.length > 1 ? 's' : ''} da TR ${b.tr} ` +
+                  `voltaram ao estoque. Motivo: ${texto}.` +
+                  (resumo.baixadas ? ` As ${resumo.baixadas} já baixadas continuam suas.` : ''),
+        // ⚠️ O `ref_id` É O ID DO HISTÓRICO, NÃO A TR.
+        //
+        // `notif.criar` deduplica por (destinatario, tipo, ref_id). Com a TR no `ref_id`, a
+        // SEGUNDA devolução da mesma TR ao mesmo analista seria engolida em silêncio — ele
+        // perderia a TR sem ser avisado. É a mesma armadilha do `num_diligencia`, que o
+        // ciclo do C.I. resolveu pondo a rodada no `ref_id`.
+        //
+        // Com o id do histórico, cada devolução é um evento próprio e o dedupe continua
+        // servindo ao que serve: um clique repetido não vira dois avisos.
+        ref_tipo: 'tr', ref_id: `devtr-${hist[0].id}`,
+      }).catch(e => console.error('Falha ao notificar devolucao:', e.message));
+    }
+
+    res.json({ data: { tr: b.tr, devolvidas: devolvidas.length, baixadas_mantidas: resumo.baixadas,
+                       analista_id: resumo.analista_id, motivo: texto }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
 });
 
 // ══════════════════════════════════════

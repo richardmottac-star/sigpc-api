@@ -23,6 +23,7 @@ const devol = require('./lib/devolucao');
 // hora; esta é o PEDIDO do analista, que espera decisão. Quando o pedido é aprovado, quem
 // devolve de fato continua sendo a `devol` — na mesma transação.
 const devolPed = require('./lib/devolucao-pedido');
+const autoria = require('./lib/autoria');
 const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
 const bg = require('./lib/busca-global');
@@ -3040,14 +3041,42 @@ const SITUACAO_PARA_STATUS = {
   'Aguardando documentação': 'analise'
 };
 
+// ⚠️ `analista_id` é o DONO do trabalho; `executado_por` é QUEM CLICOU, e fica NULO quando
+// são a mesma pessoa. Nulo quer dizer "foi ele mesmo" — preencher sempre tiraria o sinal, e o
+// que importa achar é a linha em que os dois DIFEREM. Ver `lib/autoria.js`.
 function registrarHistorico(cli, h) {
   return cli.query(
     `INSERT INTO parcela_historico
-       (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+       (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id,
+        observacao, executado_por)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [h.tr, h.parcial_num, h.setorial_id, h.evento,
-     h.valor_anterior ?? null, h.valor_novo ?? null, h.analista_id ?? null, h.observacao ?? null]
+     h.valor_anterior ?? null, h.valor_novo ?? null, h.analista_id ?? null, h.observacao ?? null,
+     h.executado_por ?? null]
   );
+}
+
+/**
+ * Quem é o dono e quem executou — resolvido no SERVIDOR, contra o perfil lido no BANCO.
+ *
+ * O corpo manda `analista_id` (o dono) e, quando a ação é feita pela conta de outro,
+ * `executado_por` (quem clicou). Quem carimba é o `fetch` do navegador, num ponto só — mas
+ * ⚠️ CARIMBO POSTO PELO NAVEGADOR É CARIMBO QUE O NAVEGADOR TIRA. A conferência de quem pode
+ * agir por outro é aqui, e só o superadmin pode.
+ *
+ * @returns null quando está tudo certo (e preenche `b._autoria`), ou já respondeu 403/400.
+ */
+async function resolverAutoria(cli, b, res) {
+  const quemId = b.executado_por ?? b.analista_id;
+  const { rows } = await cli.query(
+    `SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(quemId) || 0]);
+  const quem = rows[0] || null;
+
+  const r = autoria.resolver(quem, b.analista_id);
+  if (!r.ok) { res.status(quem ? 403 : 401).json({ data: null, error: { message: r.erro } }); return true; }
+
+  b._autoria = { ...r, executor_nome: r.porOutro ? quem.nome : null };
+  return false;
 }
 
 // Carrega as PCs da parcial com lock, para a transacao ser toda-ou-nenhuma.
@@ -3107,6 +3136,9 @@ app.post('/parcela/parecer', async (req, res) => {
   const cli = await pool.connect();
   try {
     await cli.query('BEGIN');
+    // ⚠️ QUEM E O DONO E QUEM EXECUTOU — resolvido contra o perfil lido no BANCO. Dentro
+    // da transacao, para nao decidir sobre um cadastro que mudou no meio.
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
     const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
     if (pcs.length === 0) {
       await cli.query('ROLLBACK');
@@ -3159,7 +3191,10 @@ app.post('/parcela/parecer', async (req, res) => {
       valor_anterior: pcs[0].situacao_atual || pcs[0].status || null,
       valor_novo: b.parecer_tipo,
       analista_id: b.analista_id ?? null,
-      observacao: b.observacao ?? null
+      // ⚠️ A marca vai na coluna E no texto: a coluna serve para CONSULTAR, o texto para
+      // quem abre uma linha solta. Só a coluna repetiria o erro do `registrado_por`.
+      observacao: autoria.observacaoCom(b.observacao, b._autoria, b._autoria?.executor_nome),
+      executado_por: b._autoria?.executado_por ?? null
     });
 
     await cli.query('COMMIT');
@@ -3223,6 +3258,9 @@ app.post('/parcela/resposta_diligencia', async (req, res) => {
   const cli = await pool.connect();
   try {
     await cli.query('BEGIN');
+    // ⚠️ QUEM E O DONO E QUEM EXECUTOU — resolvido contra o perfil lido no BANCO. Dentro
+    // da transacao, para nao decidir sobre um cadastro que mudou no meio.
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
     const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
     if (pcs.length === 0) {
       await cli.query('ROLLBACK');
@@ -3247,7 +3285,8 @@ app.post('/parcela/resposta_diligencia', async (req, res) => {
         : null,
       valor_novo: null,
       analista_id: b.analista_id ?? null,
-      observacao: b.observacao ?? null,
+      observacao: autoria.observacaoCom(b.observacao, b._autoria, b._autoria?.executor_nome),
+      executado_por: b._autoria?.executado_por ?? null,
     });
     await cli.query('COMMIT');
     res.json({ data: { tr: b.tr, parcial_num: String(b.parcial_num), registrado: true }, error: null });
@@ -3278,6 +3317,9 @@ app.post('/parcela/situacao', async (req, res) => {
   const cli = await pool.connect();
   try {
     await cli.query('BEGIN');
+    // ⚠️ QUEM E O DONO E QUEM EXECUTOU — resolvido contra o perfil lido no BANCO. Dentro
+    // da transacao, para nao decidir sobre um cadastro que mudou no meio.
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
     const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
     if (pcs.length === 0) {
       await cli.query('ROLLBACK');
@@ -3311,7 +3353,10 @@ app.post('/parcela/situacao', async (req, res) => {
       valor_anterior: pcs[0].situacao_atual || pcs[0].status || null,
       valor_novo: b.situacao,
       analista_id: b.analista_id ?? null,
-      observacao: b.observacao ?? null
+      // ⚠️ A marca vai na coluna E no texto: a coluna serve para CONSULTAR, o texto para
+      // quem abre uma linha solta. Só a coluna repetiria o erro do `registrado_por`.
+      observacao: autoria.observacaoCom(b.observacao, b._autoria, b._autoria?.executor_nome),
+      executado_por: b._autoria?.executado_por ?? null
     });
 
     await cli.query('COMMIT');
@@ -3340,6 +3385,9 @@ app.post('/parcela/ci', async (req, res) => {
   const cli = await pool.connect();
   try {
     await cli.query('BEGIN');
+    // ⚠️ QUEM E O DONO E QUEM EXECUTOU — resolvido contra o perfil lido no BANCO. Dentro
+    // da transacao, para nao decidir sobre um cadastro que mudou no meio.
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
     const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
     if (pcs.length === 0) {
       await cli.query('ROLLBACK');
@@ -3376,7 +3424,10 @@ app.post('/parcela/ci', async (req, res) => {
       valor_anterior: pcs.find(p => p.parecer_tipo)?.parecer_tipo || null,
       valor_novo: 'enviado_ci = true',
       analista_id: b.analista_id ?? null,
-      observacao: b.observacao ?? null
+      // ⚠️ A marca vai na coluna E no texto: a coluna serve para CONSULTAR, o texto para
+      // quem abre uma linha solta. Só a coluna repetiria o erro do `registrado_por`.
+      observacao: autoria.observacaoCom(b.observacao, b._autoria, b._autoria?.executor_nome),
+      executado_por: b._autoria?.executado_por ?? null
     });
 
     await cli.query('COMMIT');
@@ -3408,6 +3459,10 @@ app.post('/parcela/estornar', async (req, res) => {
   const cli = await pool.connect();
   try {
     await cli.query('BEGIN');
+    // ⚠️ O ESTORNO NÃO PASSA PELA AUTORIA DUPLA, de propósito. Não é trabalho do analista: é
+    // decisão de coordenação SOBRE o trabalho dele, e já tem autoria própria (`estornado_por`
+    // e `motivo_estorno`). É uma das quatro travas que FICAM no modo "ver como" — e o corpo
+    // dele nem manda `analista_id`, manda `usuario_id` e `perfil`.
     const pcs = await carregarParcela(cli, b.tr, b.parcial_num, setorial_id);
     if (pcs.length === 0) {
       await cli.query('ROLLBACK');

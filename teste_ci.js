@@ -191,8 +191,9 @@ console.log('\n═══ 9. TRAVAS NO server.js ═══');
   conf(/app\.post\('\/ci\/decidir'/.test(src), 'POST /ci/decidir existe');
   conf(/app\.post\('\/ci\/responder'/.test(src), 'POST /ci/responder existe');
   // Quem decide e conferido pelo BANCO, nao pelo `perfil` do corpo.
-  conf(/SELECT id, nome, perfil FROM usuarios WHERE id = \$1[\s\S]{0,400}?controle_interno', 'coordenador', 'superadmin'/.test(src),
-       'so o CI (ou coordenacao) decide, conferido pelo banco');
+  // ⚠️ Em 14/08 entrou o PERFIL EFETIVO: no papel analista o superadmin não decide no C.I.
+  conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = \$1[\s\S]{0,400}?papel\.perfilEfetivo\(autor\)/.test(src),
+       'so o CI (ou coordenacao) decide, conferido pelo banco e pelo PAPEL ATIVO');
   // A rodada no ref_id e o que faz a SEGUNDA volta avisar.
   conf(/ci_ressalva\|\$\{\(g\.rodada \|\| 1\) \+ 1\}/.test(src), 'o ref_id da ressalva carrega a rodada');
   conf(/ci_resposta\|\$\{g\.rodada \|\| 1\}/.test(src), 'e o da resposta tambem');

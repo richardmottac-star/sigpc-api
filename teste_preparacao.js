@@ -156,8 +156,10 @@ console.log('\n═══ 7. TRAVAS NO server.js ═══');
   conf(!/modo_preparacao\s*=\s*COALESCE/.test(src), 'e nao usa COALESCE, que impediria desligar');
 
   // Quem liga e desliga é conferido pelo BANCO, não pelo `perfil` do corpo.
-  conf(/SELECT id, nome, perfil FROM usuarios WHERE id = \$1[\s\S]{0,300}?quem\.perfil !== 'superadmin'/.test(src),
-       'so superadmin altera, conferido pelo banco');
+  // ⚠️ Em 14/08 a leitura passou a trazer `papel_ativo` e a conferência passou a usar o
+  // PERFIL EFETIVO: no papel analista o superadmin não liga nem desliga os modos.
+  conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = \$1[\s\S]{0,300}?papel\.perfilEfetivo\(quem\) !== 'superadmin'/.test(src),
+       'so superadmin altera, conferido pelo banco e pelo PAPEL ATIVO');
 
   // As seis portas de trabalho.
   const portas = (src.match(/await barrouPreparacao\(/g) || []).length;

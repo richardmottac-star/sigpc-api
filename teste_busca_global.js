@@ -156,8 +156,11 @@ secao('10. TRAVAS NO server.js');
 const src = fs.readFileSync('./server.js', 'utf8');
 const rota = src.slice(src.indexOf("app.get('/busca_global'"), src.indexOf("app.get('/busca_global'") + 3600);
 
-conf(/perfil !== 'superadmin'/.test(rota), 'a rota confere superadmin');
-conf(/SELECT id, nome, perfil FROM usuarios WHERE id/.test(rota), 'e o perfil vem do BANCO');
+// ⚠️ Em 14/08 a conferência passou a usar o PERFIL EFETIVO: a busca global é do TÉCNICO do
+// sistema, e no papel analista o superadmin leva 403 como qualquer analista.
+conf(/papel\.perfilEfetivo\(u\[0\]\) !== 'superadmin'/.test(rota), 'a rota confere o PAPEL ATIVO');
+conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id/.test(rota),
+     'e o perfil vem do BANCO');
 conf(/403/.test(rota), 'quem nao e superadmin leva 403');
 // ⚠️ O defeito de 09/08: com a busca no mesmo WHERE das agregacoes, as contagens passam a
 // ver so as linhas que casaram.

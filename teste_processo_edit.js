@@ -67,7 +67,9 @@ const rota = src.slice(src.indexOf("app.patch('/prestacoes_contas/:codigo_pc/pro
 conf(/quemEdita/.test(rota), 'confere quem edita');
 conf(/PERFIS_EDITAM_PROCESSO = \['analista', 'coordenador', 'superadmin'\]/.test(src),
      'analista, coordenador e superadmin — como o Richard pediu');
-conf(/SELECT id, nome, perfil FROM usuarios WHERE id = \$1/.test(
+// A leitura passou a trazer `papel_ativo` em 14/08 — corrigir processo continua valendo nos
+// dois papéis (é trabalho de analista), mas a coluna vem junto em toda leitura de usuário.
+conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = \$1/.test(
        src.slice(src.indexOf('async function quemEdita'), src.indexOf('async function quemEdita') + 300)),
      'e o perfil vem do BANCO, nao do corpo');
 conf(/barrouPreparacao/.test(rota), 'e respeita preparacao/manutencao');

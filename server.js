@@ -24,6 +24,21 @@ const devol = require('./lib/devolucao');
 // devolve de fato continua sendo a `devol` — na mesma transação.
 const devolPed = require('./lib/devolucao-pedido');
 const autoria = require('./lib/autoria');
+const papel = require('./lib/papel');
+
+/**
+ * O usuário, lido do BANCO — inclusive o `papel_ativo`.
+ *
+ * ⚠️ Declarada AQUI, no topo, porque a guarda de papel a usa em rotas que vêm muito antes da
+ * seção do pedido de devolução. Função declarada com `function` sobe (hoisting); a antiga,
+ * lá embaixo, foi removida para não haver duas.
+ */
+async function lerUsuario(cli, id) {
+  const { rows } = await cli.query(
+    `SELECT id, nome, perfil, grupo, ativo, papel_ativo FROM usuarios WHERE id = $1`,
+    [parseInt(id) || 0]);
+  return rows[0] || null;
+}
 const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
 const bg = require('./lib/busca-global');
@@ -298,6 +313,19 @@ app.post('/usuarios/login', async (req, res) => {
     // o login aconteceu de verdade.
     pool.query('UPDATE usuarios SET ultimo_acesso = NOW() WHERE id = $1', [u.id]).catch(() => {});
 
+    // ⚠️ O PAPEL VOLTA PARA 'analista' A CADA LOGIN. Se ele sobrevivesse à sessão, uma
+    // entrada de manhã continuaria com o acesso de ontem à noite, e trocar deixaria de ser
+    // ato deliberado. O reset é do SERVIDOR: o navegador não tem como esquecer de fazê-lo.
+    if (u.perfil === papel.PERFIL_COM_PAPEL) {
+      try {
+        const { rows: mudou } = await pool.query(papel.SQL_RESETAR_NO_LOGIN, [u.id]);
+        u.papel_ativo = papel.PADRAO;
+        // Só registra quando REALMENTE mudou: uma linha por login normal encheria a trilha
+        // de ruído e esconderia a troca deliberada, que é o que se quer enxergar.
+        if (mudou.length) await pool.query(papel.SQL_REGISTRAR, [u.id, papel.PADRAO, 'login']);
+      } catch (e) { console.error('Falha ao resetar papel no login:', e.message); }
+    }
+
     res.json({ data: auth.semSegredo(u), error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
@@ -423,8 +451,10 @@ app.patch('/usuarios/:id', async (req, res) => {
 // body { perfil } — só superadmin pode excluir
 app.delete('/usuarios/:id', async (req, res) => {
   try {
-    const { perfil } = req.body || {};
-    if (perfil !== 'superadmin')
+    // ⚠️ O perfil vem do BANCO, pelo usuario_id — o `perfil` do corpo nunca provou nada,
+    // e com a troca de papel ele passaria por cima da guarda inteira.
+    const quem = await lerUsuario(pool, (req.body || {}).usuario_id);
+    if (papel.perfilEfetivo(quem) !== 'superadmin')
       return res.status(403).json({ data: null, error: { message: 'Apenas superadmin pode excluir usuários' } });
     const id = parseInt(req.params.id);
     const vinc = await pool.query('SELECT COUNT(*) FROM prestacoes_contas WHERE analista_id = $1', [id]);
@@ -521,9 +551,9 @@ app.post('/usuarios/mesclar', async (req, res) => {
   try {
     const { id_novo, id_existente, autor_id } = req.body || {};
 
-    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
+    const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
     const autor = q.rows[0];
-    if (!autor || !['coordenador', 'superadmin'].includes(autor.perfil))
+    if (!autor || !['coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin pode mesclar cadastros.' } });
 
     await cli.query('BEGIN');
@@ -573,6 +603,57 @@ app.post('/usuarios/mesclar', async (req, res) => {
 });
 
 // PATCH /usuarios/:id/aprovar — body opcional { grupo }
+// ══════════════════════════════════════
+//  TROCA DE PAPEL DO SUPERADMIN  (14/08/2026)
+// ══════════════════════════════════════
+// ⚠️ ROTA DE NOME FIXO ANTES DA `/usuarios/:id` genérica? Não é o caso aqui: `:id/papel` tem
+// um segmento a mais, e o Express casa pelo formato inteiro. Mas fica ao lado das outras
+// `/:id/...` de propósito, para não se perder no meio das rotas de trabalho.
+//
+// PATCH /usuarios/:id/papel — body { papel, usuario_id }
+app.patch('/usuarios/:id/papel', async (req, res) => {
+  const b = req.body || {};
+  const cli = await pool.connect();
+  try {
+    // Quem pede é lido do BANCO. O corpo diz o que quer; o banco diz quem é.
+    const quem = await lerUsuario(cli, b.usuario_id);
+    const erro = papel.validarTroca(quem, req.params.id, b.papel);
+    if (erro) return res.status(quem ? 403 : 401).json({ data: null, error: { message: erro } });
+
+    await cli.query('BEGIN');
+    const { rows } = await cli.query(papel.SQL_TROCAR, [quem.id, b.papel]);
+    if (!rows.length) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    }
+    // ⚠️ O registro vai na MESMA transação da troca. Fora dela, uma falha depois do UPDATE
+    // deixaria o papel trocado sem nada dizendo quando — e é justamente o quando que o
+    // Richard pediu para registrar.
+    await cli.query(papel.SQL_REGISTRAR, [quem.id, b.papel, 'troca']);
+    await cli.query('COMMIT');
+
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// GET /usuarios/:id/papel — o papel de agora e as últimas trocas.
+app.get('/usuarios/:id/papel', async (req, res) => {
+  try {
+    const u = await lerUsuario(pool, req.params.id);
+    if (!u) return res.status(404).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    const { rows } = await pool.query(
+      `SELECT papel, origem, criado_em FROM papel_historico
+        WHERE usuario_id = $1 ORDER BY criado_em DESC LIMIT 20`, [u.id]);
+    res.json({ data: { papel_ativo: u.papel_ativo || papel.PADRAO,
+                       pode_trocar: papel.podeTrocar(u), historico: rows }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 app.patch('/usuarios/:id/aprovar', async (req, res) => {
   try {
     const { grupo } = req.body || {};
@@ -930,8 +1011,9 @@ app.post('/repositorio', async (req, res) => {
 
 app.delete('/repositorio/:id', async (req, res) => {
   try {
-    const { perfil } = req.body || {};
-    if (perfil !== 'superadmin' && perfil !== 'coordenador')
+    const quem = await lerUsuario(pool, (req.body || {}).usuario_id);
+    const pe = papel.perfilEfetivo(quem);
+    if (pe !== 'superadmin' && pe !== 'coordenador')
       return res.status(403).json({ data: null, error: { message: 'Apenas superadmin ou coordenador podem excluir itens do repositório' } });
     const { rows } = await pool.query('DELETE FROM repositorio WHERE id = $1 RETURNING id', [req.params.id]);
     if (!rows.length)
@@ -1270,7 +1352,11 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
 
     const params = [motivo, usuario_nome, codigos_pc];
     let where = 'codigo_pc = ANY($3)';
-    if (perfil === 'analista') {
+    // ⚠️ Perfil EFETIVO, lido do banco: no papel analista o superadmin estorna como
+    // analista — so as PCs dele —, e nao como superadmin.
+    const quemLote = await lerUsuario(pool, usuario_id);
+    const perfilEf = papel.perfilEfetivo(quemLote) || perfil;
+    if (perfilEf === 'analista') {
       params.push(usuario_id);
       where += ` AND analista_id = $${params.length}`;
     } else if (perfil === 'coordenador') {
@@ -1318,14 +1404,14 @@ app.post('/faixa_aviso', async (req, res) => {
     const erro = faixa.validar(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
-    const a = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const a = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
     const autor = a.rows[0];
-    if (!autor || !['coordenador', 'superadmin'].includes(autor.perfil))
+    if (!autor || !['coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin escreve na faixa.' } });
 
     // Coordenador só alcança o próprio grupo, e isso é decidido AQUI — a tela pode ser
     // contornada. Mesma regra do recado do sino.
-    const grupo = autor.perfil === 'coordenador' ? autor.grupo : (b.grupo || null);
+    const grupo = papel.perfilEfetivo(autor) === 'coordenador' ? autor.grupo : (b.grupo || null);
 
     const { rows } = await pool.query(
       `INSERT INTO faixa_aviso (texto, escopo, ativo, inicio, fim, ordem, grupo, autor_id, autor_nome)
@@ -1446,9 +1532,9 @@ app.post('/notificacao', async (req, res) => {
     if (!titulo || !String(titulo).trim())
       return res.status(400).json({ data: null, error: { message: 'título é obrigatório' } });
 
-    const a = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
+    const a = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
     const autor = a.rows[0];
-    if (!autor || !['coordenador', 'superadmin'].includes(autor.perfil))
+    if (!autor || !['coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin envia recado.' } });
 
     let destinatarios = [];
@@ -1459,7 +1545,7 @@ app.post('/notificacao', async (req, res) => {
     } else {
       // Coordenador não manda para fora do próprio grupo, nem com alvo 'todos' — a conferência
       // é aqui, e não só na tela, porque a tela pode ser contornada.
-      const g = autor.perfil === 'coordenador' ? autor.grupo : (alvo === 'todos' ? null : grupo);
+      const g = papel.perfilEfetivo(autor) === 'coordenador' ? autor.grupo : (alvo === 'todos' ? null : grupo);
       const q = g ? await pool.query(`SELECT id FROM usuarios WHERE grupo = $1`, [String(g)])
                   : await pool.query(`SELECT id FROM usuarios`);
       destinatarios = q.rows.map(r => r.id);
@@ -1492,7 +1578,7 @@ app.get('/limite_tr/situacao', async (req, res) => {
     const { analista_id, tr } = req.query;
     if (!analista_id)
       return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
-    const u = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(analista_id)]);
+    const u = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(analista_id)]);
     if (!u.rows.length)
       return res.status(404).json({ data: null, error: { message: 'analista não encontrado' } });
 
@@ -1602,10 +1688,10 @@ app.patch('/config_sistema', async (req, res) => {
     const erro = prep.validar(b) || manut.validar(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
-    const q = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+    const q = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                               [parseInt(b.atualizado_por) || 0]);
     const quem = q.rows[0];
-    if (!quem || quem.perfil !== 'superadmin')
+    if (!quem || papel.perfilEfetivo(quem) !== 'superadmin')
       return res.status(403).json({ data: null, error: { message: 'Só o superadmin liga e desliga os modos do sistema.' } });
 
     // ⚠️ TRANSAÇÃO: ligar o modo e derrubar as sessões são UMA coisa só.
@@ -1695,9 +1781,9 @@ app.post('/ci/decidir', async (req, res) => {
       return res.status(400).json({ data: null, error: { message: 'decisao é obrigatória' } });
 
     // Quem decide é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
-    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
     const autor = q.rows[0];
-    if (!autor || !['controle_interno', 'coordenador', 'superadmin'].includes(autor.perfil))
+    if (!autor || !['controle_interno', 'coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só o Controle Interno decide sobre esta fila.' } });
 
     const { pcs, jaDecidido } = await ci.decidir(pool, {
@@ -1736,7 +1822,7 @@ app.post('/ci/responder', async (req, res) => {
     const erro = ci.validar({ ...b, exigeTexto: true });
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
-    const q = await pool.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
     const autor = q.rows[0];
     if (!autor) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
 
@@ -2126,7 +2212,7 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
     // (analista + status analise) — mudar situação ou enviar ao CI não passa por aqui.
     if (campos.analista_id && campos.status === 'analise') {
       const alvo = await pool.query(`SELECT tr FROM prestacoes_contas WHERE codigo_pc = $1`, [req.params.codigo_pc]);
-      const u = await pool.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(campos.analista_id)]);
+      const u = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(campos.analista_id)]);
       if (alvo.rows.length && u.rows.length) {
         const chk = await limiteTr.podeAssumirTr(pool, u.rows[0], alvo.rows[0].tr);
         if (!chk.pode) {
@@ -2268,9 +2354,9 @@ app.get('/busca_global', async (req, res) => {
     const erro = bg.validar(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
-    const { rows: u } = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                                         [parseInt(b.usuario_id) || 0]);
-    if (!u.length || u[0].perfil !== 'superadmin')
+    if (!u.length || papel.perfilEfetivo(u[0]) !== 'superadmin')
       return res.status(403).json({ data: null, error: { message: 'A busca global é exclusiva do superadmin.' } });
 
     const termo = String(b.termo).trim();
@@ -2330,7 +2416,7 @@ app.get('/busca_global', async (req, res) => {
 app.get('/tr/:tr/assumir', async (req, res) => {
   const cli = await pool.connect();
   try {
-    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`,
+    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                                         [parseInt(req.query.usuario_id) || 0]);
     if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
 
@@ -2363,7 +2449,7 @@ app.post('/tr/assumir', async (req, res) => {
     // Preparação/manutenção antes de tudo: na manhã da preparação ninguém assume TR nenhuma.
     if (await barrouPreparacao(res, b.usuario_id)) return;
 
-    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`,
+    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                                         [parseInt(b.usuario_id) || 0]);
     if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
     const quem = u[0];
@@ -2424,7 +2510,7 @@ app.post('/tr/assumir', async (req, res) => {
 const PERFIS_EDITAM_PROCESSO = ['analista', 'coordenador', 'superadmin'];
 
 async function quemEdita(cli, usuarioId) {
-  const { rows } = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+  const { rows } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                                    [parseInt(usuarioId) || 0]);
   return rows[0] && PERFIS_EDITAM_PROCESSO.includes(rows[0].perfil) ? rows[0] : null;
 }
@@ -2612,9 +2698,9 @@ async function lerTrParaDevolucao(cli, tr, comLock) {
 
 /** Quem pede é superadmin? Conferido pelo BANCO, nunca pelo corpo do pedido. */
 async function ehSuperadmin(cli, usuarioId) {
-  const { rows } = await cli.query(`SELECT id, nome, perfil FROM usuarios WHERE id = $1`,
+  const { rows } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                                    [parseInt(usuarioId) || 0]);
-  return rows[0] && rows[0].perfil === 'superadmin' ? rows[0] : null;
+  return rows[0] && papel.perfilEfetivo(rows[0]) === 'superadmin' ? rows[0] : null;
 }
 
 // GET /tr/:tr/devolucao?usuario_id=N — a prévia que o modal desenha.
@@ -2729,12 +2815,7 @@ app.post('/tr/devolver', async (req, res) => {
 // toca em `analista_id` a não ser na APROVAÇÃO. Se o pendente já liberasse a vaga, qualquer
 // um abriria vaga só pedindo devolução.
 
-/** Quem pede, lido do BANCO — nunca do corpo do pedido. */
-async function lerUsuario(cli, id) {
-  const { rows } = await cli.query(
-    `SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(id) || 0]);
-  return rows[0] || null;
-}
+// (`lerUsuario` mora no topo do arquivo — a guarda de papel a usa em rotas anteriores a esta.)
 
 // GET /tr/:tr/pedido_devolucao?usuario_id=N — o aviso que o modal mostra ANTES de enviar.
 // ⚠️ MESMA CONTA da gravação (`devolucao.resumir`), e a mesma da devolução do superadmin.
@@ -2857,7 +2938,7 @@ app.get('/solicitacao_devolucao', async (req, res) => {
     let filtroAnalista = null, filtroGrupo = null;
     if (quem.perfil === 'analista') filtroAnalista = quem.id;
     else if (quem.perfil === 'coordenador') filtroGrupo = String(quem.grupo ?? '');
-    else if (quem.perfil !== 'superadmin')
+    else if (papel.perfilEfetivo(quem) !== 'superadmin')
       return res.status(403).json({ data: null, error: { message: 'Sem acesso a esta fila.' } });
 
     const { rows } = await cli.query(devolPed.SQL_LISTAR,
@@ -2925,7 +3006,7 @@ app.patch('/solicitacao_devolucao/:id', async (req, res) => {
       if (destino === 'indicado') {
         if (p.indicado_id) {
           const { rows } = await cli.query(
-            `SELECT id, nome, perfil, grupo, ativo FROM usuarios WHERE id = $1`, [p.indicado_id]);
+            `SELECT id, nome, perfil, grupo, ativo, papel_ativo FROM usuarios WHERE id = $1`, [p.indicado_id]);
           indicado = rows[0] || null;
         }
         const impedIndicado = devolPed.impedimentoIndicado(p, indicado);
@@ -3069,7 +3150,7 @@ function registrarHistorico(cli, h) {
 async function resolverAutoria(cli, b, res) {
   const quemId = b.executado_por ?? b.analista_id;
   const { rows } = await cli.query(
-    `SELECT id, nome, perfil FROM usuarios WHERE id = $1`, [parseInt(quemId) || 0]);
+    `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(quemId) || 0]);
   const quem = rows[0] || null;
 
   const r = autoria.resolver(quem, b.analista_id);
@@ -3450,7 +3531,10 @@ app.post('/parcela/estornar', async (req, res) => {
   const b = req.body || {};
   const erro = faltaChave(b);
   if (erro) return res.status(400).json({ data: null, error: { message: erro } });
-  if (b.perfil !== 'coordenador' && b.perfil !== 'superadmin')
+  // ⚠️ O perfil vem do BANCO. Antes vinha do corpo, e o corpo nunca provou nada.
+  const quemEst = await lerUsuario(pool, b.usuario_id);
+  const peEst = papel.perfilEfetivo(quemEst);
+  if (peEst !== 'coordenador' && peEst !== 'superadmin')
     return res.status(403).json({ data: null, error: { message: 'Apenas coordenador ou superadmin podem estornar' } });
   if (!b.motivo || b.motivo.trim().length < 15)
     return res.status(400).json({ data: null, error: { message: 'motivo deve ter no mínimo 15 caracteres' } });

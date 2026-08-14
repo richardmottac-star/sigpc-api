@@ -142,9 +142,15 @@ conf(/codigo_pc = ANY\(\$1\)/.test(devol.SQL_DEVOLVER),
 
 // ⚠️ O DEFEITO N.2: a guarda morava no index.html, contornavel pelo DevTools.
 conf(/async function ehSuperadmin/.test(src), 'ha conferencia de superadmin no servidor');
-conf(/SELECT id, nome, perfil FROM usuarios WHERE id = \$1/.test(
-       src.slice(src.indexOf('async function ehSuperadmin'), src.indexOf('async function ehSuperadmin') + 400)),
-     'e o perfil vem do BANCO, pelo id — nao do corpo do pedido');
+// ⚠️ Em 14/08 a leitura passou a trazer `papel_ativo`, e a conferência passou pelo PERFIL
+// EFETIVO: no papel analista o superadmin não devolve TR — é decisão de coordenação.
+{
+  const bloco = src.slice(src.indexOf('async function ehSuperadmin'), src.indexOf('async function ehSuperadmin') + 400);
+  conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = \$1/.test(bloco),
+       'e o perfil vem do BANCO, pelo id — nao do corpo do pedido');
+  conf(/papel\.perfilEfetivo\(rows\[0\]\) === 'superadmin'/.test(bloco),
+       'e o PAPEL ATIVO entra na conta — no papel analista, nao devolve');
+}
 conf(/ehSuperadmin/.test(rota), 'a rota de gravar confere');
 conf(/ehSuperadmin/.test(src.slice(src.indexOf("app.get('/tr/:tr/devolucao'"),
                                    src.indexOf("app.get('/tr/:tr/devolucao'") + 900)),

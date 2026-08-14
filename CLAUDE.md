@@ -514,6 +514,16 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
       O sino não emite prazo sobre o acervo antigo — só sobre data inserida daqui pra frente.
       **Não baixar esse corte** achando que é conservador demais: baixá-lo faz o sino avisar
       sobre datas que ninguém definiu.
+- **O C.I. vem DEPOIS do parecer. Decisão do Richard, 13/08/2026.**
+      O manual dentro do sistema diz que *"o envio ao CI conta como baixa (CGE 30/04/2026)"*,
+      o que sugeriria um caminho alternativo ao parecer. **Não é.** O parecer prévio continua
+      exigido, e `POST /parcela/ci` mantém o `'CI exige parecer prévio'` — **não mexer nessa
+      trava.** O que estava errado era só a tela: depois do parecer a parcial virava `baixada`
+      e o botão do C.I. sumia do cartão, deixando **2.181 parciais** sem caminho para o C.I.
+      Corrigido no `index.html` (armadilha 19 de lá), sem tocar em `baixada`, `data_baixa`
+      nem `enviado_ci`.
+      **Encaminhar ao C.I. é OPCIONAL e não desfaz a baixa** — nem o encaminhamento, nem o
+      retorno do C.I. É isso que a faixa do passo 3 diz na tela.
 - **Prazo é data civil brasileira, nunca `CURRENT_DATE`.** O Postgres do Railway roda em UTC,
   então `CURRENT_DATE` vira o dia seguinte às 21h de Brasília. Medido em 11/08 às 23h55:
   as **11.033** PCs com prazo mostravam um dia a mais de atraso, e o número voltava de manhã.

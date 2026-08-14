@@ -107,6 +107,52 @@ caracteres contra 12 de `2018PC000015`. `nowrap` na tela e no papel.
 para essas não existe "desde quando", e usar a data da carga (18/07, igual para todas) daria
 um número que parece resposta e não é.
 
+### 🏛 O botão do C.I. nunca tinha acendido — e agora são TRÊS passos
+**O defeito mais caro do dia, e nenhum dos 15 testes pegava.** Sem parecer o botão
+"Encaminhar ao CI" ficava cinza; **com** parecer a parcial virava `baixada` e caía no ramo
+verde do cartão, **que não desenhava botão nenhum**. Medido: **4.259** parciais no cinza,
+**2.181** sem botão, e **zero** encaminhamentos feitos por analista em produção — as 13 PCs
+que estão no C.I. entraram pela `migracao_ci` de 05/08, não pela tela.
+
+⚠️ **A trava do servidor NÃO mudou.** `POST /parcela/ci` continua exigindo parecer prévio.
+O que se corrigiu foi a tela esconder o botão depois que o parecer existe.
+
+⚠️ **Encaminhar ao C.I. é OBRIGATÓRIO** (decisão do Richard). A primeira versão do texto dizia
+"opcional — a parcial já está baixada" e convidava a parar na baixa.
+
+```
+Passo 1 de 3  âmbar  registre o parecer para poder baixar   · botão cinza COM o motivo ao lado
+Passo 2 de 3  verde  baixada em <data> · parecer: <tipo>    · botão ATIVO
+                     FALTA ENCAMINHAR AO CONTROLE INTERNO
+Passo 3 de 3  azul   No Controle Interno desde <data> · aguardando retorno há N dias
+                     o retorno do CI não cancela a baixa
+```
+
+⚠️ **Havia uma SEGUNDA tela com a regra invertida** — o detalhe da TR (o "Ver PCs"):
+`!p.baixada && !p.enviado_ci` escondia o botão justamente quando a PC era baixada. E era pior:
+gravava por **PATCH de UMA PC** (o encaminhamento é por PARCELA, e há parcela com 7), montava
+`baixada`/`data_baixa` **no navegador** com o relógio de quem clicou, e por ser PATCH genérico
+**passava por fora da trava do parecer**. As duas telas agora decidem pelo mesmo `pPasso` e
+gravam pela mesma rota transacional.
+
+### 🏛 Etiqueta "N sem C.I." na lista — a dívida que ninguém enxergava
+Encaminhar é obrigatório e **nada exige**: sem trava no servidor, sem sino, sem relatório. O
+cabeçalho da TR agora mostra `🏛 3 sem C.I.` em âmbar — **inclusive na TR "✓ concluída", e
+principalmente nela**, que é onde a dívida se perde de vista.
+
+**2.181 parciais em 550 TRs vão nascer com a etiqueta.** A contagem é conferida contra o banco
+em `prova_banco_ci.js` — contagem que diverge do banco é pior que contagem nenhuma.
+
+### 👁 "Ver como analista" — o botão morto pintado de vivo
+O `vcOff()` mandava a opacidade num **segundo atributo `style=`**, e o HTML fica com o
+primeiro: os sete botões do modo apareciam com a cor inteira e **não respondiam ao clique**.
+Quem pinta agora é o CSS (`.btn-acao:disabled`). **Eles nunca gravaram** — são três travas:
+o `disabled`, a conferência dentro das funções, e o `window.fetch` envolvido, que bloqueia
+todo não-GET para a API (menos o logout).
+
+A faixa dizia *"no nome dela"* e supunha o gênero de quem estava sendo visto. Agora é
+**"no nome deste analista"**.
+
 ---
 
 ## ⚠️ OS 11 PROCESSOS SGPe QUE FICARAM PENDENTES
@@ -206,6 +252,19 @@ pergunte o resultado antes de mexer nessas telas.**
 Faltam também, com menos risco: o cabeçalho do cartão ("assumida em" + ✨ NOVA) e a seta do
 indicador de online (fechar pelo botão, clicando fora e com Esc).
 
+**E o que entrou depois, à tarde — nada disso foi clicado por uma pessoa:**
+
+6. **Os três passos da parcial.** O caso direto é o do **Rafael**: `2020TR001230` e
+   `2021TR000777`. A faixa verde tem de **cobrar** "falta encaminhar ao Controle Interno", e o
+   botão azul ao lado tem de estar **ativo**. Se ele encaminhar, a parcela pula para o passo 3
+   — seria **o primeiro encaminhamento feito pela tela na história do sistema**.
+7. **A etiqueta `🏛 N sem C.I.`** no cabeçalho da TR, na lista. 550 TRs a têm.
+8. **O detalhe da TR ("Ver PCs")** — o "Enviar ao CI" agora aparece nas PCs **baixadas**, e o
+   `title` avisa que vai a parcela inteira.
+9. **"Ver como analista"** — os botões nascem apagados **de verdade** agora.
+10. **O modal do limite atingido** — faixa `#C62828`, o "Assumir" sai da tela, o pedido vira
+    botão de largura total. ⚠️ **O print nunca chegou** — se ele mandar, ajustar só `limiteAviso`.
+
 ---
 
 ## ⚠️ O QUE AINDA NÃO CHEGOU
@@ -228,3 +287,27 @@ SÓ o documento** () — a busca e o card não mudam.
 - [ ] **A camada de autorização** continua sendo o buraco de fundo: quem montar um pedido
       HTTP e se declarar coordenador passa. Preparação e manutenção são cortina, não tranca.
 - [ ] **11,3 MB por tela** — seis telas ainda baixam o acervo inteiro para filtrar no cliente.
+
+### As duas que estão paradas esperando o Richard
+
+- [ ] **Solicitar devolução de TR pelo analista.** Ele **pede**, não devolve. A tela e o fluxo
+      de aprovação se reaproveitam do "Solicitar mais uma TR". **A tabela `solicitacao_vaga`
+      NÃO**, do jeito que está: ela não tem coluna `tipo`, e **sete consultas de
+      `lib/limite-tr.js` a leem sem filtro nenhum** — um pedido de devolução aprovado viraria
+      **+1 no limite** de quem pediu para devolver, e pendente **reservaria no Estoque** a TR
+      que ele quer largar. Não dá erro em lugar nenhum.
+      **Escolher:** tabela nova `solicitacao_devolucao` (recomendado) **ou** coluna `tipo` com
+      as sete consultas corrigidas. **E decidir:** a TR continua contando no limite dele
+      enquanto o pedido está pendente?
+      ⚠️ O esqueleto morto `moDev`/`confDev` no `index.html` é o que se ressuscita. **Não
+      confundir com `moDevM`/`confDevM`**, a devolução do superadmin, que está viva.
+- [ ] **3 PCs FINAIS com `parcial_num = '1'`** — `2021TR001689` (Grazielly), `2021TR002133`
+      (Richard) e `2023TR000048` (Elisandra). A FINAL ficou agrupada junto da parcial 1, e
+      como toda rota grava por `WHERE tr = ... AND parcial_num = ...`, **um parecer na parcial
+      1 dessas três baixaria a FINAL junto**. É correção de DADO, não de código.
+
+### O time de agentes está pronto na gaveta
+`.claude/agents/` tem os quatro — `orquestrador`, `coder`, `qa-banco`, `revisor` — e o fluxo
+está em `TIME_AGENTES.md`. **Nada foi ativado.** As três regras do Richard (13/08) estão no
+`CLAUDE.md` e repetidas dentro do prompt de cada um: nenhum agente escreve no banco, nenhum
+decide regra de negócio, nenhum publica.

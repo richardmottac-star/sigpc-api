@@ -4,6 +4,56 @@ Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
 ---
 
+## ▶ A PRÓXIMA SESSÃO COMEÇA AQUI (fechado em 14/08/2026)
+
+Cinco frentes, na ordem em que o Richard as deixou.
+
+### 1. ⚠️ AUDITORIA: as planilhas dos analistas × a base do sistema — **SÓ LEITURA PRIMEIRO**
+
+**Vários analistas relatam divergência de número de PCs e de VALORES** entre a planilha deles
+e o que o sistema mostra. Isso ainda não foi medido nesta sessão.
+
+⚠️ **NÃO "consertar" o banco para bater com a planilha.** Já há um caso medido em que a
+PLANILHA é que estava errada: a coluna "Número de PCs" do **Grupo 2** está inflada — 44,7% das
+chaves com razão exatamente 2,0 contra o banco, e o gabarito de 1.899 da aba Monitoramento
+saiu da mesma coluna (o real apurado é ~1.217). G1 e G3, lendo o mesmo banco com a mesma
+regra, deram 96,4% e 93,1% de razão 1,0. Prova aritmética guardada: a `2020TR000681` declara
+26 parciais somando **98 PCs**, e a TR inteira tem **53 PCs** no banco.
+
+**Ordem de trabalho, e ela importa:**
+1. **Medir sem escrever.** Por analista e por TR: contagem de PCs e soma de valores, dos dois
+   lados, com a chave explícita (TR + processo SGPe, ou `codigo_pc`).
+2. **Separar quem diverge de quanto diverge.** Razão 2,0 é linha duplicada na planilha; razão
+   quebrada é outra coisa.
+3. **Levar a lista ao Richard antes de qualquer `UPDATE`.** Escrita continua exigindo ordem
+   expressa.
+
+⚠️ **A base é a fonte única** (`prestacoes_contas`, 14.652 linhas). A planilha é o que se
+audita, não o gabarito — salvo se o Richard decidir o contrário caso a caso.
+
+### 2. Ativar o time de agentes
+Os quatro estão prontos em `.claude/agents/` e o fluxo em `TIME_AGENTES.md`. **Nada foi
+acionado.** Falta o Richard mandar, e decidir o `deny` do `settings.local.json` e se entra o
+plugin `pr-review-toolkit`.
+
+### 3. As 14 telas que ninguém clicou
+A lista está em "O QUE O RICHARD IA TESTAR NA TELA", mais abaixo. As duas últimas são as mais
+novas: **os dois papéis** e o **agir pela conta**.
+
+### 4. As 3 PCs FINAIS com `parcial_num = '1'`
+`2021TR001689` (Grazielly) · `2021TR002133` (Richard) · `2023TR000048` (Elisandra).
+A FINAL ficou agrupada junto da parcial 1, e como toda rota grava por
+`WHERE tr = ... AND parcial_num = ...`, **um parecer na parcial 1 dessas três baixaria a FINAL
+junto**. É correção de DADO, não de código — com o comando na tela antes.
+
+### 5. A Caroline sem cadastro
+Meta 27 vigente, **sem linha em `usuarios`**. É a única nessa situação, e agora tem
+consequência prática: se alguém a indicar no motivo 1 do pedido de devolução, **a aprovação
+trava** com o motivo escrito na tela (é o que se decidiu, em vez de mandar a TR ao estoque em
+silêncio).
+
+---
+
 ## ⚠️ O SISTEMA ESTÁ ABERTO
 
 Modo preparação **desligado**. Modo manutenção **desligado**. A equipe trabalha.

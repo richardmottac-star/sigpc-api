@@ -601,6 +601,23 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
 - [x] ~~Modo preparação x Controle Interno~~ — o modo está **desligado**. Se religar, a decisão
       volta: isentar o perfil ou aceitar que os três técnicos fiquem de fora.
 
+### ▶ A PRÓXIMA SESSÃO — ver `SESSAO.md`, que tem o detalhe
+
+- [ ] **⚠️ AUDITORIA: planilhas dos analistas × base do sistema. SÓ LEITURA PRIMEIRO.**
+      Vários analistas relatam divergência de **número de PCs** e de **VALORES**. Ainda não
+      medido.
+      ⚠️ **Não "consertar" o banco para bater com a planilha:** há caso medido em que a
+      PLANILHA é que estava errada — a coluna "Número de PCs" do **Grupo 2** está inflada
+      (44,7% das chaves com razão 2,0 contra o banco; o gabarito 1.899 saiu dali, e o real é
+      ~1.217). G1 e G3 deram 96,4% e 93,1% de razão 1,0 lendo o mesmo banco.
+      Medir → separar quem diverge de quanto diverge → levar a lista ao Richard **antes** de
+      qualquer `UPDATE`.
+- [ ] **Ativar o time de agentes** — os quatro estão em `.claude/agents/`, nada acionado.
+- [ ] **As 14 telas que ninguém clicou** — as duas últimas são os dois papéis e o agir pela conta.
+- [ ] **3 PCs FINAIS com `parcial_num = '1'`** — `2021TR001689`, `2021TR002133`,
+      `2023TR000048`. Um parecer na parcial 1 dessas três baixaria a FINAL junto. Correção de
+      DADO, com o comando na tela antes.
+
 ### Aberto — precisa de decisão do Richard
 - [ ] **Caroline** — meta 27 vigente, **sem usuário em `usuarios`**. É a única nessa situação.
 - [ ] **Meta vigente: CGE (Ago/25) ou Monitoramento (Nov/25)** — nunca decidido.

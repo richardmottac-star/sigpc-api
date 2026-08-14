@@ -2693,7 +2693,12 @@ app.post('/tr/devolver', async (req, res) => {
         titulo: `TR ${b.tr} devolvida ao estoque`,
         mensagem: `${devolvidas.length} PC${devolvidas.length > 1 ? 's' : ''} da TR ${b.tr} ` +
                   `voltaram ao estoque. Motivo: ${texto}.` +
-                  (resumo.baixadas ? ` As ${resumo.baixadas} já baixadas continuam suas.` : ''),
+                  // Mesmo ajuste do pedido de devolução: "As 1 já baixadas" saía errado.
+                  (resumo.baixadas
+                    ? (resumo.baixadas > 1
+                        ? ` As ${resumo.baixadas} já baixadas continuam suas.`
+                        : ' A parcial já baixada continua sua.')
+                    : ''),
         // ⚠️ O `ref_id` É O ID DO HISTÓRICO, NÃO A TR.
         //
         // `notif.criar` deduplica por (destinatario, tipo, ref_id). Com a TR no `ref_id`, a
@@ -2966,7 +2971,12 @@ app.patch('/solicitacao_devolucao/:id', async (req, res) => {
           ? (paraIndicado
               ? `A TR ${p.tr} passou para ${indicado.nome} (${devolvidas} PC${devolvidas > 1 ? 's' : ''}), e a vaga foi liberada.`
               : `A TR ${p.tr} voltou ao estoque (${devolvidas} PC${devolvidas > 1 ? 's' : ''}), e a vaga foi liberada.`)
-            + (baixadasMantidas ? ` As ${baixadasMantidas} já baixadas continuam suas.` : '')
+            // "As 1 já baixadas continuam suas" saiu assim no primeiro ciclo real, em 13/08.
+            + (baixadasMantidas
+                ? (baixadasMantidas > 1
+                    ? ` As ${baixadasMantidas} já baixadas continuam suas.`
+                    : ' A parcial já baixada continua sua.')
+                : '')
           : `A TR ${p.tr} continua com você.`)
         + ` ${quem.nome} escreveu: "${decisao}"`,
       link: '#planilha', ref_tipo: 'solicitacao_devolucao', ref_id: `dec-${p.id}`,

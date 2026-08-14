@@ -19,6 +19,10 @@ const prep = require('./lib/preparacao');
 const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
 const devol = require('./lib/devolucao');
+// ⚠️ NÃO É A MESMA COISA que `devol`: aquela é a devolução do superadmin, que executa na
+// hora; esta é o PEDIDO do analista, que espera decisão. Quando o pedido é aprovado, quem
+// devolve de fato continua sendo a `devol` — na mesma transação.
+const devolPed = require('./lib/devolucao-pedido');
 const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
 const bg = require('./lib/busca-global');
@@ -2705,6 +2709,289 @@ app.post('/tr/devolver', async (req, res) => {
 
     res.json({ data: { tr: b.tr, devolvidas: devolvidas.length, baixadas_mantidas: resumo.baixadas,
                        analista_id: resumo.analista_id, motivo: texto }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// ══════════════════════════════════════
+//  PEDIDO DE DEVOLUÇÃO — o analista PEDE, o coordenador decide  (13/08/2026)
+// ══════════════════════════════════════
+//
+// ⚠️ A TR CONTINUA CONTANDO NO LIMITE ENQUANTO O PEDIDO ESTÁ PENDENTE. Nenhuma destas rotas
+// toca em `analista_id` a não ser na APROVAÇÃO. Se o pendente já liberasse a vaga, qualquer
+// um abriria vaga só pedindo devolução.
+
+/** Quem pede, lido do BANCO — nunca do corpo do pedido. */
+async function lerUsuario(cli, id) {
+  const { rows } = await cli.query(
+    `SELECT id, nome, perfil, grupo FROM usuarios WHERE id = $1`, [parseInt(id) || 0]);
+  return rows[0] || null;
+}
+
+// GET /tr/:tr/pedido_devolucao?usuario_id=N — o aviso que o modal mostra ANTES de enviar.
+// ⚠️ MESMA CONTA da gravação (`devolucao.resumir`), e a mesma da devolução do superadmin.
+app.get('/tr/:tr/pedido_devolucao', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, req.query.usuario_id);
+    if (!quem) return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } });
+
+    const { pcs } = await lerTrParaDevolucao(cli, req.params.tr, false);
+    if (!pcs.length) return res.status(404).json({ data: null, error: { message: 'TR não encontrada.' } });
+
+    // O analista só pede a devolução da TR que é DELE. Superadmin e coordenador veem a
+    // prévia de qualquer uma — é o que a tela de aprovação usa para conferir antes de decidir.
+    const dono = pcs.find(p => p.analista_id)?.analista_id ?? null;
+    if (quem.perfil === 'analista' && String(dono ?? '') !== String(quem.id))
+      return res.status(403).json({ data: null, error: { message: 'Esta TR não é sua.' } });
+
+    const { resumo, impedimento } = devolPed.impedimentoPedido(pcs);
+    const { rows: pend } = await cli.query(
+      `SELECT id, criado_em FROM solicitacao_devolucao
+        WHERE tr = $1 AND setorial_id = 'FCEE' AND status = 'pendente' LIMIT 1`, [req.params.tr]);
+
+    res.json({
+      data: {
+        tr: req.params.tr, motivos: devolPed.MOTIVOS,
+        aviso: devolPed.avisoPedido(pcs), resumo,
+        // `pode` é FALSE também quando já há pedido pendente: dois pedidos gerariam duas
+        // decisões, e a segunda decidiria sobre uma TR que já voltou ao estoque.
+        pode: !impedimento && !pend.length,
+        motivo_bloqueio: impedimento
+          || (pend.length ? 'Já existe um pedido de devolução em análise para esta TR.' : null),
+        pendente: pend[0] || null,
+      }, error: null
+    });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /solicitacao_devolucao — body { tr, analista_id, motivo, justificativa, indicado_id?, indicado_nome? }
+app.post('/solicitacao_devolucao', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+
+  const erro = devolPed.validarPedido(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+
+    const quem = await lerUsuario(cli, b.analista_id);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+
+    // ⚠️ FOR UPDATE: entre abrir o modal e clicar, uma PC pode ter ido ao C.I. ou a TR pode
+    // ter sido devolvida por outro caminho.
+    const { pcs } = await lerTrParaDevolucao(cli, b.tr, true);
+    if (!pcs.length) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'TR não encontrada.' } }); }
+
+    const dono = pcs.find(p => p.analista_id)?.analista_id ?? null;
+    if (String(dono ?? '') !== String(quem.id)) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: 'Esta TR não é sua.' } }); }
+
+    const { resumo, impedimento } = devolPed.impedimentoPedido(pcs);
+    if (impedimento) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: impedimento, resumo } }); }
+
+    let novo;
+    try {
+      const r = await cli.query(devolPed.SQL_CRIAR, [
+        quem.id, b.tr, 'FCEE', b.motivo, String(b.justificativa).trim(),
+        b.indicado_id ? parseInt(b.indicado_id) : null,
+        (b.indicado_nome ?? '').toString().trim() || null,
+        resumo.total, resumo.devolver, resumo.baixadas]);
+      novo = r.rows[0];
+    } catch (e) {
+      await cli.query('ROLLBACK');
+      // ⚠️ A trava do "um pendente por TR" é do ÍNDICE ÚNICO PARCIAL, e é ela que segura
+      // dois cliques simultâneos — a conferência acima não seguraria.
+      if (e.code === '23505')
+        return res.status(409).json({ data: null,
+          error: { message: 'Já existe um pedido de devolução em análise para esta TR.' } });
+      throw e;
+    }
+
+    await cli.query('COMMIT');
+
+    // Avisa a coordenação DEPOIS do COMMIT. Cai para o superadmin se o grupo não tem
+    // coordenador — `coordenadoresDoGrupo` já faz isso.
+    const destinos = await notif.coordenadoresDoGrupo(pool, quem.grupo);
+    notif.criarVarios(pool, destinos, {
+      tipo: 'aprovacao',
+      titulo: `Pedido de devolução — TR ${b.tr}`,
+      mensagem: `${quem.nome} pediu a devolução da TR ${b.tr}. `
+              + `Motivo: ${devolPed.motivoTexto(b.motivo)}. ${resumo.devolver} PC`
+              + `${resumo.devolver > 1 ? 's voltariam' : ' voltaria'} ao estoque.`,
+      link: '#aprovacoes', ref_tipo: 'solicitacao_devolucao', ref_id: String(novo.id),
+    }).catch(e => console.error('Falha ao notificar pedido de devolucao:', e.message));
+
+    res.json({ data: novo, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// GET /solicitacao_devolucao?status=pendente&analista_id=N&usuario_id=N
+app.get('/solicitacao_devolucao', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, req.query.usuario_id);
+    if (!quem) return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } });
+
+    // ⚠️ O RECORTE É DO SERVIDOR, e vem do perfil lido no BANCO. O analista vê só os pedidos
+    // dele; o coordenador, só os do grupo dele; o superadmin, todos. Sem isto, quem montasse
+    // o pedido HTTP à mão leria a fila inteira.
+    let filtroAnalista = null, filtroGrupo = null;
+    if (quem.perfil === 'analista') filtroAnalista = quem.id;
+    else if (quem.perfil === 'coordenador') filtroGrupo = String(quem.grupo ?? '');
+    else if (quem.perfil !== 'superadmin')
+      return res.status(403).json({ data: null, error: { message: 'Sem acesso a esta fila.' } });
+
+    const { rows } = await cli.query(devolPed.SQL_LISTAR,
+      [req.query.status || null, filtroAnalista, filtroGrupo]);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// PATCH /solicitacao_devolucao/:id — body { status:'aprovada'|'negada', decidido_por, motivo_decisao }
+//
+// ⚠️ APROVAR DEVOLVE A TR NA MESMA TRANSAÇÃO, e quem devolve é a `devol.SQL_DEVOLVER` — a
+// MESMA da devolução do superadmin. Duas regras de "o que volta" divergiriam.
+app.patch('/solicitacao_devolucao/:id', async (req, res) => {
+  const b = req.body || {};
+  const erro = devolPed.validarDecisao(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+
+    const quem = await lerUsuario(cli, b.decidido_por);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+
+    const { rows: ped } = await cli.query(
+      `SELECT s.*, u.grupo AS analista_grupo, u.nome AS analista_nome
+         FROM solicitacao_devolucao s LEFT JOIN usuarios u ON u.id = s.analista_id
+        WHERE s.id = $1 FOR UPDATE OF s`, [parseInt(req.params.id) || 0]);
+    if (!ped.length) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Pedido não encontrado.' } }); }
+
+    const p = ped[0];
+    if (!devolPed.podeDecidir(quem, p.analista_grupo)) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null,
+        error: { message: 'Só o coordenador do grupo ou o superadmin decidem este pedido.' } }); }
+    if (p.status !== 'pendente') { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null,
+        error: { message: `Este pedido já foi ${p.status}.` } }); }
+
+    let devolvidas = 0, baixadasMantidas = 0, destino = 'estoque', indicado = null;
+    if (b.status === 'aprovada') {
+      const { pcs } = await lerTrParaDevolucao(cli, p.tr, true);
+      const { resumo, impedimento } = devolPed.impedimentoPedido(pcs);
+      // Reconferido AGORA: entre o pedido e a decisão, uma PC pode ter ido ao C.I.
+      if (impedimento) { await cli.query('ROLLBACK');
+        return res.status(409).json({ data: null, error: { message: impedimento, resumo } }); }
+
+      destino = devolPed.destinoAprovacao(p.motivo);
+
+      // ⚠️ MOTIVO 1 NÃO PASSA PELO ESTOQUE: a TR vai DIRETO para quem já a analisava. Mandá-la
+      // ao estoque a entregaria a quem chegasse primeiro — que é o problema que o motivo 1
+      // descreve. O LIMITE NÃO É CONFERIDO (decisão do Richard): 29 dos 44 já estão em 6 ou
+      // acima, e a trava vale no ato de ASSUMIR, não em receber de volta o próprio trabalho.
+      if (destino === 'indicado') {
+        if (p.indicado_id) {
+          const { rows } = await cli.query(
+            `SELECT id, nome, perfil, grupo, ativo FROM usuarios WHERE id = $1`, [p.indicado_id]);
+          indicado = rows[0] || null;
+        }
+        const impedIndicado = devolPed.impedimentoIndicado(p, indicado);
+        // ⚠️ BLOQUEIA em vez de cair no estoque em silêncio. O pedido afirma que a TR tem
+        // destino; sem destino, quem decide precisa saber, não descobrir depois.
+        if (impedIndicado) { await cli.query('ROLLBACK');
+          return res.status(409).json({ data: null, error: { message: impedIndicado } }); }
+
+        // ⚠️ A MESMA ESCRITA DO "ASSUMIR" — `lib/assumir.js`. `dt_assumida = NOW()` para o novo
+        // dono e `dt_inicio_analise` preservado por COALESCE: o relógio do prazo não reinicia
+        // porque a TR trocou de mão.
+        const { rows: mov } = await cli.query(assumir.SQL_ASSUMIR,
+          [resumo.codigos, indicado.id, assumir.nomeCurto(indicado.nome)]);
+        devolvidas = mov.length;
+      } else {
+        const { rows: dev } = await cli.query(devol.SQL_DEVOLVER, [resumo.codigos]);
+        devolvidas = dev.length;
+      }
+      baixadasMantidas = resumo.baixadas;
+
+      await cli.query(
+        `INSERT INTO parcela_historico
+           (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
+         VALUES ($1, NULL, 'FCEE', 'devolucao_tr', $2, $3, $4, $5)`,
+        [p.tr, `${p.analista_nome || 'sem nome'} (id ${p.analista_id})`,
+         destino === 'indicado' ? `${assumir.nomeCurto(indicado.nome)} (id ${indicado.id})` : 'livre',
+         quem.id,
+         `pedido #${p.id} aprovado · ${devolPed.motivoTexto(p.motivo)} · ${devolvidas} PCs `
+         + `${destino === 'indicado' ? `transferidas para ${indicado.nome}` : 'devolvidas ao estoque'} `
+         + `· ${resumo.baixadas} baixadas mantidas`]);
+    }
+
+    const { rows: fim } = await cli.query(devolPed.SQL_DECIDIR,
+      [p.id, b.status, quem.id, String(b.motivo_decisao).trim()]);
+    if (!fim.length) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'Este pedido já foi decidido.' } }); }
+
+    await cli.query('COMMIT');
+
+    // ⚠️ O ANALISTA É AVISADO NAS DUAS DECISÕES, COM O MOTIVO ESCRITO — decisão do Richard.
+    // `ref_id` é o id do PEDIDO, que é único por pedido: um segundo pedido da mesma TR gera
+    // um aviso novo, em vez de ser engolido pelo dedupe.
+    const aprovada = b.status === 'aprovada';
+    const decisao = String(b.motivo_decisao).trim();
+    const paraIndicado = aprovada && destino === 'indicado';
+
+    notif.criar(pool, {
+      destinatario_id: p.analista_id,
+      tipo: 'aprovacao',
+      titulo: aprovada ? `Devolução aprovada — TR ${p.tr}` : `Devolução recusada — TR ${p.tr}`,
+      mensagem: (aprovada
+          ? (paraIndicado
+              ? `A TR ${p.tr} passou para ${indicado.nome} (${devolvidas} PC${devolvidas > 1 ? 's' : ''}), e a vaga foi liberada.`
+              : `A TR ${p.tr} voltou ao estoque (${devolvidas} PC${devolvidas > 1 ? 's' : ''}), e a vaga foi liberada.`)
+            + (baixadasMantidas ? ` As ${baixadasMantidas} já baixadas continuam suas.` : '')
+          : `A TR ${p.tr} continua com você.`)
+        + ` ${quem.nome} escreveu: "${decisao}"`,
+      link: '#planilha', ref_tipo: 'solicitacao_devolucao', ref_id: `dec-${p.id}`,
+    }).catch(e => console.error('Falha ao notificar decisao de devolucao:', e.message));
+
+    // ⚠️ O INDICADO TAMBÉM É AVISADO — ele recebe a TR SEM ter pedido (não há aceite: a
+    // aprovação do coordenador é o aceite). Receber trabalho novo em silêncio seria descobrir
+    // pela planilha, dias depois. O aviso diz QUEM mandou, POR QUÊ, e o que fazer se discordar.
+    if (paraIndicado) {
+      notif.criar(pool, {
+        destinatario_id: indicado.id,
+        tipo: 'recado',
+        titulo: `Você recebeu a TR ${p.tr}`,
+        mensagem: `${p.analista_nome || 'Um analista'} pediu a devolução da TR ${p.tr} porque ela `
+                + `já estava em análise com você antes do sistema, e ${quem.nome} aprovou. `
+                + `${devolvidas} PC${devolvidas > 1 ? 's estão' : ' está'} na sua Minha Planilha. `
+                + `Motivo da decisão: "${decisao}". `
+                + 'Se não for o caso, use "Solicitar devolução" no cartão da TR.',
+        link: '#planilha', ref_tipo: 'solicitacao_devolucao', ref_id: `rec-${p.id}`,
+      }).catch(e => console.error('Falha ao notificar indicado:', e.message));
+    }
+
+    res.json({ data: { ...fim[0], devolvidas, baixadas_mantidas: baixadasMantidas,
+                       destino, indicado: indicado ? { id: indicado.id, nome: indicado.nome } : null },
+               error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }
     res.status(500).json({ data: null, error: { message: e.message } });

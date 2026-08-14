@@ -76,21 +76,52 @@ secao('3. NO MOTIVO 1, "QUEM JA ANALISAVA" E OBRIGATORIO');
 
 secao('4. QUEM DECIDE: COORDENADOR DO GRUPO OU SUPERADMIN');
 {
-  conf(dp.podeDecidir({ perfil: 'superadmin' }, '3') === true, 'superadmin decide qualquer um');
-  conf(dp.podeDecidir({ perfil: 'superadmin' }, null) === true, 'inclusive sem grupo');
-  conf(dp.podeDecidir({ perfil: 'coordenador', grupo: '3' }, '3') === true,
+  // O pedido de referencia: do analista 7, grupo 3.
+  const ped = (o) => ({ analista_id: 7, analista_grupo: '3', ...o });
+
+  conf(dp.podeDecidir({ id: 4, perfil: 'superadmin' }, ped()) === true, 'superadmin decide qualquer um');
+  conf(dp.podeDecidir({ id: 4, perfil: 'superadmin' }, ped({ analista_grupo: null })) === true,
+       'inclusive sem grupo');
+  conf(dp.podeDecidir({ id: 56, perfil: 'coordenador', grupo: '3' }, ped()) === true,
        'coordenador decide o do SEU grupo');
   // ⚠️ Coordenador de outro grupo tiraria TR de equipe que nao e dele.
-  conf(dp.podeDecidir({ perfil: 'coordenador', grupo: '2' }, '3') === false,
+  conf(dp.podeDecidir({ id: 57, perfil: 'coordenador', grupo: '2' }, ped()) === false,
        'coordenador de OUTRO grupo nao decide');
-  conf(dp.podeDecidir({ perfil: 'coordenador', grupo: '' }, '') === false,
+  conf(dp.podeDecidir({ id: 58, perfil: 'coordenador', grupo: '' }, ped({ analista_grupo: '' })) === false,
        'coordenador sem grupo nao decide ninguem — nem os sem grupo');
-  conf(dp.podeDecidir({ perfil: 'analista', grupo: '3' }, '3') === false, 'analista nao decide');
-  conf(dp.podeDecidir({ perfil: 'controle_interno' }, '3') === false, 'o C.I. tambem nao');
-  conf(dp.podeDecidir(null, '3') === false, 'e ninguem nao decide nada');
+  conf(dp.podeDecidir({ id: 9, perfil: 'analista', grupo: '3' }, ped()) === false, 'analista nao decide');
+  conf(dp.podeDecidir({ id: 62, perfil: 'controle_interno' }, ped()) === false, 'o C.I. tambem nao');
+  conf(dp.podeDecidir(null, ped()) === false, 'e ninguem nao decide nada');
+  conf(dp.podeDecidir({ id: 4, perfil: 'superadmin' }, null) === false, 'nem sobre pedido que nao veio');
   // Numero e texto sao o mesmo grupo: o grupo vem como int do banco e como string do corpo.
-  conf(dp.podeDecidir({ perfil: 'coordenador', grupo: 3 }, '3') === true,
+  conf(dp.podeDecidir({ id: 56, perfil: 'coordenador', grupo: 3 }, ped()) === true,
        'grupo 3 e "3" sao o mesmo grupo');
+}
+
+secao('4b. O SOLICITANTE NAO DECIDE O PROPRIO PEDIDO');
+{
+  // ⚠️ Apareceu no PRIMEIRO CICLO REAL, em 13/08: o pedido foi criado e aprovado pela mesma
+  // conta e nada objetou. Decisao do Richard: o solicitante nunca decide o proprio.
+  const meu = (perfil, grupo) => ({ analista_id: 31, analista_grupo: '3' });
+
+  conf(dp.podeDecidir({ id: 31, perfil: 'coordenador', grupo: '3' }, meu()) === false,
+       'coordenador NAO decide o pedido dele mesmo');
+  conf(dp.podeDecidir({ id: 31, perfil: 'analista', grupo: '3' }, meu()) === false,
+       'analista tambem nao');
+
+  // EXCECAO: o superadmin decide o proprio, porque nao ha ninguem acima dele.
+  conf(dp.podeDecidir({ id: 31, perfil: 'superadmin', grupo: '3' }, meu()) === true,
+       'o SUPERADMIN decide o proprio — nao ha ninguem acima dele');
+
+  // E quando isso acontece, o registro diz. Sai de decidido_por = analista_id: nao ha coluna
+  // nova, porque coluna separada seria uma segunda fonte para a mesma resposta.
+  conf(dp.autodecidido({ analista_id: 4, decidido_por: 4 }) === true,
+       'autodecidido reconhece quem pediu e decidiu');
+  conf(dp.autodecidido({ analista_id: 4, decidido_por: 56 }) === false, 'e nao marca o normal');
+  conf(dp.autodecidido({ analista_id: 4, decidido_por: null }) === false, 'pendente nao e autodecidido');
+  conf(dp.autodecidido(null) === false, 'e nada nao estoura');
+  conf(dp.autodecidido({ analista_id: 4, decidido_por: '4' }) === true, 'numero e texto sao a mesma pessoa');
+  conf(/mesma pessoa/i.test(dp.MARCA_AUTODECIDIDO), 'a marca do historico diz o que aconteceu');
 }
 
 secao('5. A DECISAO EXIGE MOTIVO ESCRITO — NAS DUAS');

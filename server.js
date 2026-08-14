@@ -2892,9 +2892,17 @@ app.patch('/solicitacao_devolucao/:id', async (req, res) => {
       return res.status(404).json({ data: null, error: { message: 'Pedido não encontrado.' } }); }
 
     const p = ped[0];
-    if (!devolPed.podeDecidir(quem, p.analista_grupo)) { await cli.query('ROLLBACK');
-      return res.status(403).json({ data: null,
-        error: { message: 'Só o coordenador do grupo ou o superadmin decidem este pedido.' } }); }
+    if (!devolPed.podeDecidir(quem, p)) { await cli.query('ROLLBACK');
+      // ⚠️ Mensagem própria para o caso "é o seu": recusar com o texto genérico faria o
+      // coordenador procurar um problema de permissão que não existe.
+      const proprio = String(p.analista_id) === String(quem.id);
+      return res.status(403).json({ data: null, error: { message: proprio
+        ? 'Você não decide o próprio pedido. Ele vai para o coordenador do seu grupo.'
+        : 'Só o coordenador do grupo ou o superadmin decidem este pedido.' } }); }
+
+    // O superadmin PODE decidir o próprio — não há ninguém acima dele —, e quando isso
+    // acontece o registro diz.
+    const autodecidido = String(p.analista_id) === String(quem.id);
     if (p.status !== 'pendente') { await cli.query('ROLLBACK');
       return res.status(409).json({ data: null,
         error: { message: `Este pedido já foi ${p.status}.` } }); }
@@ -2946,7 +2954,9 @@ app.patch('/solicitacao_devolucao/:id', async (req, res) => {
          quem.id,
          `pedido #${p.id} aprovado · ${devolPed.motivoTexto(p.motivo)} · ${devolvidas} PCs `
          + `${destino === 'indicado' ? `transferidas para ${indicado.nome}` : 'devolvidas ao estoque'} `
-         + `· ${resumo.baixadas} baixadas mantidas`]);
+         + `· ${resumo.baixadas} baixadas mantidas`
+         // ⚠️ A marca vai no HISTÓRICO, não só na tela: tela alguém deixa de abrir.
+         + (autodecidido ? ` · ${devolPed.MARCA_AUTODECIDIDO}` : '')]);
     }
 
     const { rows: fim } = await cli.query(devolPed.SQL_DECIDIR,
@@ -3000,7 +3010,8 @@ app.patch('/solicitacao_devolucao/:id', async (req, res) => {
     }
 
     res.json({ data: { ...fim[0], devolvidas, baixadas_mantidas: baixadasMantidas,
-                       destino, indicado: indicado ? { id: indicado.id, nome: indicado.nome } : null },
+                       destino, autodecidido,
+                       indicado: indicado ? { id: indicado.id, nome: indicado.nome } : null },
                error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) { /* já caiu */ }

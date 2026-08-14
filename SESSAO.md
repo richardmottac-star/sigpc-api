@@ -143,6 +143,37 @@ principalmente nela**, que é onde a dívida se perde de vista.
 **2.181 parciais em 550 TRs vão nascer com a etiqueta.** A contagem é conferida contra o banco
 em `prova_banco_ci.js` — contagem que diverge do banco é pior que contagem nenhuma.
 
+### ↩ O analista PEDE a devolução da TR — e quem devolve é a coordenação
+Tabela nova **`solicitacao_devolucao`** (criada em 13/08, com autorização). Botão no cartão da
+TR, ao lado do "Ver PCs"; modal com **seis motivos** em lista fechada e justificativa
+obrigatória em todos; fila em **Aprovações**, aba nova ao lado de "Vagas extras".
+
+⚠️ **TABELA SEPARADA, e o motivo é medido.** Sete consultas de `lib/limite-tr.js` leem a
+`solicitacao_vaga` **sem filtro nenhum** — um pedido de devolução gravado lá viraria +1 no
+limite de quem pediu para devolver, reservaria no Estoque a TR que ele quer largar, e seria
+consumido como autorização para furar o limite. Nada disso dá erro. **Não fundir as duas.**
+
+⚠️ **A TR continua contando no limite enquanto o pedido está pendente** — o pedido não toca em
+`analista_id`. Só a aprovação devolve. Senão qualquer um abriria vaga só pedindo devolução.
+
+⚠️ **DOIS CAMINHOS NA APROVAÇÃO.** Motivo 1 ("já estava em análise por outro antes de
+01/08/2026") vai **direto para o analista indicado**, pela `lib/assumir.js` — mandar ao
+estoque uma TR que tem destino a entrega a quem chegar primeiro. Os outros cinco vão ao
+estoque, pela `lib/devolucao.js`. **O limite NÃO é conferido** na transferência: 29 dos 44
+analistas já estão em 6 ou acima, e a trava vale no *ato de assumir*. A carga do indicado
+aparece no cartão e quem decide é o coordenador.
+
+⚠️ **Indicado sem cadastro ativo BLOQUEIA** (409) em vez de cair no estoque em silêncio. O
+primeiro caso real é a **Caroline** — meta vigente, nenhum cadastro.
+
+⚠️ **O solicitante não decide o próprio pedido.** Exceção: o superadmin, e aí o histórico
+ganha `AUTODECIDIDO — quem pediu e quem decidiu sao a mesma pessoa`.
+
+**Provado contra o Postgres em dois ciclos completos, e os dois revertidos por inteiro:**
+o índice único (segundo pedido → 409), a segunda decisão (→ 409), a `dt_inicio_analise`
+preservada, a baixada que fica no nome de quem baixou, o sino nas duas decisões, e a marca do
+autodecidido. **Nada sobrou no banco.**
+
 ### 👁 "Ver como analista" — o botão morto pintado de vivo
 O `vcOff()` mandava a opacidade num **segundo atributo `style=`**, e o HTML fica com o
 primeiro: os sete botões do modo apareciam com a cor inteira e **não respondiam ao clique**.
@@ -264,6 +295,11 @@ indicador de online (fechar pelo botão, clicando fora e com Esc).
 9. **"Ver como analista"** — os botões nascem apagados **de verdade** agora.
 10. **O modal do limite atingido** — faixa `#C62828`, o "Assumir" sai da tela, o pedido vira
     botão de largura total. ⚠️ **O print nunca chegou** — se ele mandar, ajustar só `limiteAviso`.
+11. **⚠️ Solicitar devolução, ponta a ponta.** O botão no cartão, o modal dos seis motivos, e
+    a fila em Aprovações. **O caminho do MOTIVO 1 — a transferência direta — só foi provado
+    por unidade**: os dois ciclos reais usaram o motivo 4, que vai ao estoque. Para exercitar
+    o 1 é preciso indicar alguém com cadastro ativo.
+12. **A etiqueta `🏛 N sem C.I.`** — 550 TRs a têm.
 
 ---
 
@@ -288,19 +324,10 @@ SÓ o documento** () — a busca e o card não mudam.
       HTTP e se declarar coordenador passa. Preparação e manutenção são cortina, não tranca.
 - [ ] **11,3 MB por tela** — seis telas ainda baixam o acervo inteiro para filtrar no cliente.
 
-### As duas que estão paradas esperando o Richard
+### O que ficou parado esperando o Richard
 
-- [ ] **Solicitar devolução de TR pelo analista.** Ele **pede**, não devolve. A tela e o fluxo
-      de aprovação se reaproveitam do "Solicitar mais uma TR". **A tabela `solicitacao_vaga`
-      NÃO**, do jeito que está: ela não tem coluna `tipo`, e **sete consultas de
-      `lib/limite-tr.js` a leem sem filtro nenhum** — um pedido de devolução aprovado viraria
-      **+1 no limite** de quem pediu para devolver, e pendente **reservaria no Estoque** a TR
-      que ele quer largar. Não dá erro em lugar nenhum.
-      **Escolher:** tabela nova `solicitacao_devolucao` (recomendado) **ou** coluna `tipo` com
-      as sete consultas corrigidas. **E decidir:** a TR continua contando no limite dele
-      enquanto o pedido está pendente?
-      ⚠️ O esqueleto morto `moDev`/`confDev` no `index.html` é o que se ressuscita. **Não
-      confundir com `moDevM`/`confDevM`**, a devolução do superadmin, que está viva.
+- [x] ~~Solicitar devolução de TR pelo analista~~ — **PRONTO em 13/08.** Ver a seção própria
+      acima. Falta só **clicar na tela**.
 - [ ] **3 PCs FINAIS com `parcial_num = '1'`** — `2021TR001689` (Grazielly), `2021TR002133`
       (Richard) e `2023TR000048` (Elisandra). A FINAL ficou agrupada junto da parcial 1, e
       como toda rota grava por `WHERE tr = ... AND parcial_num = ...`, **um parecer na parcial

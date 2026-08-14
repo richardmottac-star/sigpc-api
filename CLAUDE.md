@@ -128,6 +128,35 @@ A diferença só passou a importar quando a devolução ganhou botão: depois de
 assumir, `dt_inicio_analise` mostraria a data do analista **anterior**. Criada em 13/08 **sem
 backfill** — as 761 TRs de antes não têm data, e o cartão simplesmente omite a linha.
 
+### `solicitacao_devolucao` — o analista PEDE a devolução (13/08/2026)
+
+Ele **pede**, não devolve. Uma linha por pedido: `analista_id`, `tr`, `motivo` (código),
+`justificativa`, `indicado_id`/`indicado_nome`, a foto do que foi prometido na tela
+(`pcs_total`, `pcs_voltam`, `pcs_ficam_baixadas`), `status`, `decidido_por`, `decidido_em`,
+`motivo_decisao`.
+
+⚠️ **TABELA SEPARADA DA `solicitacao_vaga`, e o motivo é medido.** Sete consultas de
+`lib/limite-tr.js` leem aquela tabela **sem filtro nenhum**. Um pedido de devolução gravado lá
+viraria **+1 no limite** de quem pediu para devolver, **reservaria no Estoque** a TR que ele
+quer largar, **expiraria em 3 dias** avisando "a TR voltou ao estoque", e seria **consumido**
+como autorização para furar o limite. Nenhum desses dá erro. **Não fundir as duas tabelas.**
+
+⚠️ **A TR CONTINUA CONTANDO NO LIMITE ENQUANTO O PEDIDO ESTÁ PENDENTE.** Não é regra escrita
+em lugar nenhum: é consequência de o pedido **não tocar em `analista_id`**. Só a aprovação
+devolve. Se o pendente já liberasse a vaga, qualquer um abriria vaga só pedindo devolução.
+
+⚠️ **`motivo` guarda CÓDIGO, não rótulo** (`analise_anterior`, `impedimento`,
+`falta_documentacao`, `afastamento`, `redistribuicao`, `outro`). O rótulo do primeiro carrega
+uma **data** ("antes de 01/08/2026"), e um CHECK sobre o texto passaria a recusar as linhas
+antigas quando o texto fosse reescrito.
+
+⚠️ **`autodecidido` NÃO é coluna** — sai de `decidido_por = analista_id`. Coluna separada
+seria uma segunda fonte para a mesma resposta.
+
+Cinco `CHECK` no banco, e o índice **único parcial** `(tr, setorial_id) WHERE status =
+'pendente'`: **um pendente por TR**. É ele que segura dois cliques — a conferência da rota
+não seguraria.
+
 ### Outras
 - `metas_analistas` — 46 analistas, `vigente = true`, período Nov/2025 a Abr/2026
 - `anotacoes_tr` — anotações por TR com histórico
@@ -171,6 +200,7 @@ a lib é testar a regra.
 | `assumir.js` | assumir a TR inteira, e o **nome curto** do analista |
 | `busca-global.js` | o card por TR da busca global, e o que pode ser mostrado como prazo |
 | `devolucao.js` | devolver ao estoque, e o bloqueio quando há PC no C.I. |
+| `devolucao-pedido.js` | o PEDIDO de devolução do analista — quem decide, e para onde a TR vai |
 | `processo-edit.js` | corrigir o processo SGPe, e ler o link colado |
 | `ci.js` | o ciclo do Controle Interno |
 | `sgpe-link.js` | o mapa de **183 órgãos** e a URL do SGPe |
@@ -189,10 +219,35 @@ POST /sgpe/link_manual                      grava o link colado (origem MANUAL)
 POST /parcela/parecer · /situacao · /ci · /estornar · /resposta_diligencia
 POST /ci/decidir  ·  /ci/responder
 PATCH /config_sistema                       os dois interruptores
+
+GET  /tr/:tr/pedido_devolucao               a prévia do pedido do analista
+POST /solicitacao_devolucao                 ele PEDE (não devolve)
+GET  /solicitacao_devolucao                 a fila — recorte pelo perfil lido no BANCO
+PATCH /solicitacao_devolucao/:id            decide e, se aprovada, DEVOLVE na mesma transação
 ```
 
 ⚠️ **A prévia e a gravação usam a MESMA função de regra.** Se cada uma calculasse do seu
 jeito, o modal prometeria um número e o banco faria outro.
+
+⚠️ **A aprovação do pedido de devolução tem DOIS CAMINHOS:**
+
+| motivo | para onde a TR vai | por quê |
+|---|---|---|
+| **1** `analise_anterior` | **direto para o analista indicado**, pela `lib/assumir.js` | mandar ao estoque uma TR que tem destino a entrega a quem chegar primeiro |
+| os outros **5** | estoque, pela `lib/devolucao.js` | é a devolução normal |
+
+⚠️ **O LIMITE NÃO É CONFERIDO na transferência.** A trava de 10/08 vale no **ato de assumir**,
+e aqui a TR está voltando para quem já a analisava. Medido em 13/08: **29 dos 44 analistas já
+estão em 6 ou acima** — conferir faria o motivo 1 nascer inútil. A carga do indicado aparece
+no cartão ("Marisa: 8 TRs, limite 6") e quem decide é o coordenador.
+
+⚠️ **Indicado sem cadastro ativo BLOQUEIA a aprovação** (409), em vez de cair no estoque em
+silêncio. O primeiro caso real é a **Caroline**: meta vigente, nenhum cadastro.
+
+⚠️ **O solicitante não decide o próprio pedido.** Exceção: o **superadmin**, porque não há
+ninguém acima dele — e aí o `parcela_historico` ganha `AUTODECIDIDO — quem pediu e quem
+decidiu sao a mesma pessoa`. Apareceu no primeiro ciclo real: pediu e aprovou pela mesma
+conta, e nada objetou.
 
 ### Scripts de manutenção (dry-run por padrão, só gravam com `--gravar`)
 
@@ -480,9 +535,12 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
       conferido depois da correção.
 - [ ] **Estoque no Quadro 1.** A anotação antiga diz 11.552; o banco tem **11.007 abertas**
       (14.652 − 3.645). Conferir de onde sai o 11.552.
-- [ ] **Código morto no `index.html`:** `confDev` e modal `moDev` — a "Solicitar Devolução" do
-      analista, que nunca teve rota. ⚠️ **Não confundir com `moDevM`/`confDevM`**, que é a
-      devolução do superadmin e está VIVA.
+- [x] ~~**Código morto: `confDev` e modal `moDev`**~~ — **RESSUSCITADOS em 13/08/2026.** A
+      versão antiga chamava `db.from('estoque').update(...)`, uma rota que **nunca existiu**:
+      a TR nunca ficou "Aguard. Dev." porque nada gravava isso. Hoje são o modal e a função do
+      pedido de devolução, e gravam em `POST /solicitacao_devolucao`.
+      ⚠️ **Continua valendo: não confundir com `moDevM`/`confDevM`**, que é a devolução direta
+      do superadmin.
 - [ ] **`identidade_sigpc.css` e `logo_sc_base64.js`** (no `sigpc-gt`): nenhum `<script>` ou
       `<link>` os carrega — candidatos a exclusão, **confirmar antes**.
 - [ ] **`ZZ TESTE TRAVA`** (analista) continua entrando no sistema. Se não é conta de teste,

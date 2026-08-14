@@ -1,4 +1,4 @@
-# SIGPC-API — ESTADO EM 13/08/2026
+# SIGPC-API — ESTADO EM 14/08/2026
 
 Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
@@ -13,7 +13,7 @@ lembre: **ninguém além do superadmin entra** — nem coordenador, nem o Contro
 
 ---
 
-## O QUE FICOU PRONTO EM 12–13/08
+## O QUE FICOU PRONTO EM 12–14/08
 
 ### 🔒 Modo manutenção — a janela segura de escrita
 Antes dele, gravar dependia de pedir no WhatsApp e esperar 30 min de inércia do
@@ -174,6 +174,39 @@ o índice único (segundo pedido → 409), a segunda decisão (→ 409), a `dt_i
 preservada, a baixada que fica no nome de quem baixou, o sino nas duas decisões, e a marca do
 autodecidido. **Nada sobrou no banco.**
 
+### 🛠 AGIR pela conta do analista, e os DOIS PAPÉIS do superadmin (14/08)
+
+**O "Ver como analista" deixou de ser leitura.** Sem agir não se dava suporte nenhum.
+
+**Autoria dupla:** `parcela_historico.executado_por` (ALTER de 14/08). `analista_id` é o
+**dono**, `executado_por` é **quem clicou**, e fica **NULO quando são a mesma pessoa** — nulo
+quer dizer "foi ele mesmo", e o que importa achar é a linha em que os dois diferem.
+
+⚠️ **O `fetch` do `index.html` deixou de BLOQUEAR e passou a CARIMBAR**, trocando DOIS campos:
+`analista_id = alvo().id` e `executado_por = U.id`. Trocar só um gravaria a baixa na
+produtividade errada. É num ponto só porque são **56 chamadas de escrita** no arquivo.
+
+**10 ações liberadas · 4 travas ficam:** estornar · devolver TR · solicitar devolução ·
+decidir no C.I. Não são "leitura" — são decisões **sobre** o trabalho dele. Há teste que falha
+se aparecer uma quinta.
+
+**Os dois papéis:** `usuarios.papel_ativo` + tabela `papel_historico`.
+`analista` (padrão ao entrar, **14 itens somem do menu**) · `tecnico` (tudo, e o único que
+age por outro). O reset ao entrar é do SERVIDOR.
+
+⚠️ **UMA REGRA SÓ, dos dois lados: `perfilEfetivo`.** No papel analista o superadmin **é**
+analista em toda parte — 10 pontos no servidor, e o menu recebe o usuário já com o perfil
+efetivo. Resolve sozinho o ponto que passaria batido: as **seis rotas de "coordenador OU
+superadmin"**, onde tirar só o `superadmin` da lista não bastaria, porque ele não é
+coordenador de ninguém.
+
+⚠️ **Quatro rotas liam o `perfil` do CORPO** — excluir usuário, excluir no repositório e os
+dois estornos. Passaram a ler do banco.
+
+**Provado contra o Postgres, os dois revertidos:** autoria dupla 11/11 (dono 18 + executor 4
+gravados; analista mandando `executado_por` → 403) e papel 14/14 (no papel analista a busca
+global e a prévia da devolução → 403; depois da troca, respondem).
+
 ### 👁 "Ver como analista" — o botão morto pintado de vivo
 O `vcOff()` mandava a opacidade num **segundo atributo `style=`**, e o HTML fica com o
 primeiro: os sete botões do modo apareciam com a cor inteira e **não respondiam ao clique**.
@@ -300,6 +333,13 @@ indicador de online (fechar pelo botão, clicando fora e com Esc).
     por unidade**: os dois ciclos reais usaram o motivo 4, que vai ao estoque. Para exercitar
     o 1 é preciso indicar alguém com cadastro ativo.
 12. **A etiqueta `🏛 N sem C.I.`** — 550 TRs a têm.
+13. **⚠️ Os dois papéis.** Entre normalmente: você nasce **analista**, e as telas de
+    coordenação e superadmin **não estão lá**. A caixa fica no pé do menu → "🛠 Virar técnico
+    do sistema" → o menu cresce e a faixa azul aparece no topo.
+14. **⚠️ Agir pela conta de um analista** (só no papel técnico). Confira no console do
+    navegador a linha `[agir como] POST /parcela/... · dono X · executor 4` a cada escrita —
+    se ela não aparecer, o carimbo não pegou. E confira no histórico da parcela que o
+    trabalho ficou no nome dele.
 
 ---
 

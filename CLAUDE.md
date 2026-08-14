@@ -4,7 +4,7 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 13/08/2026 — ver `SESSAO.md` para o estado do dia.
+**Última sessão:** 14/08/2026 — ver `SESSAO.md` para o estado do dia.
 
 > **O sistema está ABERTO.** Os dois interruptores estão **desligados** e a equipe trabalha.
 >
@@ -157,6 +157,58 @@ Cinco `CHECK` no banco, e o índice **único parcial** `(tr, setorial_id) WHERE 
 'pendente'`: **um pendente por TR**. É ele que segura dois cliques — a conferência da rota
 não seguraria.
 
+### `usuarios.papel_ativo` + `papel_historico` — os dois papéis do superadmin (14/08/2026)
+
+O Richard tinha dois papéis no mesmo login e eles se confundiam. Agora é explícito:
+
+| papel | o que vê e faz |
+|---|---|
+| `analista` | só o que um analista vê e faz. **14 itens somem do menu.** |
+| `tecnico` | acesso a tudo, e é o **único** papel que age pela conta de outro analista |
+
+**Padrão ao entrar: `analista`.** O reset é do SERVIDOR, em `POST /usuarios/login` — se o papel
+sobrevivesse à sessão, uma entrada de manhã continuaria com o acesso de ontem à noite, e
+trocar deixaria de ser ato deliberado.
+
+⚠️ **UMA REGRA SÓ: `papel.perfilEfetivo(u)`.** No papel analista o superadmin **é** analista
+em toda parte, e as rotas usam essa função no lugar de `u.perfil` — **10 pontos**. Uma
+condição a mais em cada rota seria onde faltaria uma.
+
+⚠️ **O ponto que passa batido são as SEIS rotas de "coordenador OU superadmin"**
+(`mesclar`, `repositorio`, `faixa_aviso`, `notificacao`, `parcela/estornar`,
+`solicitacao_devolucao/:id`). A condição é `['coordenador','superadmin'].includes(perfil)`, e
+o Richard **não é coordenador de ninguém** — tirar só o `superadmin` da lista não bastaria.
+O `perfilEfetivo` resolve pelos dois lados.
+
+⚠️ **`papel_historico` só registra quando o papel MUDA.** Uma linha por login normal encheria
+a trilha e esconderia a troca deliberada, que é o que se quer enxergar. `origem` separa
+`login` de `troca`.
+
+⚠️ **Ninguém troca o papel de outro**, e a troca e o registro vão na **mesma transação** —
+papel trocado sem registro seria trilha furada.
+
+### `parcela_historico.executado_por` — a autoria dupla (14/08/2026)
+
+`analista_id` = o **DONO** do trabalho · `executado_por` = **QUEM CLICOU**.
+
+⚠️ **Fica NULO quando o dono executou.** Nulo quer dizer "foi ele mesmo": preencher sempre
+pareceria mais completo e tiraria o sinal — o que importa achar é a linha em que os dois
+**diferem**.
+
+⚠️ **Só o superadmin age por outro**, conferido contra o perfil lido no BANCO. Sem isso
+qualquer analista mandaria `executado_por` e gravaria no nome de outro.
+
+⚠️ **Sem foreign key**, de propósito: existe `DELETE /usuarios/:id`, e uma FK faria a exclusão
+de um cadastro falhar por causa de uma linha de histórico. **Trilha não trava cadastro.**
+
+A marca vai na **coluna e no texto**: a coluna serve para consultar ("o que o Richard
+executou"), o texto para quem abre uma linha solta. Só a coluna repetiria o erro do
+`registrado_por`, que é nome em texto livre e nunca respondeu à pergunta da CGE.
+
+⚠️ **Isto corrigiu um defeito que já existia:** o `analista_id` do histórico significava o
+DONO em `parecer`/`situacao`/`ci` e o EXECUTOR em `devolucao_tr`/`estorno`. Enquanto os dois
+papéis coincidiam, ninguém percebeu.
+
 ### Outras
 - `metas_analistas` — 46 analistas, `vigente = true`, período Nov/2025 a Abr/2026
 - `anotacoes_tr` — anotações por TR com histórico
@@ -201,6 +253,8 @@ a lib é testar a regra.
 | `busca-global.js` | o card por TR da busca global, e o que pode ser mostrado como prazo |
 | `devolucao.js` | devolver ao estoque, e o bloqueio quando há PC no C.I. |
 | `devolucao-pedido.js` | o PEDIDO de devolução do analista — quem decide, e para onde a TR vai |
+| `autoria.js` | o DONO e o EXECUTOR de cada ação — e quem pode agir por outro |
+| `papel.js` | os dois papéis do superadmin, e o **perfil efetivo** que todas as rotas usam |
 | `processo-edit.js` | corrigir o processo SGPe, e ler o link colado |
 | `ci.js` | o ciclo do Controle Interno |
 | `sgpe-link.js` | o mapa de **183 órgãos** e a URL do SGPe |
@@ -224,7 +278,14 @@ GET  /tr/:tr/pedido_devolucao               a prévia do pedido do analista
 POST /solicitacao_devolucao                 ele PEDE (não devolve)
 GET  /solicitacao_devolucao                 a fila — recorte pelo perfil lido no BANCO
 PATCH /solicitacao_devolucao/:id            decide e, se aprovada, DEVOLVE na mesma transação
+
+PATCH /usuarios/:id/papel                   troca o papel (só o próprio, só superadmin)
+GET  /usuarios/:id/papel                    o papel de agora e as últimas 20 trocas
 ```
+
+⚠️ **QUATRO ROTAS LIAM O `perfil` DO CORPO** — excluir usuário, excluir no repositório e os
+dois estornos. Bastava mandar `perfil: 'superadmin'` para passar. Leem do BANCO desde 14/08,
+pelo `usuario_id`. **Não voltar a confiar no corpo: ele nunca provou nada.**
 
 ⚠️ **A prévia e a gravação usam a MESMA função de regra.** Se cada uma calculasse do seu
 jeito, o modal prometeria um número e o banco faria outro.

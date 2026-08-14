@@ -470,6 +470,32 @@ relatório; a publicação sai quando ele mandar, nunca como consequência de "t
 - Nunca commitar CSVs de carga nem scripts com credencial.
 - Comunicação com o Richard em português do Brasil.
 
+### O aviso sonoro — `C:\Users\Richard\.claude\avisar.ps1`
+
+Roda ao fim de **toda** resposta, inclusive diagnóstico e pergunta.
+
+```powershell
+powershell -File C:\Users\Richard\.claude\avisar.ps1                  # terminou
+powershell -File C:\Users\Richard\.claude\avisar.ps1 -Modo problema   # espera decisão
+```
+
+⚠️ **SEM VOZ, desde 13/08/2026.** A frase falada saiu por decisão do Richard, e o bloco de
+síntese (WinRT, SAPI5 e a queda para a Maria) foi **removido, não comentado** — código que
+ninguém chama é código que ninguém revisa. O parâmetro `-Mensagem` deixou de existir.
+
+| modo | som |
+|---|---|
+| `ok` | **toque de aeroporto**: 880 Hz · 659 Hz · 523 Hz (Lá–Mi–Dó), com 40 ms entre elas |
+| `problema` | **6 graves** de 400 Hz — inalterados, e é o único som que interrompe de propósito |
+
+⚠️ **kernel32 `Beep`, NUNCA `[console]::Beep`.** O do console some quando a saída está
+redirecionada; o do kernel32 fala com o driver e toca em qualquer contexto — inclusive
+chamado de dentro de outro processo, que é como este script sempre roda.
+
+⚠️ **O arquivo é ASCII PURO, de propósito.** O PowerShell 5.1 lê `.ps1` como ANSI quando não
+há BOM: um travessão ou um emoji num comentário vira lixo e **quebra o parser**. Não é erro de
+exibição — o script inteiro deixa de rodar. Já aconteceu.
+
 ---
 
 ## Pendências

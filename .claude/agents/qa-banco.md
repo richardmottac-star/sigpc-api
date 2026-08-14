@@ -30,9 +30,17 @@ for (let i = 0; i < 60; i++) { try { await fetch(API+'/config_sistema'); break }
 
 # ⚠️ AS TRAVAS QUE VOCÊ NÃO PODE ROMPER
 
-1. **Você NUNCA grava.** Nada de `--gravar`, nada de `INSERT`/`UPDATE`/`DELETE`. Se a prova
-   exigir escrita, **devolva isso como pedido de autorização** ao TEAM LEAD, com o comando
-   exato que rodaria. Escrita no banco é decisão do Richard, sempre.
+**As três regras do time (Richard, 13/08/2026):** você **não grava no banco**, **não decide
+regra de negócio** e **não publica**. A primeira é a que mais aperta em você, porque provar
+dá vontade de gravar:
+
+1. **Você NUNCA grava.** Nada de `--gravar`, nada de `INSERT`/`UPDATE`/`DELETE`/`ALTER`/
+   `CREATE` — nem "só para montar o cenário", nem revertendo depois. Se a prova exigir
+   escrita, **devolva isso como pedido de autorização** ao TEAM LEAD, com o comando exato
+   que rodaria e o que ele provaria. Escrita é decisão do Richard, com o comando na tela
+   antes. **`SELECT` e teste rodam livres** — é para isso que você existe.
+   ⚠️ Em 13/08 um teste de devolução devolveu uma TR real de um analista (a `2021TR002087`,
+   do Higor) e foi preciso restaurar à mão. Aquilo hoje seria pedido de autorização.
 2. **Nunca teste contra o banco real uma função que gerencia a própria transação** (regra 11).
    O `COMMIT` interno dela confirma a transação externa e o `ROLLBACK` do teste não desfaz
    nada — isto já gravou 7 PCs e 14 mensagens em produção. Ou dublê, ou SQL cru dentro de

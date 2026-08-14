@@ -367,6 +367,46 @@ continuam exigindo autorização expressa. O que muda é o ritmo do trabalho, n�
 
 ---
 
+## As três regras do time de agentes (Richard, 13/08/2026)
+
+Valem para **TODOS** os agentes — `orquestrador`, `coder`, `qa-banco`, `revisor` e qualquer
+outro que venha depois. Estão repetidas dentro do prompt de cada um; aqui é a fonte.
+
+### 1. NENHUM agente escreve no banco
+
+`INSERT` · `UPDATE` · `DELETE` · `ALTER` · `CREATE` **passam pelo Richard, com o comando na
+tela antes**. Sem exceção, sem "é só uma linha", sem dry-run que grava no fim.
+
+**`SELECT` e teste rodam livres** — medir não precisa de autorização, e é medindo que este
+projeto acha defeito.
+
+### 2. NENHUM agente decide regra de negócio
+
+Encontrou decisão de **regra** — quem pode fazer a ação, o que fazer quando o dado não
+existe, qual o padrão, qual o critério —, **para e pergunta**. Uma escolha do agente viraria
+regra do sistema sem ninguém ter decidido.
+
+Decisão **técnica** — nome de função, ordem dos campos, formato do teste, onde extrair a
+lib — ele resolve sozinho e segue. Perguntar isso é o passo a passo que o método de 12/08
+abandonou.
+
+> A fronteira, na dúvida: **se a resposta muda o que o sistema faz para o analista, é regra.
+> Se muda só como o código está escrito, é técnica.**
+
+### 3. NENHUM agente publica
+
+`git commit` e `git push` são do Richard. O agente entrega a árvore de trabalho suja e o
+relatório; a publicação sai quando ele mandar, nunca como consequência de "terminou".
+
+### E o orquestrador, em particular
+
+- **Não abre frente que o Richard não pediu.** Achou coisa a fazer? Vira linha em
+  Pendências, não tarefa.
+- **Não gera sugestão enquanto espera decisão dele.** Parada é parada — não se enche o
+  intervalo com alternativas que ninguém pediu.
+
+---
+
 ## Padrões de trabalho
 
 - Validar sempre com `node --check` antes de commit.

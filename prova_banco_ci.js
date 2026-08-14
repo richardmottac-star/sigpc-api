@@ -137,7 +137,7 @@ async function doHttp(tr) {
   conf(btPg !== '', 'O BOTAO EXISTE — antes de 13/08 este ramo nao desenhava botao nenhum');
   conf(!/disabled/.test(btPg), 'E ESTA ATIVO — sem `disabled`');
   conf(btPg.includes(`onclick="pEnviarCI(${chave})"`), 'e chama pEnviarCI com a TR e a parcial reais');
-  conf(/opcional — a parcial já está baixada/.test(btPg), 'com "opcional — a parcial ja esta baixada"');
+  conf(/encaminhe ao Controle Interno/.test(btPg), 'com o chamado "encaminhe ao Controle Interno"');
   conf(btPg === btHt, 'o botao e IDENTICO pelos dois caminhos — Date e string dao o mesmo HTML');
 
   console.log('\n═══ 5. A FAIXA DO PASSO 2, COM A DATA REAL ═══');
@@ -155,7 +155,8 @@ async function doHttp(tr) {
   const fxPg = tela.pFaixaPasso(paPg);
   const dataBr = new Date(alvo.baixa).toLocaleDateString('pt-BR');
 
-  conf(/Passo 2 de 2/.test(fxHt), 'a faixa diz "Passo 2 de 2"');
+  conf(/Passo 2 de 3/.test(fxHt), 'a faixa diz "Passo 2 de 3"');
+  conf(/falta encaminhar ao Controle Interno/.test(fxHt), 'e cobra o passo que falta');
   conf(fxHt.includes(`baixada em ${dataBr}`), `com a data real da baixa (${dataBr})`,
        fxHt.replace(/\s+/g, ' ').slice(0, 140));
   conf(fxHt.includes(alvo.parecer), `e o parecer real (${alvo.parecer})`);

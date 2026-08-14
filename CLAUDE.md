@@ -522,8 +522,13 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
       e o botão do C.I. sumia do cartão, deixando **2.181 parciais** sem caminho para o C.I.
       Corrigido no `index.html` (armadilha 19 de lá), sem tocar em `baixada`, `data_baixa`
       nem `enviado_ci`.
-      **Encaminhar ao C.I. é OPCIONAL e não desfaz a baixa** — nem o encaminhamento, nem o
-      retorno do C.I. É isso que a faixa do passo 3 diz na tela.
+      ⚠️ **Encaminhar ao C.I. é OBRIGATÓRIO** (corrigido pelo Richard no mesmo dia — a
+      primeira versão desta linha dizia "opcional", e o texto do botão também). A parcial não
+      está pronta quando é baixada: a baixa é o passo do parecer, e o C.I. é o passo seguinte.
+      **O que não muda é a baixa** — nem o encaminhamento nem o retorno do C.I. a cancelam.
+      ⚠️ **Mas não existe trava nenhuma que exija o encaminhamento** — nem no servidor, nem
+      no sino, nem em relatório. Hoje são **2.186 parciais baixadas que nunca foram ao C.I.**,
+      e nada avisa. Ver Pendências.
 - **Prazo é data civil brasileira, nunca `CURRENT_DATE`.** O Postgres do Railway roda em UTC,
   então `CURRENT_DATE` vira o dia seguinte às 21h de Brasília. Medido em 11/08 às 23h55:
   as **11.033** PCs com prazo mostravam um dia a mais de atraso, e o número voltava de manhã.

@@ -167,6 +167,32 @@ async function doHttp(tr) {
   conf(tela.pBotaoCI(paPg, chave) === tela.pBotaoCI(paHt, chave),
        'ja o BOTAO nao depende de data, e sai igual pelos dois caminhos');
 
+  console.log('\n═══ 5b. A ETIQUETA "SEM C.I." BATE COM O BANCO ═══');
+  // ⚠️ A etiqueta é uma CONTAGEM, e contagem que diverge do banco é pior que contagem
+  // nenhuma: o analista encaminha tudo e o número continua lá. Aqui a conta da tela é
+  // conferida contra a mesma pergunta feita em SQL.
+  const { rows: [esperado] } = await cli.query(
+    `WITH pa AS (
+       SELECT tr, parcial_num, bool_and(baixada) td,
+              bool_or(parecer_tipo IS NOT NULL) tp, bool_or(enviado_ci) ci
+         FROM prestacoes_contas WHERE tr = $1 AND parcial_num IS NOT NULL
+        GROUP BY tr, parcial_num)
+     SELECT COUNT(*)::int n FROM pa WHERE td AND tp AND NOT ci`, [alvo.tr]);
+
+  const trHt = tela.agrupar(htRows).find(t => t.tr === alvo.tr);
+  const naTela = tela.planSemCi(trHt);
+  conf(naTela === esperado.n, `a etiqueta mostra ${naTela} e o banco diz ${esperado.n}`);
+  conf(naTela > 0, 'e a TR do caso tem divida de C.I. — a etiqueta aparece nela');
+
+  // O total do acervo, para o relatorio da sessao.
+  const { rows: [tot] } = await cli.query(
+    `WITH pa AS (
+       SELECT tr, parcial_num, bool_and(baixada) td,
+              bool_or(parecer_tipo IS NOT NULL) tp, bool_or(enviado_ci) ci
+         FROM prestacoes_contas WHERE parcial_num IS NOT NULL GROUP BY tr, parcial_num)
+     SELECT COUNT(*)::int parciais, COUNT(DISTINCT tr)::int trs FROM pa WHERE td AND tp AND NOT ci`);
+  console.log(`        acervo: ${tot.parciais} parciais sem C.I., em ${tot.trs} TRs`);
+
   console.log('\n═══ 6. A ROTA ACEITA A PARCELA BAIXADA — SEM ESCREVER ═══');
   // ⚠️ Não se faz o POST: seria escrita em produção, e escrita é decisão do Richard. O que dá
   // para provar sem gravar é que NENHUMA das duas recusas da rota se aplica a esta parcela.

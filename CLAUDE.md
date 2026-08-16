@@ -4,7 +4,7 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 14/08/2026 — ver `SESSAO.md` para o estado do dia.
+**Última sessão:** 16/08/2026 — ver `SESSAO.md` para o estado do dia.
 
 > **O sistema está ABERTO.** Os dois interruptores estão **desligados** e a equipe trabalha.
 >
@@ -553,6 +553,26 @@ porque só olhou a direção contrária.
 ⚠️ **E TODA GRAVAÇÃO EM MASSA CONFERE DE NOVO DEPOIS DE GRAVAR**, dentro da MESMA transação,
 comparando com o previsto no dry-run — e faz `ROLLBACK` se não bater. Conferir só antes prova
 o que se esperava, não o que aconteceu.
+
+---
+
+
+### ⚠️ A NUMERAÇÃO DAS PARCIAIS — frente ABERTA em 16/08/2026
+
+**Não corrija `parcial_num` sem ler o `SESSAO.md`**, que abre com o estado completo.
+
+O diagnóstico mudou: **a migração carregou o número da CGE CORRETO** (8.998 PCs); quem
+estragou foi a **recarga de 05/08**, que apagou 5.716 números e trocou 77 — porque
+`recarga_exec.js:214-215` grava `nums[0]`, **o MENOR rótulo** da planilha. O padrão de 87,5%
+"numerado por `parcela_seq`" que a auditoria mediu é resíduo da renumeração de 13/08
+preenchendo as lacunas que a recarga abriu.
+
+⚠️ **A armadilha 16 não é verdade literal:** já existem **10 casos** de um processo com mais
+de um número. A regra "uma parcial = (tr, processo_pc)" só sobrevive porque a chave crua
+**não normaliza** (`SCC8214/2024` ≠ `SCC 00008214/2024`).
+
+⚠️ **A pergunta que trava tudo, e é do Richard:** o SIGEF permite duas parcelas no mesmo
+processo SGPe? O mapa da CGE diz que sim em **114 casos**; o banco de hoje diz que não.
 
 ---
 

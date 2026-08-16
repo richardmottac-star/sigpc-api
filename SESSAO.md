@@ -1,6 +1,125 @@
-# SIGPC-API — ESTADO EM 14/08/2026
+# SIGPC-API — ESTADO EM 16/08/2026
 
 Cole no início do chat novo. Este arquivo é o que basta para retomar.
+
+---
+
+## ▶▶ 16/08 — A NUMERAÇÃO DAS PARCIAIS: ONDE PARAMOS (leia isto primeiro)
+
+**Nada foi gravado nesta frente.** Um backup foi criado; o `renumerar_sigef.js` NUNCA rodou
+com `--gravar`. Tudo abaixo é medição.
+
+### A cadeia causal — o diagnóstico MUDOU no meio do dia
+
+A auditoria culpou a migração. A medição aponta outra coisa:
+
+```
+migração         carregou o `Parcial` da CGE, CORRETO — 8.998 PCs
+recarga 05/08    APAGOU 5.716 números e trocou 77   ← o estrago
+renumeração      preencheu as lacunas pela ordem de `parcela_seq`
+   13/08         ← é DAQUI que vem o padrão de 87,5% que a auditoria mediu
+```
+
+⚠️ **A prova:** o `_backup_baixada_20260805` (foto de ANTES da recarga) tinha exatamente
+**8.998 PCs com número**, e é **idêntico linha a linha** ao `MAPA_PARCIAL_SIGEF.csv`, que o
+Richard gerou em 16/08 direto do `ESTOQUE_FCEE_OFICIAL_DA_CGE.xlsx` e **nunca passou pelo
+banco**. 8.998 de 8.998.
+
+⚠️ **O mecanismo do estrago está em `recarga_exec.js:214-215`**: quando a planilha traz vários
+rótulos para a mesma chave, ele grava `nums[0]` — **o MENOR**. Isso colapsa parcelas inteiras
+num número só. E **207 de 3.071 linhas de planilha (6,7%) têm SGPe que não existe naquela TR no
+banco** (100% das de 2025/2026), o que faz a chave falhar e o `MIN` colapsar o que sobra.
+
+### Os números, medidos por DOIS agentes cegos um ao outro (bateram)
+
+| | |
+|---|---|
+| escopo (`hoje ≠ mapa`) | **2.432 PCs · 211 TRs** |
+| onde o gabarito de 05/08 tem opinião | 73 PCs · 30 TRs — **e discorda do mapa em 100%** |
+| nas outras 2.359 | **B é mudo**: o número de hoje não veio de gabarito nenhum |
+| a recarga de 05/08 | **6.128 PCs alteradas**: 5.716 apagadas · 77 trocadas · 335 criadas |
+
+⚠️ **O teste "a planilha concorda com B em 64 de 73" NÃO VALE — é circular.** B, o
+`processo_pc` do banco e o rótulo da planilha vêm todos da mesma leitura. **Toda medição que
+escapa dessa chave põe a planilha ao lado do mapa da CGE:**
+
+```
+por VALOR (coluna que a recarga nunca leu)   73×1 · 121×8 · 224×3 · 358×12
+maior número por TR (B só usou o menor)      41×3   ← os dois agentes, idêntico
+conjunto de números por TR                   15×1 nas 30 TRs · 44×3 nas 211
+```
+
+E nas **6 chaves** em que a planilha ATUAL escreve mais de um número para o mesmo processo, **o
+número do mapa está escrito nas 6** — B é sempre o menor.
+
+**Ninguém renumerou nada entre 04/08 e 16/08:** 6 linhas mudaram, todas duplicata ou
+apagamento, **zero tocam as 73**.
+
+### ⚠️ A DECISÃO QUE FALTA, E É SÓ DO RICHARD
+
+**O SIGEF permite duas parcelas no mesmo processo SGPe?**
+
+- **SIM** → o mapa está certo e a correção vale para as 2.432.
+- **NÃO** → o mapa parte processos indevidamente em **114 casos (78 TRs)**, e o lote precisa ser recortado.
+
+**Nenhum agente leu o SIGEF** — e o `ESTOQUE_FCEE_OFICIAL_DA_CGE.xlsx` não está no
+repositório. Os dois auditaram o CSV derivado, não a fonte.
+
+⚠️ **E a armadilha 16 não é verdade literal:** o `parcial_num` de hoje já tem **10 casos** de
+um processo com mais de um número. A regra "uma parcial = (tr, processo_pc)" só sobrevive
+porque a chave crua **não normaliza** — `SCC8214/2024` e `SCC 00008214/2024` contam como
+processos diferentes.
+
+### O que BLOQUEIA a gravação hoje (achados do revisor e do qa-banco)
+
+| # | achado | tamanho |
+|---|---|---|
+| 1 | **split** — o mesmo processo em várias parciais | 114 processos · 78 TRs · 297 PCs (94 baixadas · 87 com parecer · 10 no C.I.) |
+| 2 | **parcelas mistas** (parte baixada, parte aberta) — hoje existem **0** | **12**, e numa delas 2 PCs nunca analisadas somem dentro da faixa azul do C.I. |
+| 3 | **o histórico não acompanha o número** | 76 linhas em 64 parciais mudam de dono; **29 diligências voltam a ser cobradas pelo sino** |
+| 4 | **o `-1` entra em parcela real** | 2 → **42 parciais**, 39 TRs; 3 já com parecer; uma de R$ 169.361,85 |
+| 5 | a correção **desfaz 2 fusões legítimas** | `2022TR000791` e `2022TR000967` — o mesmo processo em duas grafias, 12 PCs baixadas |
+
+### Os 4 defeitos do `renumerar_sigef.js` (NÃO corrigidos — o escopo pode mudar)
+
+1. ⚠️ **O `--gravar` DESTRÓI o backup.** O `_backup_parcial_num_20260816` que está no banco
+   tem **11 colunas**; o script faz `DROP TABLE` e recria com **7**, perdendo `parecer_tipo`,
+   `enviado_ci`, `ci_situacao` e `analista_id` — a única prova de que o C.I. não foi tocado.
+2. **A trava do item 0 é lint, não guarda:** roda um regex sobre uma constante do próprio
+   arquivo. **Não pode disparar com dado nenhum** — e imprime `✓`.
+3. **A conferência pós-escrita compara 1 de 13 colunas** (só `baixada`), porque o backup dela
+   guarda 7.
+4. **A janela usa 2 sinais; o `janela_livre.js` usa 4.** Uma analista registrando resposta de
+   diligência deixa o `janela_livre` OCUPADO e este script **LIVRE** — armadilha 17 ao contrário.
+
+⚠️ **E a validação que teria abortado a rodada JÁ EXISTE no repositório:**
+`corrigir_processo_pc.js:224-227`, `'parcela partida em 2 numeros'`. Hoje dá **0**; depois do
+lote daria **114**.
+
+### Os arquivos desta frente
+
+| arquivo | onde |
+|---|---|
+| `AUDITORIA_SIGPC_2026-08-16.md` | versionado |
+| `PARECER_FONTES_2026-08-16.md` | versionado — o parecer da dupla verificação |
+| `renumerar_sigef.js` | **NÃO versionado** — tem os 4 defeitos acima |
+| `MAPA_PARCIAL_SIGEF.csv` · `TRS_AFETADAS_176.csv` | **no `.gitignore`** |
+| `GRUPO 1/2/3 ... .xlsx` (16/08) | na raiz, não versionados |
+| `_backup_parcial_num_20260816` | **no banco, 14.652 linhas, 11 colunas — NÃO APAGAR** |
+
+⚠️ **O `MAPA_PARCIAL_SIGEF.csv` NÃO se reconstrói a partir do banco.** Se sumir, reimportar a
+planilha da CGE.
+
+⚠️ **O pacote `xlsx` NÃO está instalado no projeto** — logo o `recarga_exec.js` **não roda
+hoje** neste diretório. Os agentes instalaram fora, em pasta temporária.
+
+### A ordem de trabalho da próxima sessão
+
+1. **Responder a pergunta do SIGEF** (split). Sem ela, o resto é trabalho perdido.
+2. Recortar o lote pelos 5 bloqueios acima — **não só por fusão, como foi feito na primeira vez**.
+3. Corrigir os 4 defeitos do script.
+4. Dry-run · dupla verificação · gravar em janela livre · **conferir de novo DEPOIS de gravar,
+   na mesma transação, com `ROLLBACK` se não bater**.
 
 ---
 

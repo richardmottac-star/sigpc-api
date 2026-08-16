@@ -3323,7 +3323,25 @@ app.post('/parcela/parecer', async (req, res) => {
               estornada = false,
               data_estorno = NULL,
               atualizado_em = NOW()
+        -- ⚠️ AND baixada = false — CORRIGIDO EM 16/08/2026.
+        --
+        -- Sem ele, o parecer reescrevia data_baixa, origem_baixa e parecer_tipo de PCs
+        -- que JÁ ESTAVAM baixadas, dentro da mesma parcela. O 409 acima não protege: ele só
+        -- dispara quando **todas** estão baixadas (jaBaixadas.length === pcs.length). Numa
+        -- parcela MISTA — parte baixada, parte aberta — ele não dispara, e o UPDATE, que é por
+        -- condição derivada, pegava a parcela inteira.
+        --
+        -- O que isso fazia na prática: uma PC baixada em 30/06 com origem_baixa =
+        -- 'carga_historica' passava a constar como baixada HOJE, por 'sistema', com o
+        -- parecer novo por cima do que estava lá. A produtividade saltava de mês e o parecer
+        -- original sumia sem trilha. **Ninguém reclama de uma baixa que ficou mais recente.**
+        --
+        -- Não era hipótese: a renumeração das 15 TRs de hoje criou 3 parcelas mistas
+        -- (2020TR000761 p17 · 2021TR002375 p1 · 2022TR001248 p7), e a inclusão de PC em
+        -- parcela existente criaria mais. Agora o parecer baixa só o que estava aberto, e a
+        -- resposta devolve a contagem real.
         WHERE setorial_id = $4 AND tr = $5 AND parcial_num = $6
+          AND baixada = false
         RETURNING codigo_pc`,
       [b.parecer_tipo, b.analista_id ?? null, b.registrado_por ?? null,
        setorial_id, b.tr, String(b.parcial_num)]
@@ -3557,7 +3575,17 @@ app.post('/parcela/ci', async (req, res) => {
               ci_situacao = 'na_fila',
               ci_rodada = GREATEST(ci_rodada, 1),
               atualizado_em = NOW()
+        -- ⚠️ AND baixada = true — o terceiro da mesma família, 16/08/2026.
+        --
+        -- enviado_ci SUSTENTA A BAIXA (ver CLAUDE.md), e as PCs no ciclo do C.I. são todas
+        -- baixada = true. Numa parcela MISTA o 409 acima não protege — ele exige que UMA
+        -- tenha parecer, não que todas tenham —, então uma PC aberta e nunca analisada era
+        -- marcada como encaminhada e passava a contar como baixada nos relatórios.
+        --
+        -- É a mesma regra que fez as 39 não baixadas ficarem de fora da frente 3 hoje.
+        -- Em parcela normal não muda nada: lá todas já são baixadas.
         WHERE setorial_id = $2 AND tr = $3 AND parcial_num = $4
+          AND baixada = true
         RETURNING codigo_pc`,
       [b.parecer_ci ?? null, setorial_id, b.tr, String(b.parcial_num)]
     );
@@ -3633,7 +3661,17 @@ app.post('/parcela/estornar', async (req, res) => {
               parecer_tipo = NULL,
               situacao_atual = NULL,
               atualizado_em = NOW()
+        -- ⚠️ AND baixada = true — o espelho da correção do parecer, mesma data.
+        --
+        -- O estorno desfaz a baixa. Sem esta cláusula ele marcava estornada = true e
+        -- data_estorno = NOW() em PCs que **nunca foram baixadas**, dentro de uma parcela
+        -- mista — e o 409 acima também não protege, porque ele só recusa quando NENHUMA está
+        -- baixada (!pcs.some(p => p.baixada)).
+        --
+        -- Estornar o que nunca foi baixado inventa um evento que não houve, e a produtividade
+        -- cumulativa lê data_estorno para saber o que valia em cada data.
         WHERE setorial_id = $3 AND tr = $4 AND parcial_num = $5
+          AND baixada = true
         RETURNING codigo_pc`,
       [b.motivo, b.usuario_nome ?? null, setorial_id, b.tr, String(b.parcial_num)]
     );

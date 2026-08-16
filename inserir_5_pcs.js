@@ -27,7 +27,11 @@ const { Pool } = require('pg');
 
 const GRAVAR = process.argv.includes('--gravar');
 const D = __dirname + '/';
-const BK = '_backup_5pcs_20260816';
+// ⚠️ SUFIXO `b` NA SEGUNDA RODADA. O `_backup_5pcs_20260816` é da primeira (as 5, gravadas
+// às 20h) e **não pode ser sobrescrito** — backup que se sobrescreve não é backup. O
+// `CREATE TABLE` sem `IF NOT EXISTS` aborta se o nome colidir, e foi o que aconteceu:
+// a segunda rodada bateu no backup da primeira. Nome novo, e o antigo fica.
+const BK = '_backup_5pcs_20260816b';
 
 // ⚠️ LISTA EXPLÍCITA, escrita à mão (regra 12). Cada linha foi conferida contra o banco:
 // a TR existe (menos a última), tem 0 finais, e o analista tem cadastro ativo.
@@ -51,6 +55,21 @@ const AS_5 = [
     valor: 202051.18,  analista_id: 31, analista_nome: 'Noici',     grupo: 2,
     entidade: 'APAE DE SAO DOMINGOS', processo_mae: 'SCC 5386/2023',
     codigo_pc: '2024PC900000' },
+
+  // ── A SEXTA, acrescentada depois (Richard, 16/08/2026) ──────────────────────
+  //
+  // A `2024TR000204` nasceu aqui com 1 parcial e 0 finais, e o CSV traz a PFINAL dela.
+  // Conferido: `SCC16503/2024` não existe em lugar nenhum da base, e o valor bate com o
+  // repasse (a FINAL guarda o repasse do TR, não valor próprio — ver CLAUDE.md).
+  //
+  // ⚠️ A OUTRA LINHA QUE O CSV PEDIA **NÃO ENTROU**: a parcial 1 da `2022TR000927`. A
+  // triangulação a classificou como *"BANCO JÁ COMPLETO"* — a planilha diz 1 PC e o banco tem
+  // 1 PC (`2022PC001135`, R$ 60.000, **baixada com parecer**). O CSV traz outro processo
+  // (`SCC 6496/2023` contra `SCC 00009469/2023`) e R$ 987,44 a mais: é a MESMA PC descrita de
+  // outro jeito na planilha, e inserir criaria duplicata dentro de uma parcela 100% baixada.
+  { tr: '2024TR000204', tipo: 'final',   parcial: 'FINAL', proc: 'SCC 16503/2024',
+    valor: 202051.18,  analista_id: 31, analista_nome: 'Noici',     grupo: 2,
+    entidade: 'APAE DE SAO DOMINGOS', processo_mae: 'SCC 5386/2023' },
 ];
 
 // ⚠️ `situacao_atual` e `parecer_tipo` FICAM NULOS, de propósito.
@@ -88,12 +107,20 @@ const nl = (t) => console.log(t ?? '');
                 COUNT(*) FILTER (WHERE tipo='final')::int finais
            FROM prestacoes_contas WHERE tr = $1`, [p.tr]);
 
-      // ⚠️ guarda: não duplicar uma FINAL que já exista
-      if (p.tipo === 'final' && tr.finais > 0)
-        throw new Error(`${p.tr} ja tem ${tr.finais} PC final — nao insiro`);
+      // ⚠️ A ORDEM IMPORTA: "já inserida" vem ANTES da guarda das finais.
+      // Invertido, a segunda rodada abortava em `2020TR000811 ja tem 1 PC final` — e a PC
+      // final que ela achava era a que ESTA MESMA LISTA inseriu na rodada anterior. A guarda
+      // existe para não duplicar PFINAL de OUTRA origem, não para brigar consigo mesma.
       const { rows: [ja] } = await cli.query(
         `SELECT COUNT(*)::int n FROM prestacoes_contas WHERE codigo_pc = $1`, [codigo]);
-      if (ja.n > 0) throw new Error(`${codigo} JA EXISTE`);
+      // ⚠️ JA INSERIDA numa rodada anterior: PULA em vez de abortar. As 5 primeiras foram
+      // gravadas as 20h; a sexta veio depois. Abortar aqui obrigaria a editar a lista, e a
+      // lista e o registro do que foi decidido — ela nao encolhe.
+      if (ja.n > 0) { nl(`   = ${codigo.padEnd(22)} ja existe, pulando`); continue; }
+
+      // guarda: não duplicar uma FINAL de outra origem
+      if (p.tipo === 'final' && tr.finais > 0)
+        throw new Error(`${p.tr} ja tem ${tr.finais} PC final de outra origem — nao insiro`);
 
       await cli.query(
         `INSERT INTO prestacoes_contas
@@ -137,9 +164,12 @@ const nl = (t) => console.log(t ?? '');
        GROUP BY 1,2 HAVING COUNT(*) FILTER (WHERE baixada) > 0
                        AND COUNT(*) FILTER (WHERE NOT baixada) > 0) t`, [inseridos]);
 
+    if (!inseridos.length) { await cli.query('ROLLBACK'); nl('\nNada novo a inserir.'); return; }
+
     const checks = [
       ['nenhuma PC antiga alterada',        c1.n === 0, c1.n],
-      ['total = antes + 5',                 c2.n === bk.n + 5, `${bk.n}+5=${c2.n}`],
+      ['total = antes + inseridas',         c2.n === bk.n + inseridos.length,
+                                            `${bk.n}+${inseridos.length}=${c2.n}`],
       ['nenhuma TR com 2 PCs finais',       c3.n === 0, c3.n],
       ['as 5 nascem completas e limpas',    c4.n === 0, c4.n],
       ['parciais sem NL (era 0, vira 1)',   c5.n === 1, c5.n],

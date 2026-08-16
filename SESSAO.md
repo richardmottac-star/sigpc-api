@@ -75,124 +75,172 @@ sistema tem *mais*, não menos.
   Se for rearmado, a zeragem universal de `recarga_exec.js:263` passa a ser perigosa **agora
   que há analista dentro** — o que não era verdade em 05/08.
 
-## ▶▶ 16/08 — A NUMERAÇÃO DAS PARCIAIS: ONDE PARAMOS (leia isto primeiro)
+## ✅ 16/08/2026 — GRAVADO EM PRODUÇÃO. Leia isto primeiro.
 
-**Nada foi gravado nesta frente.** Um backup foi criado; o `renumerar_sigef.js` NUNCA rodou
-com `--gravar`. Tudo abaixo é medição.
+Cinco escritas, todas com **modo manutenção**, **backup da tabela inteira dentro da transação**
+e **conferência pós-escrita com ROLLBACK se não bater**. Publicado nas duas branches dos dois
+repositórios.
 
-### A cadeia causal — o diagnóstico MUDOU no meio do dia
-
-A auditoria culpou a migração. A medição aponta outra coisa:
-
-```
-migração         carregou o `Parcial` da CGE, CORRETO — 8.998 PCs
-recarga 05/08    APAGOU 5.716 números e trocou 77   ← o estrago
-renumeração      preencheu as lacunas pela ordem de `parcela_seq`
-   13/08         ← é DAQUI que vem o padrão de 87,5% que a auditoria mediu
-```
-
-⚠️ **A prova:** o `_backup_baixada_20260805` (foto de ANTES da recarga) tinha exatamente
-**8.998 PCs com número**, e é **idêntico linha a linha** ao `MAPA_PARCIAL_SIGEF.csv`, que o
-Richard gerou em 16/08 direto do `ESTOQUE_FCEE_OFICIAL_DA_CGE.xlsx` e **nunca passou pelo
-banco**. 8.998 de 8.998.
-
-⚠️ **O mecanismo do estrago está em `recarga_exec.js:214-215`**: quando a planilha traz vários
-rótulos para a mesma chave, ele grava `nums[0]` — **o MENOR**. Isso colapsa parcelas inteiras
-num número só. E **207 de 3.071 linhas de planilha (6,7%) têm SGPe que não existe naquela TR no
-banco** (100% das de 2025/2026), o que faz a chave falhar e o `MIN` colapsar o que sobra.
-
-### Os números, medidos por DOIS agentes cegos um ao outro (bateram)
-
-| | |
-|---|---|
-| escopo (`hoje ≠ mapa`) | **2.432 PCs · 211 TRs** |
-| onde o gabarito de 05/08 tem opinião | 73 PCs · 30 TRs — **e discorda do mapa em 100%** |
-| nas outras 2.359 | **B é mudo**: o número de hoje não veio de gabarito nenhum |
-| a recarga de 05/08 | **6.128 PCs alteradas**: 5.716 apagadas · 77 trocadas · 335 criadas |
-
-⚠️ **O teste "a planilha concorda com B em 64 de 73" NÃO VALE — é circular.** B, o
-`processo_pc` do banco e o rótulo da planilha vêm todos da mesma leitura. **Toda medição que
-escapa dessa chave põe a planilha ao lado do mapa da CGE:**
-
-```
-por VALOR (coluna que a recarga nunca leu)   73×1 · 121×8 · 224×3 · 358×12
-maior número por TR (B só usou o menor)      41×3   ← os dois agentes, idêntico
-conjunto de números por TR                   15×1 nas 30 TRs · 44×3 nas 211
-```
-
-E nas **6 chaves** em que a planilha ATUAL escreve mais de um número para o mesmo processo, **o
-número do mapa está escrito nas 6** — B é sempre o menor.
-
-**Ninguém renumerou nada entre 04/08 e 16/08:** 6 linhas mudaram, todas duplicata ou
-apagamento, **zero tocam as 73**.
-
-### ⚠️ A DECISÃO QUE FALTA, E É SÓ DO RICHARD
-
-**O SIGEF permite duas parcelas no mesmo processo SGPe?**
-
-- **SIM** → o mapa está certo e a correção vale para as 2.432.
-- **NÃO** → o mapa parte processos indevidamente em **114 casos (78 TRs)**, e o lote precisa ser recortado.
-
-**Nenhum agente leu o SIGEF** — e o `ESTOQUE_FCEE_OFICIAL_DA_CGE.xlsx` não está no
-repositório. Os dois auditaram o CSV derivado, não a fonte.
-
-⚠️ **E a armadilha 16 não é verdade literal:** o `parcial_num` de hoje já tem **10 casos** de
-um processo com mais de um número. A regra "uma parcial = (tr, processo_pc)" só sobrevive
-porque a chave crua **não normaliza** — `SCC8214/2024` e `SCC 00008214/2024` contam como
-processos diferentes.
-
-### O que BLOQUEIA a gravação hoje (achados do revisor e do qa-banco)
-
-| # | achado | tamanho |
+| # | frente | resultado |
 |---|---|---|
-| 1 | **split** — o mesmo processo em várias parciais | 114 processos · 78 TRs · 297 PCs (94 baixadas · 87 com parecer · 10 no C.I.) |
-| 2 | **parcelas mistas** (parte baixada, parte aberta) — hoje existem **0** | **12**, e numa delas 2 PCs nunca analisadas somem dentro da faixa azul do C.I. |
-| 3 | **o histórico não acompanha o número** | 76 linhas em 64 parciais mudam de dono; **29 diligências voltam a ser cobradas pelo sino** |
-| 4 | **o `-1` entra em parcela real** | 2 → **42 parciais**, 39 TRs; 3 já com parecer; uma de R$ 169.361,85 |
-| 5 | a correção **desfaz 2 fusões legítimas** | `2022TR000791` e `2022TR000967` — o mesmo processo em duas grafias, 12 PCs baixadas |
+| 1 | renumeração pelo número do SIGEF | **2.432 PCs · 1.408 parciais · 211 TRs** (2.151 no lote + 281 das 15 TRs) |
+| 2 | histórico realinhado | 103 linhas movidas · **15 cópias** onde a parcela se parte |
+| 3 | Controle Interno | **1.699** marcadas `enviado_ci = true`, `ci_situacao = 'encerrado'` |
+| 4 | histórico sem dono | **28** linhas ganharam o `analista_id` da TR |
+| 5 | PCs incluídas | **6** — as únicas que faltavam de verdade |
 
-### Os 4 defeitos do `renumerar_sigef.js` (NÃO corrigidos — o escopo pode mudar)
-
-1. ⚠️ **O `--gravar` DESTRÓI o backup.** O `_backup_parcial_num_20260816` que está no banco
-   tem **11 colunas**; o script faz `DROP TABLE` e recria com **7**, perdendo `parecer_tipo`,
-   `enviado_ci`, `ci_situacao` e `analista_id` — a única prova de que o C.I. não foi tocado.
-2. **A trava do item 0 é lint, não guarda:** roda um regex sobre uma constante do próprio
-   arquivo. **Não pode disparar com dado nenhum** — e imprime `✓`.
-3. **A conferência pós-escrita compara 1 de 13 colunas** (só `baixada`), porque o backup dela
-   guarda 7.
-4. **A janela usa 2 sinais; o `janela_livre.js` usa 4.** Uma analista registrando resposta de
-   diligência deixa o `janela_livre` OCUPADO e este script **LIVRE** — armadilha 17 ao contrário.
-
-⚠️ **E a validação que teria abortado a rodada JÁ EXISTE no repositório:**
-`corrigir_processo_pc.js:224-227`, `'parcela partida em 2 numeros'`. Hoje dá **0**; depois do
-lote daria **114**.
-
-### Os arquivos desta frente
-
-| arquivo | onde |
-|---|---|
-| `AUDITORIA_SIGPC_2026-08-16.md` | versionado |
-| `PARECER_FONTES_2026-08-16.md` | versionado — o parecer da dupla verificação |
-| `renumerar_sigef.js` | **NÃO versionado** — tem os 4 defeitos acima |
-| `MAPA_PARCIAL_SIGEF.csv` · `TRS_AFETADAS_176.csv` | **no `.gitignore`** |
-| `GRUPO 1/2/3 ... .xlsx` (16/08) | na raiz, não versionados |
-| `_backup_parcial_num_20260816` | **no banco, 14.652 linhas, 11 colunas — NÃO APAGAR** |
-
-⚠️ **O `MAPA_PARCIAL_SIGEF.csv` NÃO se reconstrói a partir do banco.** Se sumir, reimportar a
-planilha da CGE.
-
-⚠️ **O pacote `xlsx` NÃO está instalado no projeto** — logo o `recarga_exec.js` **não roda
-hoje** neste diretório. Os agentes instalaram fora, em pasta temporária.
-
-### A ordem de trabalho da próxima sessão
-
-1. **Responder a pergunta do SIGEF** (split). Sem ela, o resto é trabalho perdido.
-2. Recortar o lote pelos 5 bloqueios acima — **não só por fusão, como foi feito na primeira vez**.
-3. Corrigir os 4 defeitos do script.
-4. Dry-run · dupla verificação · gravar em janela livre · **conferir de novo DEPOIS de gravar,
-   na mesma transação, com `ROLLBACK` se não bater**.
+**Estado do banco:** 14.658 PCs · 1.031 finais · 760 linhas de histórico · 3.804 baixadas.
 
 ---
+
+### ⚠️ A REGRA QUE MUDOU: um processo SGPe carrega VÁRIAS parcelas do SIGEF
+
+Medido no `ESTOQUE FCEE OFICIAL DA CGE.xlsx` por dois agentes cegos um ao outro, que bateram:
+**113 pares (TR, processo) com 2+ parcelas — 78 TRs, 465 PCs**, e a `2019TR000193` com 11
+parcelas num processo só. A direção contrária também existe: **81** parcelas com 2+ processos.
+
+A armadilha 16 foi reescrita nos dois `CLAUDE.md`. A regra antiga (`uma parcial = (tr,
+processo_pc)`) tinha sido lida do banco **já deformado** pela recarga de 05/08.
+
+⚠️ **O "114" que circulava é 113** — o par a mais tem como segunda parcela o literal `-`.
+
+### As duas armadilhas de LEITURA que apareceram nisso
+
+- **A aba `Parcial` do estoque tem DUAS colunas chamadas `Parcial`** (índices 8 e 11,
+  idênticas em 13.626 de 13.626). Script que lê por NOME pega uma das duas de forma
+  imprevisível. **Ler por índice.**
+- **`Parcial` × `PARCELA N°` respondem perguntas diferentes:** 113 contra **2.372 (43,75%)**.
+  A coluna errada inverte a resposta. E a TR não se chama TR — é `NR. TRANS / NT. TE`, com
+  4 instrumentos `TE` entre os 1.554.
+
+---
+
+### O que saiu do código
+
+- **O `juntar`/`fusao` da rota do lápis** — impunha a regra falsa **escrevendo**: igualava o
+  `parcial_num` ao de `outras[0]`, a primeira linha de um SELECT **sem `ORDER BY`**. No lugar
+  vai `convive`, que informa. O `BEGIN` foi para antes das leituras, com `FOR UPDATE`.
+- **A autoria dupla** em `PATCH .../processo` e `POST /sgpe/link_manual`: gravavam o EXECUTOR
+  na coluna do DONO. ⚠️ Medido: **nunca chegou ao banco** — até hoje quem usou o lápis foi
+  sempre o próprio dono.
+- **`quemEdita` passou a usar `papel.perfilEfetivo`** — era a única rota de escrita fora dos
+  10 pontos da regra de 14/08.
+- **`recarga_exec.js` DESARMADO.** A linha 263 zera `baixada`, `parecer_tipo` e `parcial_num`
+  nas 14.652. Em 05/08 foi inofensivo (o sistema abriu em 12/08 às 20h); hoje apagaria
+  trabalho de 45 analistas.
+
+### ⚠️ O defeito de fundo, corrigido em TRÊS rotas
+
+`POST /parcela/parecer` fazia `UPDATE ... WHERE tr AND parcial_num` **sem `baixada = false`**.
+O 409 não protege: só dispara quando **todas** estão baixadas. Numa parcela **mista**, o
+parecer reescrevia `data_baixa`, `origem_baixa` e `parecer_tipo` de PCs fechadas em junho.
+**Ninguém reclama de uma baixa que ficou mais recente.**
+
+Dois iguais, achados ao corrigir o primeiro:
+- **`/parcela/estornar`** marcava `estornada = true` em PC **nunca baixada** → `AND baixada = true`
+- **`/parcela/ci`** marcava `enviado_ci = true` em PC aberta — e `enviado_ci` **sustenta a
+  baixa** → `AND baixada = true`
+
+`/parcela/situacao` já estava certo.
+
+---
+
+### Na tela
+
+- **Etiqueta âmbar "processo SGPe não localizado"** no `procHtml` (ponto único das 11 telas),
+  para as **77 PCs** com `processo_pc = '-1'` — 48 TRs, R$ 2,3 milhões. **O lápis nasce
+  visível**, não em `opacity:0`.
+  ⚠️ O cruzamento com as planilhas **não recuperou nenhum processo com segurança**: 12
+  candidatos, todos reprovados pela armadilha 19. Recuperação é caso a caso, pelo lápis.
+- **"não iniciada"** no cartão da parcial sem situação — com a guarda de que a parcial
+  **baixada** também tem `situacao_atual = NULL`, de propósito.
+
+---
+
+### 🔴 A FRENTE DAS PCs AUSENTES — o CSV está errado, não o sistema
+
+Das **180** linhas do `PCS_AUSENTES_v2.csv`, trianguladas contra a planilha e o banco:
+
+```
+ 129  o banco JÁ TEM a parcela completa
+  27  a planilha diz que falta PC, mas o VALOR já está completo
+   1  diferença de centavos
+   9  diferença "real" que se desfaz: é PROCESSO digitado errado no CSV
+====
+   6  parcelas que NÃO EXISTIAM  ← as únicas, e foram inseridas
+```
+
+⚠️ **A coluna `valor` do CSV é o total da PARCELA, não da PC.** O cabeçalho da planilha
+confessa (`Parcial, Número de PCs, Valor da Parcial`), e **130 das 180 têm esse valor igual ao
+centavo à soma das PCs que a parcela já tem no banco**. A planilha se desmente na contagem:
+diz que as 180 parcelas contêm **389 PCs**.
+
+⚠️ **A inflação do G2 aparece linha a linha:** das 37 "faltantes", **35 são do Grupo 2**, com
+razão `4/2` em 24 casos e `2/1` em 8.
+
+**As 6 inseridas** (`inserir_5_pcs.js`, lista explícita):
+
+| codigo_pc | tipo | processo | valor | analista |
+|---|---|---|---|---|
+| `2020TR000811-PFINAL` | final | SCC 3956/2024 | 1.014.075,96 | Isabel |
+| `2022TR000927-PFINAL` | final | SCC 13149/2024 | 2.906.908,68 | Elisandra |
+| `2022TR001421-PFINAL` | final | SCC 16533/2024 | 2.314.144,33 | Perla |
+| `2023TR000810-PFINAL` | final | SCC 14546/2024 | 116.168,16 | Elisandra |
+| `2024PC900000` | parcial | SCC 16388/2024 | 202.051,18 | Noici — **TR nova** |
+| `2024TR000204-PFINAL` | final | SCC 16503/2024 | 202.051,18 | Noici |
+
+⚠️ **`codigo_nl` NULO nas cinco finais está CERTO** — 0 das 1.026 finais têm NL. A exceção é a
+`2024PC900000`: **primeira parcial da base sem NL**, e ela não entra em
+`COUNT(DISTINCT codigo_nl)` nem na baixa por NL.
+
+⚠️ **`situacao_atual` e `parecer_tipo` ficaram NULOS de propósito.** O CSV traz `Análise` e
+`Analisar`, que **não existem na base** — gravar faz o `<select>` do modal abrir **em branco**
+e o salvar devolver 400. E parecer sem baixa e sem trilha não é parecer.
+
+**O que o CSV precisa para a frente voltar:** uma linha por **PC** com o valor **da PC**, e as
+129 já completas fora da lista.
+
+---
+
+### ⚠️ O QUE FICOU ABERTO HOJE
+
+- **3 parcelas MISTAS** criadas pela renumeração das 15 TRs: `2020TR000761 p17` ·
+  `2021TR002375 p1` · `2022TR001248 p7`. O `AND baixada = false` do parecer já as protege.
+- **38 parcelas com 2+ processos** nas 15 TRs, e **68 no lote geral** — consequência aceita da
+  decisão do split, não defeito.
+- **56 TRs deixaram de fechar `1..N`** (8 → 56). **42 são TRs de 2024 sem analista faltando só
+  o número 1** — o SIGEF tem uma parcela 1 que a base não tem. As 6 com dono: Claudia
+  (`2020TR000809`, faltam 8), Daniela (`2020TR000638`, 7), Grace (`2020TR000800`, o 35),
+  Richard (`2020TR000820`, o 16), Rita (`2020TR000719`, o 1), Goreti (`2022TR000722`, o 1).
+- **9 processos digitados errado no CSV** — resolvem pelo lápis (`SCC 78256/2023` contra
+  `SCC 00007826/2023`; `SCC 3667/2022` contra `SCC3967/2022`).
+- **A `2022TR001687`**: a PC baixada tem `analista_id = 45` (Juliana) e `analista_nome =
+  'Tanimeri'`. A produtividade conta para a Juliana, que diz não ter analisado. **Dois donos
+  em dois campos** — nenhum mais confiável que o outro.
+- **A `2022TR000720`** está com a Marlene (id 46), não com o Rafael. **As 2 PCs estão
+  baixadas**, e devolver desfaria trabalho.
+- **60 processos do C.I. sem base:** 40 têm dado nas planilhas, **20 não têm em lugar nenhum**.
+
+### Os backups de hoje — não apagar
+
+```
+_backup_exec_pc_20260816     _backup_exec_hist_20260816     (frentes 1, 3, 4)
+_backup_15trs_pc_20260816    _backup_15trs_hist_20260816    (as 15 TRs)
+_backup_5pcs_20260816        _backup_5pcs_20260816b         (as 6 PCs)
+```
+Listas de reversão: `reverter_exec_20260816.json` · `reverter_15trs_20260816.json` ·
+`reverter_5pcs_20260816.json` (fora do git).
+
+### As lições do dia, em uma linha cada
+
+1. **Falta de dado não é evidência de dano** — ver a retratação acima.
+2. **Trava que imprime e não usa a variável não é trava.** Aconteceu duas vezes hoje.
+3. **Check absoluto sobre a base inteira acusa o passado** — compare com a foto do início.
+4. **O JOIN contra o backup é cego para a linha que acabou de nascer.**
+5. **Quem decide o que é um processo é a `lib/sgpe-link.js`** — regex próprio recusou 70 PCs.
+6. **Comentário dentro de template literal não leva crase** (armadilha 10, de novo).
+7. **A manutenção precisa de um ciclo do polling (20s) para derrubar a tela** — o `sessao_fim`
+   sozinho não fecha a aba.
 
 ## ▶ A PRÓXIMA SESSÃO COMEÇA AQUI (fechado em 14/08/2026)
 

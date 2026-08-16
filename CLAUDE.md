@@ -4,7 +4,7 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 16/08/2026 — ver `SESSAO.md` para o estado do dia.
+**Última sessão:** 16/08/2026 — ver `SESSAO.md`. **Cinco escritas em produção nesse dia.**
 
 > **O sistema está ABERTO.** Os dois interruptores estão **desligados** e a equipe trabalha.
 >

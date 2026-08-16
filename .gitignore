@@ -64,3 +64,6 @@ DIVERGENCIAS_21_RESOLVIDAS.csv
 # Lista de reversao da gravacao de 16/08 — recuperavel dos backups no banco.
 reverter_exec_*.json
 reverter_frente2_*.json
+
+# Listas da triangulacao da frente 2 — dado operacional
+FRENTE2_*.csv

@@ -252,6 +252,13 @@ function temLink(cacheOk, bruto) {
         `SELECT codigo_pc, processo_pc, processo_mae FROM prestacoes_contas WHERE setorial_id='FCEE'`
       )).rows.map(r => [r.codigo_pc, r]));
       const antes = await foto();
+      // Pares (tr, processo_pc) com mais de uma parcial. Deixou de ser defeito em 16/08/2026
+      // — e o `c2` abaixo e' que prova que esta rodada nao mexeu em `parcial_num`.
+      const contarSplit = async () => (await cli.query(`SELECT COUNT(*)::int n FROM (
+          SELECT tr, processo_pc FROM prestacoes_contas
+           WHERE setorial_id='FCEE' AND tipo <> 'final'
+           GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`)).rows[0].n;
+      const splitAntes = await contarSplit();
 
       await cli.query('BEGIN');
       let tocadas = 0;
@@ -275,20 +282,22 @@ function temLink(cacheOk, bruto) {
       const c1 = [...antes.keys()].filter(c => !todas.includes(c) && (mexeu(c, 'processo_pc') || mexeu(c, 'processo_mae'))).length;
       const c2 = (await un(`SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.codigo_pc=p.codigo_pc
                              WHERE p.parcial_num IS DISTINCT FROM b.parcial_num`)).n;
-      const c3 = (await un(`SELECT COUNT(*)::int n FROM (
-                              SELECT tr, processo_pc FROM prestacoes_contas
-                               WHERE setorial_id='FCEE' AND tipo <> 'final'
-                               GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`)).n;
+      const splitDepois = await contarSplit();
 
+      // ⚠️ 'parcela partida em 2 numeros' SAIU em 16/08/2026, pelo mesmo motivo do
+      // `corrigir_processo_pc.js`: a consulta e' GLOBAL, nao recortada por esta rodada, e com
+      // a numeracao do SIGEF gravada ela passaria a mandar ROLLBACK sempre. Sem sucessor de
+      // proposito — quem garante que parcela nenhuma foi partida e' o `c2`, que prova que
+      // `parcial_num` nao foi tocado. O numero vira medicao.
       const checks = [
         ['PC fora da lista alterada',      c1 === 0, c1],
         ['parcial_num alterado',           c2 === 0, c2],
-        ['parcela partida em 2 numeros',   c3 === 0, c3],
         ['PCs tocadas == esperadas',       tocadas === todas.length, `${tocadas}/${todas.length}`],
       ];
       console.log('\n── VALIDACAO ─────────────────────────────────────────');
       let falhou = false;
       for (const [n, ok, v] of checks) { if (!ok) falhou = true; console.log(`   ${ok ? 'OK   ' : 'FALHA'}  ${n.padEnd(34)} ${v}`); }
+      console.log(`   MEDIDO  ${'pares (tr,processo) com 2+ parciais'.padEnd(34)} ${splitAntes} -> ${splitDepois}`);
 
       if (falhou)      { await cli.query('ROLLBACK'); console.log('\n>> ROLLBACK.'); process.exitCode = 2; }
       else if (GRAVAR) { await cli.query('COMMIT');   console.log('\n>> COMMIT.'); }

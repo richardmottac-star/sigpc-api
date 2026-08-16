@@ -147,16 +147,27 @@ function propor(bruto) {
     console.log(`PALPITE: ${palpites.length} textos · ${palpites.reduce((s, c) => s + c.pcs.length, 0)} PCs (NÃO entram)`);
     if (!certos.length) { console.log('Nada a corrigir.'); return; }
 
-    // ── 4. fusão de parcelas ─────────────────────────────────────────────────
-    // Corrigir o texto muda o par (tr, processo_pc), que é a definição de parcial. Se o
-    // corrigido já existir na mesma TR, duas parcelas viram uma — e o parcial_num renumerado
-    // em 12/08 deixa de bater. Aqui isso ABORTA: fundir é decisão de tela, com aviso.
+    // ── 4. processos que passam a CONVIVER na mesma TR ───────────────────────
+    //
+    // ⚠️ ISTO ABORTAVA A RODADA INTEIRA ATÉ 16/08/2026, e não pode mais.
+    //
+    // A regra que sustentava o abort era "uma parcial = (tr, processo_pc)": se o texto
+    // corrigido já existisse na TR, duas parcelas "viravam uma". **A regra é falsa.** Medido
+    // no estoque oficial da CGE por dois agentes cegos um ao outro: um mesmo processo SGPe
+    // carrega várias parcelas do SIGEF em 113 pares (tr, processo) — 78 TRs, 465 PCs.
+    //
+    // Duas parcelas dividirem um processo é o dado NORMAL, não uma colisão. Manter o abort
+    // aqui deixaria este script sem poder rodar justamente nos casos em que ele é necessário
+    // — e são estes 11 processos SGPe pendentes que ele existe para consertar.
     //
     // ⚠️ SÓ VALE PARA `processo_pc`. O processo mãe não agrupa parcela nenhuma, e conferir
-    // fusão nele dá ALARME FALSO garantido: o `processo_pc` daquela TR já foi corrigido para
+    // isso nele dá ALARME FALSO garantido: o `processo_pc` daquela TR já foi corrigido para
     // o mesmo valor numa rodada anterior, então a "colisão" é com a própria correção.
     // Aconteceu de verdade em 13/08 — a rodada da coluna mãe abortou com 17 fusões falsas.
-    const fusoes = [];
+    //
+    // Continua sendo IMPRESSO: é informação que quem lê o dry-run tem de ver antes de gravar.
+    // O que mudou é que ver deixou de ser o mesmo que recusar.
+    const convivencias = [];
     if (CAMPO === 'processo_pc') {
       for (const c of certos) {
         for (const tr of c.trs) {
@@ -165,16 +176,16 @@ function propor(bruto) {
               WHERE setorial_id='FCEE' AND tr=$1 AND processo_pc <> $2`, [tr, c.bruto]);
           for (const o of rows) {
             const on = L.normalizarProcesso(o.processo_pc);
-            if (on && L.formatarProcesso(on) === c.chave) fusoes.push({ tr, de: c.bruto, para: c.proposta });
+            if (on && L.formatarProcesso(on) === c.chave) convivencias.push({ tr, de: c.bruto, para: c.proposta });
           }
         }
       }
     }
-    console.log(`parcelas que seriam FUNDIDAS: ${CAMPO === 'processo_pc' ? fusoes.length : 'n/a (processo_mae nao agrupa parcial)'}`);
-    if (fusoes.length) {
-      console.log(JSON.stringify(fusoes, null, 1));
-      console.log('\n>> ABORTADO: fusão de parcela não passa por aqui. Corrija essas pela tela.');
-      process.exitCode = 3; return;
+    console.log(`processos que passam a conviver com outra parcial da TR: ` +
+      `${CAMPO === 'processo_pc' ? convivencias.length : 'n/a (processo_mae nao agrupa parcial)'}`);
+    if (convivencias.length) {
+      console.log(JSON.stringify(convivencias, null, 1));
+      console.log('   (legitimo — ver a armadilha 16 do CLAUDE.md. NAO aborta.)');
     }
 
     // ── 5. a escrita ─────────────────────────────────────────────────────────
@@ -183,6 +194,15 @@ function propor(bruto) {
       `SELECT codigo_pc, processo_pc, processo_mae FROM prestacoes_contas WHERE setorial_id='FCEE'`
     )).rows.map(r => [r.codigo_pc, r]));
     const antesDaRodada = await fotografar();
+
+    // Quantos pares (tr, processo_pc) carregam mais de uma parcial. NÃO é mais um defeito —
+    // é o dado normal (113 pares no estoque da CGE). Medido antes e depois só para que a
+    // rodada mostre o que ela mudou nesse número, em vez de afirmar que ele tem de ser zero.
+    const contarSplit = async () => (await cli.query(`SELECT COUNT(*)::int n FROM (
+        SELECT tr, processo_pc FROM prestacoes_contas
+         WHERE setorial_id='FCEE' AND tipo <> 'final'
+         GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`)).rows[0].n;
+    const splitAntes = await contarSplit();
 
     await cli.query('BEGIN');
     let tocadas = 0;
@@ -221,18 +241,25 @@ function propor(bruto) {
                    v[OUTRA] !== depoisDaRodada.get(cod)[OUTRA]).length };
     const c2 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.codigo_pc=p.codigo_pc
                           WHERE p.parcial_num IS DISTINCT FROM b.parcial_num`);
-    const c4 = await un(`SELECT COUNT(*)::int n FROM (
-                           SELECT tr, processo_pc FROM prestacoes_contas
-                            WHERE setorial_id='FCEE' AND tipo <> 'final'
-                            GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`);
+    const splitDepois = await contarSplit();
     const c5 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas WHERE codigo_pc = ANY($1)
                           AND ${CAMPO} !~ '^[A-Z]+[0-9]* [0-9]+/[0-9]{4}$'`, [todasPcs]);
 
+    // ⚠️ 'parcela partida em 2 numeros' SAIU DA LISTA DE CHECKS em 16/08/2026.
+    //
+    // Ele exigia `COUNT(DISTINCT parcial_num) > 1` == 0 sobre a base INTEIRA — não sobre as
+    // linhas que esta rodada tocou. Com a numeração do SIGEF gravada (113 pares), ele passaria
+    // a dar FALHA em toda rodada, inclusive numa que não encoste em `parcial_num`, e mandaria
+    // ROLLBACK apontando para o lugar errado.
+    //
+    // ⚠️ E NÃO HÁ CHECK SUCESSOR, de propósito. Este script não escreve em `parcial_num`, e
+    // isso quem prova é o `c2` — com `c2 = 0`, corrigir texto de processo não consegue partir
+    // nem juntar parcela nenhuma. Inventar um substituto seria encenar uma proteção que o
+    // `c2` já dá. O número vira MEDIÇÃO, impressa abaixo dos checks.
     const checks = [
       ['PC fora da lista alterada',              c1.n === 0, c1.n],
       ['parcial_num alterado',                   c2.n === 0, c2.n],
       [(CAMPO === 'processo_pc' ? 'processo_mae' : 'processo_pc') + ' alterado',                  c3.n === 0, c3.n],
-      ['parcela partida em 2 numeros',           c4.n === 0, c4.n],
       ['corrigida que nao virou processo valido', c5.n === 0, c5.n],
       ['PCs tocadas == esperadas',               tocadas === todasPcs.length, `${tocadas}/${todasPcs.length}`],
     ];
@@ -240,6 +267,8 @@ function propor(bruto) {
     let falhou = false;
     for (const [nome, ok, v] of checks) { if (!ok) falhou = true;
       console.log(`   ${ok ? 'OK   ' : 'FALHA'}  ${nome.padEnd(42)} ${v}`); }
+    console.log(`   MEDIDO  ${'pares (tr,processo) com 2+ parciais'.padEnd(42)} ` +
+      `${splitAntes} -> ${splitDepois}${splitDepois === splitAntes ? ' (inalterado)' : ''}`);
 
     if (falhou)      { await cli.query('ROLLBACK'); console.log('\n>> VALIDACAO FALHOU: ROLLBACK.'); process.exitCode = 2; }
     else if (GRAVAR) {

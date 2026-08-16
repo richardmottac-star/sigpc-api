@@ -2551,7 +2551,19 @@ async function resolverProcesso(texto) {
 }
 
 // PATCH /prestacoes_contas/:codigo_pc/processo
-//   body { campo: 'processo_pc'|'processo_mae', sigla, numero, ano, usuario_id, juntar? }
+//   body { campo: 'processo_pc'|'processo_mae', sigla, numero, ano, usuario_id }
+//
+// ⚠️ O `juntar` SAIU em 16/08/2026, e com ele o 409 de "fusão de parcela". Decisão do
+// Richard, depois da medição no estoque oficial da CGE: **um processo SGPe PODE carregar
+// várias parcelas do SIGEF** — 113 pares (tr, processo) com 2+ parciais, 78 TRs, 465 PCs.
+// A rota existia para impor o contrário, e impunha ESCREVENDO: igualava o `parcial_num` das
+// PCs ao de `outras[0]` — a primeira linha de um SELECT **sem ORDER BY**, ou seja, a parcela
+// que o Postgres escolhesse. Com 2+ parciais no mesmo processo isso desfaria em silêncio a
+// numeração do SIGEF, e não daria erro em lugar nenhum.
+//
+// O 409 saiu junto porque só existia para oferecer o `juntar`: mantê-lo bloquearia a correção
+// legítima sem caminho de saída. Colidir em (tr, processo_pc) deixou de ser sinal de defeito —
+// virou `convive`, que INFORMA e não decide nada.
 app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
   const cli = await pool.connect();
   try {
@@ -2563,64 +2575,75 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     if (!quem) return res.status(403).json({ data: null, error: { message: 'Você não pode corrigir o processo.' } });
     if (await barrouPreparacao(res, b.usuario_id)) return;
 
+    // ⚠️ O BEGIN vem ANTES das leituras, e o `FOR UPDATE` junto. Até 16/08/2026 o SELECT da
+    // PC e o das irmãs rodavam FORA da transação, e o UPDATE escrevia sobre uma lista de
+    // chaves que já podia ter mudado — a mesma família da armadilha 12, só que na leitura.
+    await cli.query('BEGIN');
+
     const { rows: alvo } = await cli.query(
       `SELECT codigo_pc, tr, parcial_num, processo_pc, processo_mae FROM prestacoes_contas
-        WHERE codigo_pc = $1`, [b.codigo_pc]);
-    if (!alvo.length) return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+        WHERE codigo_pc = $1 FOR UPDATE`, [b.codigo_pc]);
+    if (!alvo.length) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+    }
     const pc = alvo[0];
     const antes = pc[b.campo];
     const novo = procEdit.montar(b);
-    if (antes === novo) return res.json({ data: { texto: novo, mudou: false, ...(await resolverProcesso(novo)) }, error: null });
+    if (antes === novo) {
+      await cli.query('ROLLBACK');
+      return res.json({ data: { texto: novo, mudou: false, ...(await resolverProcesso(novo)) }, error: null });
+    }
 
     // ── quais PCs mudam ──────────────────────────────────────────────────────
     // A correção vale para TODAS as PCs que hoje têm o mesmo texto errado na mesma TR: o erro
     // é do processo, não da PC, e corrigir uma a uma deixaria as irmãs erradas.
     const { rows: irmas } = await cli.query(
       `SELECT codigo_pc FROM prestacoes_contas
-        WHERE setorial_id='FCEE' AND tr = $1 AND ${b.campo} IS NOT DISTINCT FROM $2`, [pc.tr, antes]);
+        WHERE setorial_id='FCEE' AND tr = $1 AND ${b.campo} IS NOT DISTINCT FROM $2
+        FOR UPDATE`, [pc.tr, antes]);
     const codigos = irmas.map(r => r.codigo_pc);
 
-    // ── fusão de parcela ─────────────────────────────────────────────────────
+    // ── o processo passa a conviver com outra parcial? INFORMA, não bloqueia ──
     // Só faz sentido para processo_pc: o processo_mae não agrupa parcial nenhuma.
-    let fusao = null;
+    //
+    // ⚠️ NADA aqui escreve. É texto para a tela mostrar depois de salvar, e o analista
+    // precisa saber — mas saber não é o mesmo que ter de decidir, e decidir não é o mesmo
+    // que o servidor reescrever a numeração por ele.
+    let convive = null;
     if (b.campo === 'processo_pc') {
       const { rows: outras } = await cli.query(
         `SELECT DISTINCT parcial_num FROM prestacoes_contas
-          WHERE setorial_id='FCEE' AND tr = $1 AND processo_pc = $2 AND tipo <> 'final'`, [pc.tr, novo]);
+          WHERE setorial_id='FCEE' AND tr = $1 AND processo_pc = $2 AND tipo <> 'final'
+            AND parcial_num IS DISTINCT FROM $3`, [pc.tr, novo, pc.parcial_num]);
       if (outras.length) {
-        fusao = { tr: pc.tr, parcial_destino: outras[0].parcial_num, parcial_atual: pc.parcial_num,
-                  pcs: codigos.length };
-        if (b.juntar !== true)
-          return res.status(409).json({ data: { fusao }, error: {
-            message: `A TR ${pc.tr} já tem a parcial ${outras[0].parcial_num} com o processo ${novo}. ` +
-                     `Salvar vai juntar estas ${codigos.length} PCs naquela parcial.`, fusao } });
+        // Ordem numérica, não alfabética: como texto a parcial 10 viria antes da 2.
+        const nums = outras.map(r => r.parcial_num).sort((x, y) => {
+          const nx = parseInt(String(x).replace(/\D/g, ''), 10), ny = parseInt(String(y).replace(/\D/g, ''), 10);
+          if (Number.isNaN(nx) || Number.isNaN(ny)) return String(x).localeCompare(String(y));
+          return nx - ny;
+        });
+        convive = { tr: pc.tr, parcial_atual: pc.parcial_num, outras_parciais: nums, pcs: codigos.length };
       }
     }
 
-    await cli.query('BEGIN');
     await cli.query(
       `UPDATE prestacoes_contas SET ${b.campo} = $2, atualizado_em = NOW()
         WHERE codigo_pc = ANY($1)`, [codigos, novo]);
-    // Junta na parcela de destino: sem isto as PCs teriam o mesmo (tr, processo_pc) e
-    // parcial_num diferente — o invariante que a renumeração de 12/08 deixou em zero.
-    if (fusao && b.juntar === true)
-      await cli.query(
-        `UPDATE prestacoes_contas SET parcial_num = $2, atualizado_em = NOW()
-          WHERE codigo_pc = ANY($1) AND tipo <> 'final'`, [codigos, fusao.parcial_destino]);
 
     await cli.query(
       `INSERT INTO parcela_historico
          (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
        VALUES ($1, $2, 'FCEE', $3, $4, $5, $6, $7)`,
       [pc.tr, pc.parcial_num, b.campo, antes, novo, quem.id,
-       `${codigos.length} PC${codigos.length > 1 ? 's' : ''}` + (fusao && b.juntar ? ` · juntadas na parcial ${fusao.parcial_destino}` : '')]);
+       `${codigos.length} PC${codigos.length > 1 ? 's' : ''}` +
+       (convive ? ` · o processo tambem esta na parcial ${convive.outras_parciais.join(', ')} desta TR` : '')]);
     await cli.query('COMMIT');
 
     // Resolver o link vem DEPOIS do COMMIT: a correção do dado não pode depender do SGPe
     // estar no ar. Se o link não vier agora, a tela oferece colar — e o texto já está salvo.
     const resolucao = await resolverProcesso(novo);
-    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, fusao: fusao && b.juntar ? fusao : null,
-                       ...resolucao }, error: null });
+    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, convive, ...resolucao }, error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
@@ -3161,6 +3184,18 @@ async function resolverAutoria(cli, b, res) {
 }
 
 // Carrega as PCs da parcial com lock, para a transacao ser toda-ou-nenhuma.
+//
+// ⚠️ A CHAVE E' (setorial_id, tr, parcial_num) — NUNCA `processo_pc`, e isto foi conferido em
+// 16/08/2026. Um processo SGPe carrega varias parcelas do SIGEF (113 pares medidos no estoque
+// da CGE; ver a armadilha 16), e esta funcao ja lida com isso sem mudanca nenhuma: cada
+// parcial_num carrega so' as suas PCs. Nao trocar esta chave por processo.
+//
+// ⚠️ E NAO FILTRA `tipo`, DE PROPOSITO — decisao do Richard, 16/08/2026.
+// Ha 3 PCs FINAIS gravadas com `parcial_num = '1'` (2021TR001689, 2021TR002133, 2023TR000048)
+// e elas entram na parcial 1 nos cinco chamadores: baixam, vao ao C.I. e estornam junto.
+// A correcao escolhida e' de DADO, nao um `AND tipo <> 'final'` aqui — pôr a guarda no codigo
+// esconderia tres linhas erradas em vez de conserta-las, e a tela ja separa a final pelo
+// `tipo` (`planEhFinal`). **Se voce veio aqui para adicionar o filtro, conserte o dado.**
 async function carregarParcela(cli, tr, parcial_num, setorial_id) {
   const { rows } = await cli.query(
     `SELECT * FROM prestacoes_contas

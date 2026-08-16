@@ -2,6 +2,26 @@
 //
 // RENUMERA parcial_num para bater com o SIGEF.  PADRAO = DRY-RUN. So grava com --gravar.
 //
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// ⚠️⚠️ NAO RODE ESTE SCRIPT DE NOVO. O METODO DELE FOI REFUTADO EM 16/08/2026.
+//
+// As VALIDACOES foram corrigidas hoje (c5 e c7, abaixo) para nao abortarem pelo motivo
+// errado. O ALGORITMO nao foi, e nao da' para corrigir por dentro: ele nasce do
+// `GROUP BY p.tr, p.processo_pc` do PLANO, isto e', de "uma parcela = (tr, processo_pc)".
+//
+// Essa regra e' FALSA. Medida no estoque oficial da CGE por dois agentes cegos um ao outro:
+// um processo SGPe carrega varias parcelas do SIGEF em 113 pares (tr, processo) — 78 TRs,
+// 465 PCs; a 2019TR000193 tem um processo com 11 parcelas.
+//
+// Consequencia pratica: rodar isto hoje daria UM numero por processo e voltaria a colapsar
+// as parcelas que a correcao de 16/08 existe para separar. E' o mesmo estrago da recarga de
+// 05/08 (`recarga_exec.js:214-215`, o `nums[0]`), por outro caminho.
+//
+// O SUCESSOR e' o `renumerar_sigef.js`, que le o `MAPA_PARCIAL_SIGEF.csv` (o numero da CGE)
+// em vez de deduzir do processo. O que fica AQUI e' historia: foi este script que rodou em
+// 13/08 e produziu o estado atual do banco.
+// ═════════════════════════════════════════════════════════════════════════════════════════
+//
 // ⚠️ NAO e' o caminho que estava escrito no SESSAO.md ("renumerar tudo por parcela_seq").
 // Aquele caminho foi MEDIDO em 13/08 contra o gabarito e REPROVADO: reescrevia 592 parcelas
 // (1.017 PCs, 67 TRs) cujo rotulo veio da planilha do analista — ou seja, do SIGEF.
@@ -164,6 +184,22 @@ const ESCRITA_RECENTE = `
     if (!ocupado) console.log('   >> LIVRE')
     else console.log('   >> OCUPADO' + (GRAVAR ? ' — seguindo por --forcar' : ' (dry-run segue; nao grava nada)'))
 
+    // As duas medidas de ANTES. Deixaram de ser invariantes em 16/08/2026 (ver o cabecalho):
+    // viraram comparacao antes/depois, para a rodada provar que nao PIOROU o que encontrou.
+    const contarSplit = async () => (await cli.query(`SELECT COUNT(*)::int n FROM (
+        SELECT tr, processo_pc FROM prestacoes_contas
+         WHERE setorial_id='FCEE' AND tipo <> 'final'
+         GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`)).rows[0].n
+    // "fecha 1..N" SEM olhar processo: os numeros de uma TR tem de ir de 1 a N, sem furo e
+    // sem repetido. Isso continua verdadeiro com varias parcelas no mesmo processo.
+    const contarNaoFecham = async () => (await cli.query(`SELECT COUNT(*)::int n FROM (
+        SELECT tr FROM prestacoes_contas
+         WHERE setorial_id='FCEE' AND tipo <> 'final' AND parcial_num ~ '^[0-9]+$'
+         GROUP BY tr
+        HAVING MAX(parcial_num::int) <> COUNT(DISTINCT parcial_num)) t`)).rows[0].n
+    const splitAntes = await contarSplit()
+    const naoFechamAntes = await contarNaoFecham()
+
     await cli.query('BEGIN')
 
     // 1. AS LISTAS, capturadas ANTES de escrever. Sao elas que fazem o WHERE e a reversao.
@@ -213,17 +249,20 @@ const ESCRITA_RECENTE = `
                           WHERE p.tipo='final' AND p.parcial_num IS DISTINCT FROM b.parcial_num`)
     const c4 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas p JOIN ${TAB_BK} b ON b.id=p.id
                           WHERE p.parcial_num IS DISTINCT FROM b.parcial_num AND NOT (p.codigo_pc = ANY($1))`, [codigos])
-    const c5 = await un(`SELECT COUNT(*)::int n FROM (
-                           SELECT tr, processo_pc FROM prestacoes_contas
-                            WHERE setorial_id='FCEE' AND tipo <> 'final'
-                            GROUP BY 1,2 HAVING COUNT(DISTINCT parcial_num) > 1) t`)
+    // ⚠️ c5 e c7 MUDARAM DE PERGUNTA em 16/08/2026, e nao foram apagados.
+    //
+    // c5 exigia zero pares (tr, processo_pc) com 2+ parciais, e c7 exigia a BIJECAO
+    // parcial <-> processo (`MAX(parcial_num) = COUNT(DISTINCT processo_pc)` e
+    // `COUNT(DISTINCT parcial_num) = COUNT(DISTINCT processo_pc)`), com o esperado cravado em
+    // 9. Os dois escreviam por extenso a regra "uma parcial = (tr, processo_pc)", que o
+    // estoque oficial da CGE refuta: 113 pares, 78 TRs, 465 PCs.
+    //
+    // O que SOBREVIVE da c7 e' a metade que nao fala de processo: os numeros de uma TR tem de
+    // ir de 1 a N, sem furo e sem repetido. E como o valor esperado ja nao e' uma constante,
+    // as duas viraram DELTA — a rodada passa se nao piorou o que encontrou.
+    const splitDepois = await contarSplit()
     const c6 = await un(`SELECT COUNT(*)::int n FROM prestacoes_contas WHERE setorial_id='FCEE' AND parcial_num IS NULL`)
-    const c7 = await un(`SELECT COUNT(*)::int n FROM (
-                           SELECT tr FROM prestacoes_contas
-                            WHERE setorial_id='FCEE' AND tipo <> 'final' AND parcial_num ~ '^[0-9]+$'
-                            GROUP BY tr
-                           HAVING MAX(parcial_num::int) <> COUNT(DISTINCT processo_pc)
-                               OR COUNT(DISTINCT parcial_num) <> COUNT(DISTINCT processo_pc)) t`)
+    const naoFechamDepois = await contarNaoFecham()
     // historico: nenhuma linha pode ficar apontando para parcela que nao existe mais.
     // A 'FINAL' fica de fora — a PC final nao e' parcial e nao foi renumerada.
     const c8 = await un(`SELECT COUNT(*)::int n FROM parcela_historico h
@@ -247,9 +286,9 @@ const ESCRITA_RECENTE = `
       ['baixada alterada',                           c2.n === 0, c2.n],
       ['PC final renumerada',                        c3.n === 0, c3.n],
       ['PC fora da lista alterada',                  c4.n === 0, c4.n],
-      ['parcela partida em 2 numeros',               c5.n === 0, c5.n],
       ['PC sem parcial_num',                         c6.n === 0, c6.n],
-      ['TRs que NAO fecham 1..N (esperado: 9)',      c7.n === 9, c7.n],
+      ['TRs que NAO fecham 1..N nao aumentou',       naoFechamDepois <= naoFechamAntes,
+                                                     `${naoFechamAntes} -> ${naoFechamDepois}`],
       ['historico apontando para parcela inexistente', c8.n === 0, c8.n],
       ['historico fora do mapa alterado',            c9.n === 0, c9.n],
       ['historico: campo alem de parcial_num mexido', c10.n === 0, c10.n],
@@ -258,6 +297,7 @@ const ESCRITA_RECENTE = `
     let falhou = false
     for (const [nome, ok, v] of checks) { if (!ok) falhou = true
       console.log(`   ${ok ? 'OK   ' : 'FALHA'}  ${nome.padEnd(40)} ${v}`) }
+    console.log(`   MEDIDO  ${'pares (tr,processo) com 2+ parciais'.padEnd(40)} ${splitAntes} -> ${splitDepois}`)
 
     console.log('\n── AS DUAS TRs CONFERIDAS ────────────────────────────')
     for (const tr of ['2020TR000637', '2020TR000704']) {

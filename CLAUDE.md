@@ -386,29 +386,90 @@ job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
     fazia nada. Todo botão de ação nasce desabilitado e é habilitado no caminho que o
     autoriza — com o motivo no `title` quando não estiver.
 
-16. **`parcial_num` VOLTOU a ser o número do SIGEF — em 1.545 das 1.554 TRs.**
-    Renumerado em 12/08/2026 (`renumerar_parcial_num.js`). **Uma parcial = (tr, processo_pc)**.
+16. **⚠️ UM PROCESSO SGPe PODE CARREGAR VÁRIAS PARCELAS DO SIGEF.** Reescrita em 16/08/2026.
+
+    Até esta data esta armadilha dizia **"uma parcial = (tr, processo_pc)"**. **É falso**, e
+    a frase custou caro: dela nasceram um `409` na rota do lápis que reescrevia `parcial_num`
+    sozinho, e travas em três scripts que abortariam para sempre.
+
+    **Medido no `ESTOQUE FCEE OFICIAL DA CGE.xlsx`, aba `Parcial`, por dois agentes cegos um
+    ao outro — bateram:**
+
+    | | |
+    |---|---|
+    | pares (TR, processo) com **2+ parcelas** | **113** (chave normalizada) · 105 na chave crua |
+    | TRs · PCs | **78 TRs · 465 PCs** — 2,2% dos pares |
+    | maior caso | **2019TR000193**, `SCC2146/2020`, com **11 parcelas** |
+    | a direção contrária (parcela com 2+ processos) | **81** · 55 TRs · 268 PCs |
+
+    **A relação é N:N nos dois sentidos.** Nem "uma parcial = um processo", nem o inverso.
+
+    ⚠️ **POR QUE A REGRA FALSA PARECIA VERDADEIRA:** ela foi escrita observando o banco, e o
+    banco estava deformado — a recarga de 05/08 (`recarga_exec.js:214-215`, que grava
+    `nums[0]`, o **menor** rótulo) colapsou parcelas num número só, e a renumeração de 13/08
+    preencheu as lacunas por processo. **Ler o dado de saída de uma migração e chamar o padrão
+    dele de regra de negócio é como este erro nasce.** A fonte é o SIGEF, não a base.
+
+    ⚠️ **QUEM AGRUPA A PARCELA É O `parcial_num`, E SÓ ELE.** `carregarParcela` sempre chaveou
+    por `(setorial_id, tr, parcial_num)`, os cinco chamadores dele também, e a tela igual —
+    por isso o sistema **já** suporta o processo em várias parciais, sem mudança nenhuma.
+    A regra falsa nunca esteve no caminho do analista: estava nas travas em volta dele.
+
+    ⚠️ **O "114" que circulou nos documentos é 113.** O par a mais tem como segunda parcela o
+    literal `-` — uma PC **sem** número de parcial, não uma segunda parcela.
+
+    ⚠️ **8 dos 113 só aparecem ao NORMALIZAR o processo.** São 10 casos do mesmo processo
+    escrito de dois jeitos na mesma TR (`SCC8137/2021` × `SCC 00008137/2021`), **dois deles em
+    minúsculas** (`scc 8134/2024`, `scc8214/2024`). Na chave crua eles se passam por processos
+    diferentes — foi assim que a regra falsa sobreviveu tanto tempo.
+
+16-A. **⚠️ A ABA `Parcial` DO ESTOQUE DA CGE TEM DUAS COLUNAS CHAMADAS `Parcial`.**
+    Índices 8 e 11, e são **idênticas em 13.626 de 13.626 linhas** — não muda número nenhum,
+    mas **qualquer script que leia a aba por NOME de coluna pega uma das duas de forma
+    imprevisível**, conforme a biblioteca. **Ler por índice.**
+
+    E a coluna da TR **não se chama TR**: é `NR. TRANS / NT. TE`. Nela, **4 dos 1.554
+    instrumentos são `TE`, não `TR`** — `2021TE002462`, `2021TE000516`, `2021TE000260`,
+    `2021TE000314`.
+
+16-B. **⚠️ `Parcial` E `PARCELA N°` RESPONDEM PERGUNTAS DIFERENTES — e a coluna errada
+    INVERTE a resposta.**
+
+    | coluna | pares com 2+ parcelas | preenchimento |
+    |---|---|---|
+    | **`Parcial`** — o número do SIGEF, o que o analista vê | **113 · 2,2%** | 8.998 de 13.626 (**34% está `-`**) |
+    | `PARCELA N°` — a sequência do pagamento na TR | **2.372 · 43,75%** | 13.626 de 13.626 |
+
+    Escolher a `PARCELA N°` porque está 100% preenchida responderia **"sim, em 44% dos casos"**
+    a uma pergunta sobre a parcial da prestação. **É a coluna `Parcial` que responde**, e o
+    preço dela é o `-` em um terço das linhas. Mesma família da armadilha 19: o número que
+    aparece primeiro não é o que responde.
+
+16-C. **A renumeração de 12–13/08, e o que ainda vale dela.**
 
     ⚠️ **NÃO renumerar por `parcela_seq`.** Era o caminho escrito aqui até 12/08, e foi
     **medido e reprovado**: reescrevia **592 parcelas** (1.017 PCs, 67 TRs) cujo rótulo veio
     da planilha do analista — que é o número do SIGEF. `parcela_seq` **não é a ordem do
     SIGEF**: na 2020TR000704 a parcial 2 tem `parcela_seq` 10 e a parcial 3 tem `parcela_seq` 2.
 
-    O que se fez: **preservar o rótulo da planilha e preencher só a lacuna.** Os números
-    livres de 1..N vão para as parcelas sem rótulo, na ordem de `parcela_seq`, com o grupo
-    `processo_pc = '-1'` por último.
+    ⚠️ **E NÃO renumerar por `processo_pc` também** — é o que o `renumerar_parcial_num.js`
+    faz (`GROUP BY p.tr, p.processo_pc`), e é por isso que **aquele script não pode mais
+    rodar**. O sucessor é o `renumerar_sigef.js`, que lê o número da CGE em vez de deduzi-lo.
 
     ⚠️ **O gabarito é o `_backup_parcial_num_20260805`** — os rótulos numéricos dele são os
     do SIGEF (3.281 PCs, 1.792 parcelas, 529 TRs). **Não apagar essa tabela.**
 
-    ⚠️ **9 TRs ficaram de fora, e nenhuma é problema de numeração:** 7 têm rótulo acima do
-    total de parcelas (o SIGEF tem parcela que a base não tem — a 2020TR000638 tem 7
-    faltando: 623, 638, 681, 718, 722, 809, 2385) e 2 têm o mesmo SGPe em duas grafias
-    (791: `SCC 4813/2024` e `SCC 00004813/2024`; 967: `SCC15029/2022` e `SCC 00015029/2022`).
-    Nelas a referência continua sendo o processo SGPe.
+    ⚠️ **9 TRs ficaram de fora da renumeração de 13/08:** 7 têm rótulo acima do total de
+    parcelas (o SIGEF tem parcela que a base não tem — a 2020TR000638 tem 7 faltando: 623,
+    638, 681, 718, 722, 809, 2385) e 2 têm o mesmo SGPe em duas grafias (791: `SCC 4813/2024`
+    e `SCC 00004813/2024`; 967: `SCC15029/2022` e `SCC 00015029/2022`).
+    ⚠️ **Essas 2 últimas deixaram de ser exceção** — são dois dos 10 casos de grafia dupla, e
+    o processo em duas parcelas ali é legítimo.
 
     ⚠️ **A 2020TR000637 fecha 1..20, mas o SIGEF tem 19.** A sobra é a PC de
     `processo_pc = '-1'`, isolada no 20 de propósito. É problema de DADO — ver `pcs_sgpe_-1.csv`.
+    ⚠️ E **4 dos 113 pares são o `-1`**, que não é processo: são o mesmo problema de dado
+    aparecendo por outro caminho.
 
 17. **⚠️ Ao criar trava de janela de escrita, o superadmin NÃO bloqueia.** O modo manutenção
     carimba `sessao_fim` em todos menos nele, de propósito — é ele quem precisa continuar
@@ -567,12 +628,18 @@ estragou foi a **recarga de 05/08**, que apagou 5.716 números e trocou 77 — p
 "numerado por `parcela_seq`" que a auditoria mediu é resíduo da renumeração de 13/08
 preenchendo as lacunas que a recarga abriu.
 
-⚠️ **A armadilha 16 não é verdade literal:** já existem **10 casos** de um processo com mais
-de um número. A regra "uma parcial = (tr, processo_pc)" só sobrevive porque a chave crua
-**não normaliza** (`SCC8214/2024` ≠ `SCC 00008214/2024`).
+✅ **A PERGUNTA QUE TRAVAVA TUDO FOI RESPONDIDA EM 16/08/2026: SIM.** O SIGEF permite várias
+parcelas no mesmo processo SGPe — **113 pares (TR, processo), 78 TRs, 465 PCs**, medidos no
+`ESTOQUE FCEE OFICIAL DA CGE.xlsx` por dois agentes cegos um ao outro. **Logo o mapa NÃO parte
+processos indevidamente**, e a armadilha 16 foi reescrita. Ver `SPLIT_PROCESSO_2026-08-16.md`.
 
-⚠️ **A pergunta que trava tudo, e é do Richard:** o SIGEF permite duas parcelas no mesmo
-processo SGPe? O mapa da CGE diz que sim em **114 casos**; o banco de hoje diz que não.
+Consequência já aplicada: o `juntar`/`fusao` saiu da rota do lápis, e as travas de
+`corrigir_processo_pc.js`, `resolver_processos_restantes.js` e `renumerar_parcial_num.js`
+deixaram de exigir a bijeção. **O `renumerar_parcial_num.js` não pode mais rodar** — o
+`GROUP BY tr, processo_pc` dele É a regra refutada.
+
+⚠️ **O bloqueio nº 1 do `SESSAO.md` deixou de ser bloqueio** (o "split", 114 processos): ele
+descrevia o dado correto como se fosse dano. **Os outros quatro continuam de pé.**
 
 ---
 

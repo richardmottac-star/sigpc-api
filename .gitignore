@@ -36,3 +36,19 @@ MAPA_PARCIAL_SIGEF.csv
 TRS_AFETADAS_176.csv
 trs_renumerar.csv
 contagem.csv
+
+# ⚠️ A FONTE da auditoria: o estoque oficial da CGE (45 MB) e as planilhas dos
+# grupos. Dado operacional bruto, com nome de entidade, CNPJ e valor.
+# O MAPA_PARCIAL_SIGEF.csv sai DAQUI: se ele se perder, e este arquivo que o
+# reconstroi (aba "Parcial", colunas NR. PC -> Parcial).
+#
+# ⚠️ SAO PADROES NOMEADOS, DE PROPOSITO — nao ha regra `*.xlsx` aqui (decisao do
+# Richard, 16/08/2026). Consequencia a lembrar: planilha NOVA com outro nome NAO
+# e ignorada sozinha. Antes de `git add -A`, conferir `git status`. Uma planilha
+# desta pasta no historico e dado de entidade e CNPJ publicado, e so sai
+# reescrevendo a arvore.
+ESTOQUE FCEE OFICIAL DA CGE.xlsx
+ESTOQUE_FCEE_OFICIAL_DA_CGE.xlsx
+GRUPO 1 - *.xlsx
+GRUPO 2 - *.xlsx
+GRUPO 3*.xlsx

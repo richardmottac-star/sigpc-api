@@ -1,6 +1,25 @@
 // Backfill de parcial_num nas PCs PENDENTES (as baixadas ja tem, vindas da recarga).
-// Uma parcial = (tr, processo_pc). Verificado: nas 2.125 chaves ja numeradas,
-// nenhuma tem mais de um parcial_num — a relacao e' funcional.
+//
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// ⚠️⚠️ NAO RODE ESTE SCRIPT DE NOVO. O METODO DELE FOI REFUTADO EM 16/08/2026.
+//
+// O cabecalho dizia: "Uma parcial = (tr, processo_pc). Verificado: nas 2.125 chaves ja
+// numeradas, nenhuma tem mais de um parcial_num — a relacao e' funcional."
+//
+// ⚠️ ERA VERDADE SOBRE O BANCO, E FALSO SOBRE O SIGEF. O "verificado" olhou o dado de saida
+// da propria migracao e chamou o padrao dele de regra. Medido depois no estoque oficial da
+// CGE, por dois agentes cegos um ao outro:
+//     um processo com varias parcelas ..... 113 pares · 78 TRs · 465 PCs
+//     uma parcela com varios processos .....  81 pares · 55 TRs · 268 PCs
+// A relacao e' N:N nos DOIS sentidos. Ver a armadilha 16 do CLAUDE.md.
+//
+// Consequencia: o `herd` (linha ~75) herda o numero pelo `processo_pc`, ou seja, da UM numero
+// por processo — o mesmo colapso da recarga de 05/08. E a numeracao que ele inventa para o
+// resto vem de `parcela_seq`, caminho MEDIDO E REPROVADO em 13/08 (armadilha 16-C).
+//
+// O SUCESSOR e' o `renumerar_sigef.js`, que le o numero da CGE em vez de deduzi-lo do
+// processo. O que fica AQUI e' historia.
+// ═════════════════════════════════════════════════════════════════════════════════════════
 //
 // PADRAO = DRY-RUN. So grava com --gravar.
 // ATENCAO: a numeracao atribuida aqui NAO vem da planilha do analista; e' derivada
@@ -22,6 +41,19 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
     `)
     const { rows: bk } = await cli.query(`SELECT COUNT(*)::int n FROM ${TAB_BACKUP}`)
     console.log(`backup ${TAB_BACKUP}: ${bk[0].n} linhas\n`)
+
+    // ⚠️ "uma parcial nunca deve juntar processos SGPE diferentes" — era o que o check
+    // abaixo exigia, abortando com mais de 5. O estoque da CGE mede 81 chaves nessa situacao
+    // (55 TRs, 268 PCs): juntar processos e' o dado NORMAL, nao defeito, e o `<= 5` mandaria
+    // ROLLBACK para sempre. Virou comparacao antes/depois — a rodada so' precisa provar que
+    // nao AUMENTOU o que encontrou. Medido ANTES de escrever, por isso esta aqui em cima.
+    const contarMultiProc = async () => (await cli.query(`
+      SELECT COUNT(*)::int n FROM (
+        SELECT tr, parcial_num FROM prestacoes_contas
+         WHERE setorial_id='FCEE' AND parcial_num IS NOT NULL
+         GROUP BY 1,2 HAVING COUNT(DISTINCT processo_pc) > 1) t
+    `)).rows[0].n
+    const multiProcAntes = await contarMultiProc()
 
     // toda PC 'final' recebe FINAL, como ja fez a recarga
     const fin = await cli.query(`
@@ -81,13 +113,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
              COUNT(DISTINCT (tr||'|'||COALESCE(parcial_num,'?')))::int parciais
         FROM prestacoes_contas WHERE setorial_id='FCEE'
     `)
-    // uma parcial nunca deve juntar processos SGPE diferentes
-    const { rows: conf } = await cli.query(`
-      SELECT COUNT(*)::int chaves_com_mais_de_um_processo FROM (
-        SELECT tr, parcial_num FROM prestacoes_contas
-         WHERE setorial_id='FCEE' AND parcial_num IS NOT NULL
-         GROUP BY 1,2 HAVING COUNT(DISTINCT processo_pc) > 1) t
-    `)
+    const multiProcDepois = await contarMultiProc()
 
     // TRAVA PRINCIPAL: a numeracao das baixadas veio da planilha do analista.
     // Se qualquer baixada for renumerada, a produtividade deixa de bater — aborta.
@@ -117,7 +143,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
       ['PCs sem parcial_num == 0',                chk[0].sem === 0,                                 `${chk[0].sem} de ${chk[0].total}`],
       ['baixadas renumeradas == 0',               alt[0].renumeradas === 0,                         `${alt[0].renumeradas}`],
       ['PCs ja numeradas alteradas == 0',         alt2[0].alteradas === 0,                          `${alt2[0].alteradas}`],
-      ['parciais juntando >1 SGPE <= 5 (as pre-existentes)', conf[0].chaves_com_mais_de_um_processo <= 5, `${conf[0].chaves_com_mais_de_um_processo}`]
+      ['parciais juntando >1 SGPE nao aumentou',  multiProcDepois <= multiProcAntes,                `${multiProcAntes} -> ${multiProcDepois}`]
     ]
     let falhou = false
     for (const [nome, ok, valor] of checks) {

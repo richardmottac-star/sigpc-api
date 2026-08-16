@@ -61,8 +61,12 @@ conf(!pe.lerLink('http://sgpe.sea.sc.gov.br/cpav/x.do?processoPK=1,2,2025').erro
 // ─────────────────────────────────────────────────────────────
 secao('4. TRAVAS NO SERVIDOR');
 const src = fs.readFileSync('./server.js', 'utf8');
+// ⚠️ A FATIA TERMINA NA ROTA SEGUINTE, nao num tamanho fixo. Era `+ 5200`, e a rota tem
+// 4.689 — sobravam 511 caracteres de dentro do `/sgpe/link_manual`. Enquanto os testes so
+// procuravam o que TINHA de existir, sobra nao atrapalhava; os de 16/08 conferem o que NAO
+// pode existir (`juntar`, `409`), e aí um trecho da rota vizinha reprova o arquivo certo.
 const rota = src.slice(src.indexOf("app.patch('/prestacoes_contas/:codigo_pc/processo'"),
-                       src.indexOf("app.patch('/prestacoes_contas/:codigo_pc/processo'") + 5200);
+                       src.indexOf("app.post('/sgpe/link_manual'"));
 
 conf(/quemEdita/.test(rota), 'confere quem edita');
 conf(/PERFIS_EDITAM_PROCESSO = \['analista', 'coordenador', 'superadmin'\]/.test(src),
@@ -88,11 +92,29 @@ conf(/resolverNoSgpe/.test(resolver), 'e so entao o SGPe ao vivo');
 conf(/await cli\.query\('COMMIT'\);[\s\S]{0,400}?resolverProcesso\(novo\)/.test(rota),
      'o link e buscado DEPOIS do COMMIT — o texto salva mesmo com o SGPe fora');
 
-// fusao de parcela
-conf(/409/.test(rota) && /fusao/.test(rota), 'fusao de parcela devolve 409 com aviso');
-conf(/b\.juntar !== true/.test(rota), 'e so junta com confirmacao explicita');
-conf(/parcial_num = \$2/.test(rota),
-     'ao juntar, iguala o parcial_num — senao ficaria (tr,processo) com dois numeros');
+// ── o processo em varias parciais (16/08/2026) ───────────────────────────────
+// A rota NAO pode mais nem bloquear nem juntar. Um processo SGPe carrega varias parcelas do
+// SIGEF (113 pares medidos no estoque da CGE), entao colidir em (tr, processo_pc) deixou de
+// ser defeito. Estes tres testes existem para a regra falsa nao voltar por descuido.
+conf(!/\bjuntar\b/.test(rota), 'o `juntar` NAO existe mais na rota');
+conf(!/SET parcial_num/.test(rota),
+     'a rota NUNCA escreve em parcial_num — era ela que apagava a numeracao do SIGEF');
+conf(!/409/.test(rota), 'e nao ha 409: colidir em (tr,processo) nao bloqueia mais');
+conf(/convive/.test(rota), 'no lugar dele vai o `convive`, que so informa');
+// e o aviso tem de sair ORDENADO por numero: como texto, a parcial 10 vem antes da 2
+conf(/parseInt\(String\(x\)\.replace/.test(rota), 'e as parciais do aviso saem em ordem numerica');
+
+// ⚠️ as leituras tem de estar DENTRO da transacao — o UPDATE escreve pela lista que elas dao
+//
+// ⚠️ E A COMPARACAO DE POSICAO E' FEITA SEM OS COMENTARIOS. A primeira versao deste teste
+// comparava sobre o texto cru e REPROVOU o codigo certo: o comentario que explica a ordem
+// cita `FOR UPDATE` 240 caracteres antes de o `BEGIN` aparecer. Teste de posicao que le
+// comentario mede a prosa, nao o programa.
+const rotaCodigo = rota.split('\n').filter(l => !/^\s*(\/\/|\\)/.test(l)).join('\n');
+conf(rotaCodigo.indexOf("cli.query('BEGIN')") < rotaCodigo.indexOf('FOR UPDATE'),
+     'o BEGIN vem antes das leituras, e elas travam a linha (FOR UPDATE)');
+conf((rotaCodigo.match(/FOR UPDATE/g) || []).length === 2,
+     'as DUAS leituras travam: a PC alvo e as irmas que o UPDATE vai reescrever');
 conf(/codigo_pc = ANY\(\$1\)/.test(rota), 'escreve por lista explicita de chaves (regra 12)');
 conf(/parcela_historico/.test(rota), 'e registra quem, quando e o valor anterior');
 

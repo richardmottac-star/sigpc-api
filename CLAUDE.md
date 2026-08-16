@@ -523,6 +523,39 @@ relatório; a publicação sai quando ele mandar, nunca como consequência de "t
 
 ---
 
+### O auditor, e o que é só dele (16/08/2026)
+
+O `revisor` lê **código**; o **`auditor`** lê **DADO**. Ele confere a base contra as fontes
+externas — estoque da CGE, planilhas dos grupos, gabaritos, backups anteriores — e entra
+**sempre que uma correção tocar dado em massa**.
+
+⚠️ **ELE NÃO ESCOLHE ENTRE DUAS FONTES.** Quando discordam, mostra as duas, mede o tamanho da
+discordância e diz **por que uma seria mais confiável** — e para aí. Escolher por você é
+decidir regra de negócio com outro nome.
+
+⚠️ **Nem a planilha nem a base são gabarito por padrão.** O erro tem duas direções, e as duas
+já foram medidas: a coluna "Número de PCs" do Grupo 2 está **inflada ~2x** em 44,7% das chaves
+(G1 e G3 dão 96% no mesmo banco), e a numeração das parciais **na base** é que estava errada
+na migração. Quem "consertar" um lado para bater com o outro sem medir destrói dado bom.
+
+### ⚠️ DUPLA VERIFICAÇÃO — dois agentes, o mesmo número, cegos um ao outro (16/08/2026)
+
+**DOIS agentes medem o MESMO número de forma INDEPENDENTE, sem ver o resultado um do outro.**
+
+- Bateram → segue.
+- **Divergiram → a divergência É o achado**, e vem para o Richard antes de qualquer coisa.
+
+⚠️ **Nada de "um mede e o outro confere".** Quem confere já chega sabendo a resposta e tende a
+concordar — vira carimbo, não medição. **Foi a medição independente que revelou, em 16/08, as
+51 TRs que ninguém tinha visto**, e o `split` de processo que a análise original não mediu
+porque só olhou a direção contrária.
+
+⚠️ **E TODA GRAVAÇÃO EM MASSA CONFERE DE NOVO DEPOIS DE GRAVAR**, dentro da MESMA transação,
+comparando com o previsto no dry-run — e faz `ROLLBACK` se não bater. Conferir só antes prova
+o que se esperava, não o que aconteceu.
+
+---
+
 ## Padrões de trabalho
 
 - Validar sempre com `node --check` antes de commit.

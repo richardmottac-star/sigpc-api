@@ -52,3 +52,15 @@ ESTOQUE_FCEE_OFICIAL_DA_CGE.xlsx
 GRUPO 1 - *.xlsx
 GRUPO 2 - *.xlsx
 GRUPO 3*.xlsx
+RECUPERAR_MENOS1.csv
+
+# ── Dado operacional de 16/08/2026 — nunca versionar ─────────────────────────
+# Listas de PC com entidade, CNPJ e valor. Os documentos que as explicam
+# (EXECUCAO_16-08.md, REVISAO_LOTE_2026-08-16.md) ESTAO versionados; os dados, nao.
+PCS_AUSENTES_*.csv
+PCS_NO_CONTROLE_INTERNO.csv
+CI_PROCESSOS_SEM_BASE.csv
+DIVERGENCIAS_21_RESOLVIDAS.csv
+# Lista de reversao da gravacao de 16/08 — recuperavel dos backups no banco.
+reverter_exec_*.json
+reverter_frente2_*.json

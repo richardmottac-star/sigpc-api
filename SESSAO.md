@@ -4,6 +4,77 @@ Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
 ---
 
+## ⚠️ O RELATO DA NOICI (2020TR000761) — E UMA CONCLUSÃO ERRADA QUE FICA REGISTRADA
+
+### ❌ Primeiro, o que estava errado aqui — retratado em 16/08/2026
+
+Este arquivo chegou a afirmar que **"a recarga de 05/08 apagou trabalho de analista — perda
+confirmada"**, com 3.619 PCs e 45 analistas "expostos". **Era falso, e a premissa também.**
+
+⚠️ **O sistema só foi liberado aos analistas em 12/08/2026, às 20h.** Antes disso quem usava
+era o Richard, testando. **Em 05/08 não havia analista nenhum dentro do sistema** — logo a
+recarga daquele dia não tinha trabalho de analista para apagar.
+
+**O erro de método, para não repetir:** eu medi a *ausência* de histórico antes de 05/08 e li
+como *apagamento*. Uma tabela vazia num período em que ninguém usava o sistema não é prova de
+perda — é exatamente o que se espera. **Falta de dado não é evidência de dano.** A pergunta que
+eu não fiz, e que teria derrubado a conclusão em um minuto, é *"quando o sistema abriu?"*.
+
+### O que o banco mostra, medido em 16/08
+
+**A linha do tempo do `parcela_historico` bate com a abertura em 12/08:**
+
+| dia | linhas | TRs | analistas |
+|---|---|---|---|
+| 05/08 | 6 | 5 | 0 — todas `migracao_ci`, script |
+| **12/08** | **28** | 14 | **5** |
+| 13/08 | 211 | 90 | 17 |
+| 14/08 | 415 | 122 | 16 |
+| 15/08 | 47 | 11 | 4 |
+| 16/08 | 36 | 4 | 3 |
+
+**Não houve recarga depois de 12/08.** Só existem três valores de `origem_baixa`:
+`carga_historica`, `recarga_parcial_20260805` (todas com `data_baixa = 30/06`) e `sistema`
+(211 PCs, de 12/08 a 16/08 — o trabalho real na tela).
+
+**A Noici (id 31) não tem NENHUM registro no sistema:** 0 linhas em `parcela_historico`, como
+autora ou executora, e nenhuma baixa com `origem_baixa = 'sistema'` em nenhum dos cinco dias.
+
+### A explicação do relato, com a planilha dela na mão
+
+A `2020TR000761` tem **44 PCs em 18 parciais, 37 baixadas**. Na planilha do Grupo 2, abas
+`Planilha1` e `backup`, ela tem **17 linhas** para essa TR:
+
+| situação na planilha | linhas | foi para o sistema? |
+|---|---|---|
+| Parecer Regular | 6 | **sim** |
+| Parecer Regular com Ressalvas | 9 | **sim** |
+| **Análise** | **2** | **NÃO** |
+
+⚠️ **`recarga_exec.js:50-55,72` — o `ehBaixada()` só aceita parecer e C.I.** Tudo que era
+*Análise*, *Diligência* ou complementação documental **nunca foi carregado**. E a aba
+`Anexo IV` da mesma planilha traz **122 linhas** dessa TR com *Em Análise* (72) e *Em
+Diligência* (50) — nada disso existe no sistema.
+
+**A conclusão que o dado sustenta:** o trabalho dela estava **na planilha**, e a migração
+carregou **só os pareceres**. Não é apagamento — é **estado que nunca foi importado**. O que
+ela procurou e não achou é o acompanhamento (diligência, análise, complementação), que o
+`ehBaixada()` descartou por construção.
+
+**E "a PC 18 não existe" se inverte:** a base tem **18 parciais**, a planilha dela tem 17. O
+sistema tem *mais*, não menos.
+
+### O que fica valendo
+
+- **Nada a corrigir na 2020TR000761.** Não houve perda; houve importação parcial por desenho.
+- ⚠️ **A lacuna real é de FUNCIONALIDADE, não de dado:** o acompanhamento anterior a 12/08 —
+  diligências, análises e complementações — **não está no sistema para ninguém**, porque a
+  carga só trouxe parecer/C.I. Quem lembrar de trabalho "que sumiu" desse período vai estar
+  falando disto, e a resposta é honesta: nunca entrou.
+- **O `recarga_exec.js` continua desarmado** (o pacote `xlsx` não está instalado no projeto).
+  Se for rearmado, a zeragem universal de `recarga_exec.js:263` passa a ser perigosa **agora
+  que há analista dentro** — o que não era verdade em 05/08.
+
 ## ▶▶ 16/08 — A NUMERAÇÃO DAS PARCIAIS: ONDE PARAMOS (leia isto primeiro)
 
 **Nada foi gravado nesta frente.** Um backup foi criado; o `renumerar_sigef.js` NUNCA rodou
@@ -223,8 +294,8 @@ Existia desde 30/07 e tinha sido **perdida de vista**: em 05/08 a Minha Planilha
 reconstruída e levou o botão junto. Voltou no cartão da TR, agora com rota transacional,
 guarda no servidor e rastro em `parcela_historico`.
 
-⚠️ **PC no ciclo do C.I. BLOQUEIA a devolução** (opção B). E atenção: **as 13 PCs no C.I. são
-todas `baixada = true`** — encaminhar ao C.I. já conta como baixa. A primeira versão procurava
+⚠️ **PC no ciclo do C.I. BLOQUEIA a devolução** (opção B). E atenção: **as PCs no C.I. são
+todas `baixada = true`** (são 585 em 114 TRs, medido em 16/08 — o "13" era falso) — encaminhar ao C.I. já conta como baixa. A primeira versão procurava
 C.I. só entre as não baixadas e **a trava nunca disparava**.
 
 ### ✎ Corrigir o processo SGPe — em todas as telas

@@ -2512,7 +2512,10 @@ const PERFIS_EDITAM_PROCESSO = ['analista', 'coordenador', 'superadmin'];
 async function quemEdita(cli, usuarioId) {
   const { rows } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
                                    [parseInt(usuarioId) || 0]);
-  return rows[0] && PERFIS_EDITAM_PROCESSO.includes(rows[0].perfil) ? rows[0] : null;
+  // ⚠️ `perfilEfetivo`, não `perfil` cru — esta era a única rota de escrita fora dos 10
+  // pontos da regra de 14/08. Sem efeito prático hoje (`analista` já está na lista), mas uma
+  // exceção sobrevivente é onde a regra volta a divergir.
+  return rows[0] && PERFIS_EDITAM_PROCESSO.includes(papel.perfilEfetivo(rows[0])) ? rows[0] : null;
 }
 
 /** Resolve o processo: mapa → cache → SGPe ao vivo. Devolve { link, motivo }. */
@@ -2581,7 +2584,8 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     await cli.query('BEGIN');
 
     const { rows: alvo } = await cli.query(
-      `SELECT codigo_pc, tr, parcial_num, processo_pc, processo_mae FROM prestacoes_contas
+      `SELECT codigo_pc, tr, parcial_num, processo_pc, processo_mae, analista_id
+         FROM prestacoes_contas
         WHERE codigo_pc = $1 FOR UPDATE`, [b.codigo_pc]);
     if (!alvo.length) {
       await cli.query('ROLLBACK');
@@ -2631,13 +2635,28 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
       `UPDATE prestacoes_contas SET ${b.campo} = $2, atualizado_em = NOW()
         WHERE codigo_pc = ANY($1)`, [codigos, novo]);
 
+    // ⚠️ A AUTORIA DUPLA — corrigida em 16/08/2026. Até aqui esta rota gravava `quem.id`
+    // (o EXECUTOR) na coluna `analista_id`, que significa o DONO, e deixava `executado_por`
+    // vazio — ou seja, dizia "foi o dono mesmo" no nome de quem não é dono.
+    //
+    // Medido pelo qa-banco: **25 de 75** linhas `processo_pc` e **3 de 25** `processo_mae` já
+    // estão com `analista_id` diferente do dono da TR. Um coordenador corrigia o processo de
+    // uma PC da Aline e a trilha dizia que a dona do trabalho era o coordenador.
+    //
+    // É exatamente o defeito que 14/08 corrigiu em `parecer`/`situacao`/`ci`/`devolucao_tr`.
+    // Esta rota nasceu em 13/08 e ficou de fora. `executado_por` NULO = foi o dono mesmo.
+    const dono = pc.analista_id ?? null;
+    const executor = (dono != null && String(dono) !== String(quem.id)) ? quem.id : null;
     await cli.query(
       `INSERT INTO parcela_historico
-         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
-       VALUES ($1, $2, 'FCEE', $3, $4, $5, $6, $7)`,
-      [pc.tr, pc.parcial_num, b.campo, antes, novo, quem.id,
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id,
+          observacao, executado_por)
+       VALUES ($1, $2, 'FCEE', $3, $4, $5, $6, $7, $8)`,
+      [pc.tr, pc.parcial_num, b.campo, antes, novo, dono ?? quem.id,
        `${codigos.length} PC${codigos.length > 1 ? 's' : ''}` +
-       (convive ? ` · o processo tambem esta na parcial ${convive.outras_parciais.join(', ')} desta TR` : '')]);
+       (convive ? ` · o processo tambem esta na parcial ${convive.outras_parciais.join(', ')} desta TR` : '') +
+       (executor ? ` · executado por ${quem.nome}` : ''),
+       executor]);
     await cli.query('COMMIT');
 
     // Resolver o link vem DEPOIS do COMMIT: a correção do dado não pode depender do SGPe
@@ -2684,15 +2703,24 @@ app.post('/sgpe/link_manual', async (req, res) => {
     // Quem colou fica no histórico — `sgpe_processo_ref` não tem coluna de autor, e o Richard
     // decidiu em 13/08 não criar uma: o histórico já responde.
     const { rows: pcRows } = b.codigo_pc
-      ? await cli.query(`SELECT tr, parcial_num FROM prestacoes_contas WHERE codigo_pc = $1`, [b.codigo_pc])
+      ? await cli.query(`SELECT tr, parcial_num, analista_id FROM prestacoes_contas WHERE codigo_pc = $1`,
+                        [b.codigo_pc])
       : { rows: [] };
+    // ⚠️ MESMA CORREÇÃO DA ROTA DO LÁPIS (16/08/2026): `analista_id` é o DONO, e
+    // `executado_por` é quem clicou — nulo quando são a mesma pessoa. Aqui gravava-se
+    // `quem.id` no campo do dono. Ver o comentário longo em `PATCH .../processo`.
+    const donoL = pcRows[0]?.analista_id ?? null;
+    const execL = (donoL != null && String(donoL) !== String(quem.id)) ? quem.id : null;
     await cli.query(
       `INSERT INTO parcela_historico
-         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, observacao)
-       VALUES ($1, $2, 'FCEE', 'sgpe_link_manual', NULL, $3, $4, $5)`,
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id,
+          observacao, executado_por)
+       VALUES ($1, $2, 'FCEE', 'sgpe_link_manual', NULL, $3, $4, $5, $6)`,
       [pcRows[0]?.tr ?? null, pcRows[0]?.parcial_num ?? null,
-       formatarProcesso(p), quem.id,
-       `link colado à mão · processoPK=${lido.nu_processo},${lido.cd_orgaosetor},${lido.ano}`]);
+       formatarProcesso(p), donoL ?? quem.id,
+       `link colado à mão · processoPK=${lido.nu_processo},${lido.cd_orgaosetor},${lido.ano}` +
+       (execL ? ` · executado por ${quem.nome}` : ''),
+       execL]);
     await cli.query('COMMIT');
 
     res.json({ data: { processo: formatarProcesso(p),

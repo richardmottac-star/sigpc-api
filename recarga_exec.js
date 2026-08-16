@@ -1,4 +1,38 @@
 // ETAPA 3 — RECARGA POR PARCIAL. GRAVA NO BANCO, TRANSACIONAL.
+//
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// 🔴🔴 DESARMADO EM 16/08/2026, POR ORDEM DO RICHARD. NAO RODA MAIS. NAO REARMAR.
+//
+// POR QUE. Duas coisas, e a segunda mudou de gravidade:
+//
+//   1. A LINHA 263 FAZ `SET baixada=false, parecer_tipo=NULL, parcial_num=NULL` NAS 14.652
+//      LINHAS — todas, sem recorte — e so' depois reconstroi a partir das planilhas.
+//      Em 05/08 isso foi inofensivo porque o sistema ainda nao tinha sido liberado: quem
+//      usava era o Richard, testando. **O sistema abriu para os analistas em 12/08 as 20h.**
+//      Rodar isto HOJE apaga o trabalho de 45 analistas — e `parcela_historico` so' guarda
+//      rastro desde 05/08, entao boa parte nao teria como ser reconstruida.
+//
+//   2. A LINHA 214-215 GRAVA `nums[0]`, O MENOR ROTULO da planilha quando ha varios. Foi o
+//      que colapsou a numeracao das parciais e custou a correcao de 16/08 (2.151 PCs).
+//
+// E ELE JA DESCARTA DADO POR DESENHO: o `ehBaixada()` (linhas 50-55, 72) so' aceita parecer
+// e C.I. Diligencia, analise e complementacao documental NUNCA foram carregadas — foi isso,
+// e nao apagamento, que a Noici viu faltando na 2020TR000761. Ver o SESSAO.md.
+//
+// O QUE FAZER NO LUGAR: correcao dirigida, por lista explicita de `codigo_pc`, com backup da
+// tabela inteira e conferencia pos-escrita dentro da mesma transacao. O `executar_16_08.js`
+// e' o modelo.
+//
+// Se algum dia PRECISAR mesmo rodar: a zeragem universal da linha 263 tem de sair ANTES,
+// e a decisao e' do Richard, por escrito.
+// ═════════════════════════════════════════════════════════════════════════════════════════
+if (!process.argv.includes('--eu-li-o-cabecalho-e-o-richard-autorizou-por-escrito')) {
+  console.error('\n🔴 recarga_exec.js esta DESARMADO desde 16/08/2026.');
+  console.error('   A linha 263 zera `baixada`, `parecer_tipo` e `parcial_num` nas 14.652 PCs.');
+  console.error('   O sistema esta ABERTO desde 12/08 as 20h: isso apagaria trabalho de 45 analistas.');
+  console.error('   Leia o cabecalho deste arquivo e o SESSAO.md antes de qualquer coisa.\n');
+  process.exit(1);
+}
 // Rode com --dry para simular tudo dentro da transacao e dar ROLLBACK no fim.
 // NAO COMMITAR — operacao de dados.
 const XLSX = require('xlsx')

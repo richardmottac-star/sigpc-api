@@ -684,7 +684,12 @@ exibição — o script inteiro deixa de rodar. Já aconteceu.
 > Conferida contra o banco em **13/08/2026**. O que está `[x]` foi verificado, não presumido.
 > **Estado medido:** 53 usuários (46 analista · 3 coordenador · 3 controle_interno ·
 > 1 superadmin) · **2 sem CPF** · 0 aguardando aprovação · 15 senhas provisórias ·
-> 14.652 PCs · 3.645 baixadas · 13 no ciclo do C.I. · 1.559 TRs · 46 metas vigentes.
+> 14.652 PCs · 3.645 baixadas · **585 no ciclo do C.I., em 114 TRs** · 1.559 TRs · 46 metas
+> vigentes.
+>
+> ⚠️ **O "13 no ciclo do C.I." era falso, e ficou semanas neste documento.** Medido contra o
+> banco em 16/08/2026: são **585 PCs em 114 TRs**, todas `na_fila` e todas `baixada = true`.
+> E **`ci_mensagem` está VAZIA** — 0 mensagens. O ciclo existe no estado, não na conversa.
 
 ### ⚠️ NÃO TESTADO EM NAVEGADOR — o que foi feito em 12–13/08
 Nada disto foi clicado por uma pessoa; tudo foi validado por teste e contra o banco. Em 12/08

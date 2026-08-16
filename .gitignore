@@ -23,3 +23,16 @@ reverter_renumeracao_*.json
 # Lista de reversao da correcao em lote de processo_pc — dado operacional, recuperavel
 # de _backup_processo_pc_20260813 comparado com o vivo.
 reverter_processo_pc_*.json
+
+# ── Os mapas da auditoria de 16/08/2026 ──────────────────────────────────────
+# Dado operacional extraido do estoque oficial da CGE, nao codigo. O documento que
+# os explica (AUDITORIA_SIGPC_2026-08-16.md) ESTA versionado; os dados, nao.
+#
+# ⚠️ MAPA_PARCIAL_SIGEF.csv e a entrada do renumerar_sigef.js — 8.998 linhas,
+# chave codigo_pc -> parcial_sigef. Sem ele o script nao roda, e ele NAO se
+# reconstroi a partir do banco: o numero do SIGEF nao existe em coluna nenhuma
+# (conferido em 16/08). Se perder, e reimportar a planilha da CGE.
+MAPA_PARCIAL_SIGEF.csv
+TRS_AFETADAS_176.csv
+trs_renumerar.csv
+contagem.csv

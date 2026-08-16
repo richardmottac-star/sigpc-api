@@ -220,7 +220,10 @@ function normalizarProcessoCsv(bruto) {
       const v = moeda(r.valor);
 
       if (!parcial) { rej('sem numero de parcial'); continue; }
-      if (FORA_DO_LOTE.includes(r.tr)) { rej('TR fora da renumeracao — numeracao desalinhada'); continue; }
+      // ⚠️ AS 15 TRs FORAM RENUMERADAS em 16/08/2026 (`executar_15_trs.js`, 281 PCs). O CSV e
+      // o banco voltaram a falar a mesma língua nelas, e as 11 linhas que estavam de fora por
+      // desalinhamento entraram de volta. A lista fica aqui, vazia de efeito, como registro.
+      if (false && FORA_DO_LOTE.includes(r.tr)) { rej('TR fora da renumeracao'); continue; }
       const proc = normalizarProcessoCsv(r.processo_pc);
       if (proc.erro) { rej('processo: ' + proc.erro + ' — ' + r.processo_pc); continue; }
       if (/^final$/i.test(parcial)) { rej(temFinal.has(r.tr) ? 'FINAL e a TR ja tem PFINAL' : 'FINAL — fora do escopo'); continue; }

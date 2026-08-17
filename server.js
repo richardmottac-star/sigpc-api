@@ -1208,6 +1208,15 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
               COUNT(*) AS total_pcs,
               COUNT(DISTINCT codigo_nl) AS total_nls,
               COUNT(*) FILTER (WHERE baixada) AS baixadas,
+              -- ⚠️ pcs_livres VEM DA MESMA REGRA DO ASSUMIR (16/08/2026).
+              --
+              -- A tela derivava "livre" de !analista_nome, e o assumir exige sem dono E
+              -- status='livre'. Sem dono com status='analise' caia no vao: 87 PCs em 6 TRs
+              -- apareciam como Livre e recusavam com "Nenhuma PC livre nesta TR".
+              --
+              -- Agora a contagem sai de assumir.PC_LIVRE_SQL, a MESMA string que o
+              -- SQL_LIVRES usa. Duas implementacoes da mesma pergunta e o que abriu o vao.
+              COUNT(*) FILTER (WHERE ${assumir.PC_LIVRE_SQL}) AS pcs_livres,
               array_agg(DISTINCT status) AS status
        FROM prestacoes_contas
        ${where}

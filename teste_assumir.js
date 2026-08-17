@@ -41,8 +41,22 @@ conf(/BEGIN/.test(rota) && /COMMIT/.test(rota) && /ROLLBACK/.test(rota), 'assumi
 conf(/FOR UPDATE/.test(as.SQL_LIVRES),
      'com FOR UPDATE — dois analistas clicando junto nao leem as mesmas PCs livres');
 conf(/codigo_pc = ANY\(\$1\)/.test(as.SQL_ASSUMIR), 'escreve por lista explicita de chaves (regra 12)');
-conf(/status = 'livre' AND analista_id IS NULL/.test(as.SQL_LIVRES),
-     'so pega o que esta REALMENTE livre');
+// ⚠️ A REGRA DE "LIVRE" AGORA MORA NUMA CONSTANTE SO, e o teste prova isso — nao a ordem
+// das clausulas. A versao anterior cravava o texto `status = 'livre' AND analista_id IS NULL`
+// e reprovou a extracao para `PC_LIVRE_SQL`, que so trocou a ordem. Teste que casa a redacao
+// impede refatoracao sem pegar defeito nenhum.
+conf(/analista_id IS NULL/.test(as.PC_LIVRE_SQL) && /status = 'livre'/.test(as.PC_LIVRE_SQL),
+     'PC_LIVRE_SQL exige as DUAS coisas: sem dono e sem trabalho comecado');
+conf(as.SQL_LIVRES.includes(as.PC_LIVRE_SQL),
+     'e o SQL_LIVRES usa a constante, nao uma copia da condicao');
+// ⚠️ e o `resumo_tr` do server tem de usar A MESMA — foi a divergencia entre os dois que
+// deixou 87 PCs em 6 TRs aparecendo como Livre e recusando ao assumir, desde 10/08.
+{
+  const srv = require('fs').readFileSync('./server.js', 'utf8');
+  conf(/COUNT\(\*\) FILTER \(WHERE \$\{assumir\.PC_LIVRE_SQL\}\) AS pcs_livres/.test(srv),
+       'o resumo_tr conta pcs_livres com a MESMA constante, nao com condicao propria');
+  conf(!/statusDerivado/.test(srv), 'e o servidor nao deriva status por conta propria');
+}
 
 // ⚠️ A trava de limite era conferida A CADA PATCH — 83 vezes, e podia aceitar meia TR.
 conf((rota.match(/podeAssumirTr/g) || []).length === 1, 'a trava de limite e conferida UMA vez');

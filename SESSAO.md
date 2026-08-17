@@ -313,9 +313,34 @@ nome ocupa, não se ele aparece.
 | `atualizado_em` | de **14/06** a **18/07/2026** — parada há um mês |
 | cobertura | **incompleta**: 536 TRs existem na `prestacoes_contas` e não nela |
 
-Na API são **6 rotas**, e o **único consumidor vivo é o `COUNT(*)` do `GET /contadores`**
-(`server.js:1036`). O `index.html` **não chama `/estoque` em lugar nenhum** — a tela lê
-`GET /prestacoes_contas/resumo_tr`.
+Na API são **SETE** pontos que tocam a tabela, não seis. E **nenhum é chamado pela tela**:
+o `index.html` faz fetch em **63 rotas**, e nenhuma delas é `/estoque`, `/contadores` nem
+`/planilha_analista` — medido lendo todas as chamadas do arquivo.
+
+| ponto | server.js | quem chama |
+|---|---|---|
+| `GET /estoque` | 710 | ninguém |
+| `GET /estoque/:id` | 738 | ninguém |
+| `PATCH /estoque/:id` | 747 | ninguém — **e ver o alerta abaixo** |
+| `GET /estoque/grupos-analistas` | 838 | ninguém, **e não roda** — ver abaixo |
+| **`GET /planilha_analista/completa`** | **854** | **ninguém** — ⚠️ **`LEFT JOIN estoque`** |
+| `DELETE /migracao/limpar-estoque` | 1053 | ninguém |
+| `POST /migracao/estoque` | 1067 | ninguém |
+| `GET /contadores` | 1036 | **ninguém** — o `COUNT(*)` está lá, mas a rota não é chamada |
+
+⚠️ **CORREÇÃO DO QUE FOI DITO ANTES.** Este documento chegou a afirmar que "o único consumidor
+vivo é o `COUNT(*)` do `GET /contadores`". **Duas coisas estavam erradas:**
+1. **Faltava o `GET /planilha_analista/completa`** (`server.js:875`), que faz
+   `LEFT JOIN estoque e ON e.tr = p.tr AND e.parcela = p.parcela`. **É a única dependência que
+   quebraria de verdade** com um `DROP` — as outras leem a tabela sozinha, esta a *junta*.
+2. **O `/contadores` também não tem quem o chame.** A tela conta pelo
+   `GET /prestacoes_contas?limit=1` (a função `carregarContadores` do `index.html`, que apesar
+   do nome **não** usa a rota `/contadores`). Achar a rota e parar ali foi o erro de método:
+   **procurei quem lê a TABELA e não quem chama a ROTA.**
+
+**Então "se algo usar, quebra?"** — o que quebraria é `GET /planilha_analista/completa`, e
+`GET /contadores`, e as quatro de `/estoque`. **Nenhuma das oito é chamada pela tela.** Não é
+prova de que ninguém no mundo as chame: a API é pública e sem credencial na maior parte.
 
 ⚠️ **`GET /estoque/grupos-analistas` NUNCA RODA — é a armadilha 13, viva.** Está declarada na
 linha **838**, depois de `/estoque/:id` na **738**. O Express casa na ordem: o pedido cai na
@@ -337,8 +362,13 @@ casaram"** que o `CLAUDE.md` marca como lista obsoleta — **é aqui que elas mo
 que já não descreve o banco. As três colunas de devolução têm **uma linha cada**: o rastro do
 `confDev` morto, que gravava numa rota que nunca existiu.
 
-**A decisão é do Richard**, e é só uma: se a foto de 18/07 tem valor histórico, o caminho é
-renomear para `_backup_estoque_20260816` em vez de `DROP` — mesmo custo, e reversível.
+⚠️ **NADA FOI MEXIDO NA TABELA — ordem do Richard, 16/08/2026.** Ela continua no banco, com as
+4.476 linhas, e as oito rotas continuam no `server.js`. Isto aqui é **medição**, não plano.
+
+Se um dia for para sair, a decisão é uma só: se a foto de 18/07 (`situacao`, `prazo_analise`)
+tem valor histórico, renomear para `_backup_estoque_20260816` em vez de `DROP` — mesmo custo,
+e reversível. E **as oito rotas teriam de sair junto**, senão viram 500 em vez de 404 — em
+especial o `GET /planilha_analista/completa`, que é o único com JOIN.
 ⚠️ **Vale o mesmo para a `planilha_analista`** (3.122 linhas, parada em 14/06, já marcada como
 DESCONTINUADA), e **o `desfazer_assuncoes.js` mexe nessas duas e em nenhuma outra**.
 

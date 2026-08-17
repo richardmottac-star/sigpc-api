@@ -73,3 +73,5 @@ CI_PENDENTE_POR_ANALISTA/
 
 # Lista de reversao das 87 — recuperavel do _backup_87livres_20260816
 reverter_87livres_*.json
+
+reverter_soltas_*.json

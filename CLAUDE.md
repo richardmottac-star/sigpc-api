@@ -4,8 +4,22 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 16/08/2026 — ver `SESSAO.md`. **Cinco escritas em produção nesse dia.**
+**Última sessão:** 16/08/2026 — ver `SESSAO.md`. **Onze escritas em produção nesse dia.**
 
+> ## ✅ 16/08/2026 — ONZE ESCRITAS EM PRODUÇÃO. Ver `SESSAO.md`.
+>
+> **14.658 PCs** · 1.031 finais · 3.804 baixadas · **2.318 no C.I.** · **6.090 sem dono, todas
+> `livre`**. Renumeração pelo SIGEF em **211 TRs**; 6 PCs incluídas; 87 destravadas; 78 soltas
+> atribuídas ao dono da TR.
+>
+> ⚠️ **A armadilha 16 foi REESCRITA:** um processo SGPe carrega **várias** parcelas do SIGEF —
+> 113 pares medidos no estoque da CGE. A regra antiga foi lida do banco já deformado.
+> ⚠️ **`parecer`, `estornar` e `ci` ganharam filtro de `baixada`** — faziam `UPDATE ... WHERE tr
+> AND parcial_num` e reescreviam baixa alheia em parcela mista.
+> ⚠️ **"Livre" tem UMA definição:** `assumir.PC_LIVRE_SQL`, usada pelo assumir, pelo `resumo_tr`
+> e pela tela. Antes eram duas, e 87 PCs caíam no vão.
+> ⚠️ **`recarga_exec.js` está DESARMADO** — zera 14.652 linhas, e o sistema está aberto.
+>
 > **O sistema está ABERTO.** Os dois interruptores estão **desligados** e a equipe trabalha.
 >
 > **Configurações tem TRÊS abas:** Limite de TRs · Modo preparação · Modo manutenção.

@@ -77,7 +77,7 @@ sistema tem *mais*, não menos.
 
 ## ✅ 16/08/2026 — O ESTADO DE HOJE. Leia isto primeiro.
 
-**Onze escritas em produção**, todas com backup, conferência pós-escrita e ROLLBACK se não
+**DOZE escritas em produção**, todas com backup, conferência pós-escrita e ROLLBACK se não
 batesse. Publicado nas duas branches dos dois repositórios.
 
 | | |
@@ -85,7 +85,8 @@ batesse. Publicado nas duas branches dos dois repositórios.
 | **Banco** | **14.658 PCs** · 1.031 finais · 760 no histórico · 3.804 baixadas |
 | **C.I.** | **2.318** com `enviado_ci` — 585 `na_fila` · 1.733 `encerrado` |
 | **Sem dono** | **6.090 PCs, todas `livre`** — nenhuma fora disso, nenhuma órfã em TR com dono |
-| **Testes** | 19 suítes no `sigpc-api` · 16 no `sigpc-gt` · 0 falhas |
+| **Nome do analista** | **0 PCs com `analista_id` e sem `analista_nome`** (eram 18) |
+| **Testes** | 19 suítes no `sigpc-api` · **17** no `sigpc-gt` (983 checagens) · 0 falhas |
 
 ### O que foi gravado
 
@@ -96,6 +97,27 @@ batesse. Publicado nas duas branches dos dois repositórios.
 5. **6 PCs incluídas** — as únicas que faltavam de verdade
 6. **87 PCs** sem dono com `status='analise'` → `livre`
 7. **78 PCs soltas** em TR com dono → atribuídas ao dono
+8. **18 PCs sem `analista_nome`** → preenchido pelo nome que o **acervo** já usava
+   (`corrigir_nome_analista.js`, backup `_backup_nomevazio_20260816`). 14 da Noici, 2 da Ana
+   Claudia, 2 da Graciane — **todas baixadas, e nem a baixa nem o parecer foram tocados**:
+   as 24 outras colunas foram conferidas uma a uma contra o backup, na mesma transação.
+
+### E as DUAS correções de código que saíram do dia
+
+**`lib/assumir.js` — o `MAPA_NOME` tinha TRÊS CHAVES MORTAS.** `Sandra Rocha`, `Ana Claudia` e
+`Ana Leticia` eram o nome **curto**, e a chave é o `usuarios.nome`: nunca disparavam. **Cinco
+analistas** saíam com o rótulo errado, e **os ids 22 e 23 viravam os dois "Ana"**. Estava vivo
+em `POST /tr/assumir`. Mapa agora com **10 chaves** (entraram a Goreti, chamada pelo *segundo*
+nome, e a Janaína, cujo acervo é **sem acento**). Conferido contra o banco: **0 divergências**
+nos 45 ids.
+
+**A tela Estoque de TRs** — cabeçalho maior, e a tabela sem as duas colunas mudas. Detalhe no
+`SESSAO.md` do `sigpc-gt`. **Não foi aberta no navegador** — é o que ficou para o Richard.
+
+⚠️ **A LIÇÃO QUE ATRAVESSA AS DUAS:** a receita da correção estava escrita neste arquivo
+(*"é de uma linha, `nomeCurto(usuarios.nome)`"*) e **estava errada** — ela teria escrito "Ana"
+onde o acervo diz "Ana Claudia". **Receita registrada não é receita medida.** Rodar o dry-run
+contra o banco antes de acreditar no que o próprio documento manda fazer é o que pegou isso.
 
 ---
 

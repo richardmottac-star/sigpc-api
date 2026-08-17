@@ -70,3 +70,6 @@ FRENTE2_*.csv
 
 # Listas por analista do que falta confirmar no C.I. — dado operacional
 CI_PENDENTE_POR_ANALISTA/
+
+# Lista de reversao das 87 — recuperavel do _backup_87livres_20260816
+reverter_87livres_*.json

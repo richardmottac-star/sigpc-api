@@ -190,6 +190,74 @@ _backup_ci_simone_20260816    _backup_87livres_20260816      _backup_soltas_2026
 
 ---
 
+---
+
+## 📌 PENDÊNCIAS REGISTRADAS EM 16/08/2026 — NÃO EXECUTAR SEM ORDEM
+
+### 1. ✅ PCs soltas em TR com dono — **JÁ FOI FEITO**, fica aqui só para não ser refeito
+
+O Richard pediu para registrar como pendência, mas **isto foi executado** em 16/08
+(`atribuir_soltas.js`, commit `800aa0b`): **78 PCs em 5 TRs** atribuídas ao dono da TR.
+
+| TR | dono | soltas |
+|---|---|---|
+| `2020TR000632` | Aline | **66 de 70** |
+| `2020TR000723` | Noici | 9 de 32 |
+| `2022TR001328` | Graciane | 1 de 2 |
+| `2022TR002068` | Juliana | 1 de 3 |
+| `2020TR000940` | Ana Claudia | 1 de 2 |
+
+**Conferido depois:** "TR com dono e PC solta" = **0**. Backup `_backup_soltas_20260816`.
+⚠️ **Não repetir** — rodar de novo não acha nada, mas a lista acima já não descreve o banco.
+
+### 2. ⚠️ 18 PCs em 5 TRs com `analista_id` SEM `analista_nome`
+
+O inverso da `2022TR001687` (onde o nome contradiz o id). Aqui o id existe e o nome é NULL:
+
+| TR | PCs | `analista_id` | quem é | baixadas |
+|---|---|---|---|---|
+| `2020TR000723` | **14** | 31 | Noici | 14 |
+| `2020TR001636` | 1 | 22 | Ana Claudia | 1 |
+| `2021TR002029` | 1 | 22 | Ana Claudia | 1 |
+| `2023TR000039` | 1 | 41 | Graciane | 1 |
+| `2022TR001328` | 1 | 41 | Graciane | 1 |
+
+⚠️ **Todas as 18 estão BAIXADAS** — por isso o `atribuir_soltas.js` não as tocou: ele só mexe
+em PC livre, e não toca em baixada. A produtividade **conta certo** (filtra por `analista_id`,
+armadilha 1); quem mente é a tela, que mostra o nome vazio.
+
+**A correção é de uma linha** — `analista_nome = assumir.nomeCurto(usuarios.nome)` pelo
+`analista_id`, por lista explícita de `codigo_pc`. Não foi feita porque toca linha baixada, e
+a ordem do dia era não tocar em baixada.
+
+### 3. ⚠️ Os ajustes da tela **Estoque de TRs**
+
+O que ficou de fora quando o vão foi fechado:
+
+- **A tabela `estoque` existe e ninguém usa.** 4.476 linhas, 1.030 TRs, última atualização
+  **18/07** (a data da carga). A tela lê `GET /prestacoes_contas/resumo_tr`, não ela. A rota
+  `GET /estoque` continua no servidor **sem consumidor**. Mesmo caso do `planilha_analista`,
+  já marcado como descontinuado. **Candidata a exclusão — confirmar antes.**
+- **O `desfazer_assuncoes.js`** mexe em `estoque` e `planilha_analista`, **nunca em
+  `prestacoes_contas`**. Se rodar hoje, não faz nada de útil e mexe em tabela morta.
+- **O filtro de status da tela** ainda tem `<option value="livre" selected>` fixo; com
+  `pcs_livres` vindo do servidor, vale conferir se os outros valores do filtro continuam
+  batendo com o `statusDerivado`.
+- **Não foi clicado por ninguém.** A regra unificada foi provada contra o banco (788 TRs
+  Livres antes, 788 depois) e por teste, mas o Estoque não foi aberto no navegador.
+
+### 4. ✅ `CI_PENDENTE_POR_ANALISTA/` — **42 arquivos já gerados**
+
+Um CSV por analista, mais o `_RESUMO.csv`. **1.487 PCs** baixadas com parecer e fora do C.I.
+Colunas: `TR, parcial, codigo_pc, tipo, processo_pc, parecer, entidade, valor, data_baixa,
+JA_FOI_AO_CI?` — a última em branco, para o analista preencher. UTF-8 com BOM.
+
+Maiores: `Geisa.csv` (132/63) · `Perla.csv` (115/77) · `Sandra_Rocha.csv` (100/53) ·
+`Grace_Oliveira.csv` (85/37) · `Valderi.csv` (77/39).
+
+⚠️ **Não versionados** (entidade, CNPJ e valor). Estão na raiz do `sigpc-api`, no `.gitignore`.
+⚠️ **Regenerar depois de qualquer marcação em lote** — a lista muda a cada encaminhamento.
+
 ## ▶ A PRÓXIMA SESSÃO COMEÇA AQUI (fechado em 14/08/2026)
 
 Cinco frentes, na ordem em que o Richard as deixou.

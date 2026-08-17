@@ -17,11 +17,44 @@ secao('1. O NOME CURTO — armadilha 1 do CLAUDE.md');
 conf(as.nomeCurto('Richard Motta Coelho') === 'Richard', 'o do mapa vira o nome curto');
 conf(as.nomeCurto('Zadir Teresinha Machado Ferreira') === 'Zadir', 'idem para a Zadir');
 conf(as.nomeCurto('Sandra Paul') === 'Sandra Paul', 'e os de nome composto ficam inteiros');
-conf(as.nomeCurto('Ana Leticia') === 'Ana Leticia', 'idem Ana Leticia');
 conf(as.nomeCurto('Fulano de Tal Silva') === 'Fulano', 'quem nao esta no mapa entra pelo primeiro nome');
 conf(as.nomeCurto('  Richard Motta Coelho  ') === 'Richard', 'espaco em volta nao atrapalha');
 conf(as.nomeCurto('') === null && as.nomeCurto(null) === null, 'vazio devolve null');
-conf(Object.keys(as.MAPA_NOME).length === 8, 'o mapa tem os 8 nomes que a tela tinha');
+conf(Object.keys(as.MAPA_NOME).length === 10,
+     'o mapa tem 10: os 8 que a tela tinha + Goreti e Janaina, medidos em 16/08');
+
+// ⚠️ AS TRES CHAVES QUE NUNCA DISPARAVAM — corrigido em 16/08/2026.
+//
+// Ate esta data o mapa tinha 'Sandra Rocha', 'Ana Claudia' e 'Ana Leticia' como CHAVE, que e
+// o nome CURTO. Nenhum usuario se chama assim, entao a entrada nunca casava e a funcao caia
+// no split(' ')[0]. Estes tres testes usam o `usuarios.nome` real, conferido contra o banco.
+conf(as.nomeCurto('Sandra Cezária Ronchi Rocha') === 'Sandra Rocha',
+     'Sandra Cezaria Ronchi Rocha -> "Sandra Rocha", nao "Sandra"');
+conf(as.nomeCurto('Ana Claudia Carvalho Costa') === 'Ana Claudia',
+     'Ana Claudia Carvalho Costa -> "Ana Claudia", nao "Ana"');
+conf(as.nomeCurto('Ana Letícia Wloch de Oliveira') === 'Ana Leticia',
+     'Ana Leticia Wloch de Oliveira -> "Ana Leticia", nao "Ana"');
+
+// ⚠️ E O DEFEITO EM UMA LINHA: as duas Anas nao podem colapsar no mesmo rotulo.
+conf(as.nomeCurto('Ana Claudia Carvalho Costa') !== as.nomeCurto('Ana Letícia Wloch de Oliveira'),
+     'as duas Anas continuam sendo duas pessoas diferentes');
+
+// ⚠️ AS DUAS QUE NEM ESTAVAM NO MAPA. Nao e so nome composto: a Goreti e chamada pelo
+// SEGUNDO nome, e o acervo da Janaina esta sem acento. O primeiro nome do cadastro erraria
+// as duas.
+conf(as.nomeCurto('Maria Goreti Korb') === 'Goreti',
+     'Maria Goreti Korb -> "Goreti" (o segundo nome), nao "Maria"');
+conf(as.nomeCurto('Janaína Frederico Dittrich') === 'Janaina',
+     'Janaina Frederico Dittrich -> "Janaina" SEM acento, como as 188 PCs do acervo');
+
+// ⚠️ NENHUMA CHAVE PODE SER UM NOME CURTO SOLTO. Uma chave que nao existe em `usuarios.nome`
+// nao da erro — so devolve outro nome. Este teste e a trava contra a volta do defeito: toda
+// chave tem de ter sobrenome, ou ser um cadastro que realmente e assim tao curto.
+const CADASTROS_CURTOS = ['Sandra Paul', 'Grace Oliveira'];   // conferidos no banco em 16/08
+Object.keys(as.MAPA_NOME).forEach(k => {
+  conf(k.split(' ').length >= 3 || CADASTROS_CURTOS.includes(k),
+       `a chave "${k}" e um usuarios.nome, nao um apelido`);
+});
 
 secao('2. VALIDACAO');
 conf(as.validar({ tr: '2020TR000704', usuario_id: 4 }) === null, 'corpo bom passa');

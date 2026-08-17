@@ -210,25 +210,75 @@ O Richard pediu para registrar como pendência, mas **isto foi executado** em 16
 **Conferido depois:** "TR com dono e PC solta" = **0**. Backup `_backup_soltas_20260816`.
 ⚠️ **Não repetir** — rodar de novo não acha nada, mas a lista acima já não descreve o banco.
 
-### 2. ⚠️ 18 PCs em 5 TRs com `analista_id` SEM `analista_nome`
+### 2. ✅ 18 PCs em 5 TRs com `analista_id` SEM `analista_nome` — **GRAVADO em 16/08/2026**
 
-O inverso da `2022TR001687` (onde o nome contradiz o id). Aqui o id existe e o nome é NULL:
+O inverso da `2022TR001687` (onde o nome contradiz o id). Aqui o id existia e o nome era NULL:
 
-| TR | PCs | `analista_id` | quem é | baixadas |
+| TR | PCs | `analista_id` | nome gravado | baixadas |
 |---|---|---|---|---|
-| `2020TR000723` | **14** | 31 | Noici | 14 |
-| `2020TR001636` | 1 | 22 | Ana Claudia | 1 |
-| `2021TR002029` | 1 | 22 | Ana Claudia | 1 |
-| `2023TR000039` | 1 | 41 | Graciane | 1 |
-| `2022TR001328` | 1 | 41 | Graciane | 1 |
+| `2020TR000723` | **14** | 31 | **Noici** | 14 |
+| `2020TR001636` | 1 | 22 | **Ana Claudia** | 1 |
+| `2021TR002029` | 1 | 22 | **Ana Claudia** | 1 |
+| `2023TR000039` | 1 | 41 | **Graciane** | 1 |
+| `2022TR001328` | 1 | 41 | **Graciane** | 1 |
 
-⚠️ **Todas as 18 estão BAIXADAS** — por isso o `atribuir_soltas.js` não as tocou: ele só mexe
-em PC livre, e não toca em baixada. A produtividade **conta certo** (filtra por `analista_id`,
-armadilha 1); quem mente é a tela, que mostra o nome vazio.
+Feito por `corrigir_nome_analista.js --gravar`. Backup `_backup_nomevazio_20260816` (14.658
+linhas) e reversão em `reverter_nomevazio_20260816.json`. **Conferido depois de gravar, na
+mesma transação, 7 checagens**, e de novo em conexão nova: `analista_nome` mudou em **18**;
+baixa, parecer, C.I., valor, status, `analista_id` e `parcial_num` mudaram em **0**.
+Hoje "PC com id e sem nome" = **0**.
 
-**A correção é de uma linha** — `analista_nome = assumir.nomeCurto(usuarios.nome)` pelo
-`analista_id`, por lista explícita de `codigo_pc`. Não foi feita porque toca linha baixada, e
-a ordem do dia era não tocar em baixada.
+⚠️ **Todas as 18 estavam BAIXADAS** — por isso o `atribuir_soltas.js` não as tocou: ele só
+mexe em PC livre. A produtividade sempre **contou certo** (filtra por `analista_id`,
+armadilha 1); quem mentia era a tela, que mostrava o nome vazio.
+
+### ⚠️ E O QUE ESTA PENDÊNCIA REVELOU: o `MAPA_NOME` tinha TRÊS CHAVES MORTAS
+
+**A receita escrita aqui estava errada.** Dizia *"a correção é de uma linha —
+`analista_nome = assumir.nomeCurto(usuarios.nome)`"*. Medida contra o banco, essa linha
+escreveria **"Ana"** nas duas PFINAIS da Ana Claudia, contra as **105** PCs dela que dizem
+"Ana Claudia". Por isso a gravação usou o **acervo** como fonte — o nome que o próprio
+`analista_id` já tem nas outras PCs dele.
+
+A causa: **três chaves do `MAPA_NOME` eram o nome CURTO, não o `usuarios.nome`** — e por isso
+**nunca disparavam**. Não existe usuário chamado "Sandra Rocha", "Ana Claudia" nem
+"Ana Leticia": o `MAPA_NOME[n]` não casava e a função caía no `split(' ')[0]`.
+
+Eram **5 analistas** com rótulo errado, e **dois deles colapsavam no mesmo "Ana"**:
+
+| id | `usuarios.nome` | dava | o acervo tem |
+|---|---|---|---|
+| 19 | Sandra Cezária Ronchi Rocha | `Sandra` | **Sandra Rocha** (354) |
+| 22 | Ana Claudia Carvalho Costa | `Ana` | **Ana Claudia** (105) |
+| 23 | Ana Letícia Wloch de Oliveira | `Ana` | **Ana Leticia** (147) |
+| 40 | Maria Goreti Korb | `Maria` | **Goreti** (52) — chamada pelo SEGUNDO nome |
+| 51 | Janaína Frederico Dittrich | `Janaína` | **Janaina** (188) — o acervo é sem acento |
+
+⚠️ **Estava no ar**: `nomeCurto()` é chamado em `POST /tr/assumir` (server.js:2489 e 2501), na
+transferência do motivo 1 do pedido de devolução (3082 e 3095) e no `atribuir_soltas.js`.
+Qualquer uma das cinco assumindo uma TR ganhava um **segundo nome** no acervo.
+
+**Corrigido em 16/08:** o mapa passou a **10 chaves**, todas `usuarios.nome`. Conferido contra
+o banco: **0 divergências** entre `nomeCurto()` e o nome dominante dos 45 ids, e as 10 chaves
+casam com um id real. `teste_assumir.js` foi de 47 para **56** checagens, com uma que percorre
+o mapa inteiro e recusa chave que seja apelido.
+
+⚠️ **Ao acrescentar alguém ao mapa, copie o `usuarios.nome` exatamente, ACENTO INCLUSIVE** —
+a comparação é literal, e uma entrada que não dispara **não dá erro**: só devolve outro nome.
+
+### 2-B. ⚠️ Os vizinhos: 10 PCs em que o nome CONTRADIZ o id — **NÃO corrigidas**
+
+| id | cadastro | nomes gravados |
+|---|---|---|
+| 41 | Graciane Mondardo Constantino | Graciane (40) · **Juliana (1)** |
+| 45 | Juliana de Souza | Juliana (163) · **Marlene (2)** · **Tanimeri (1)** |
+| 47 | Rafael | Rafael (135) · **Samoel (4)** · **Guilherme (1)** |
+| 48 | Samoel | Samoel (41) · **Elisandra (1)** |
+
+A `2022TR001687` já registrada é uma destas. ⚠️ **A `2023TR000039` está nas duas listas**: a
+parcial diz "Juliana" com `analista_id = 41`, e a PFINAL que acabou de ser preenchida diz
+"Graciane". A TR mostra os dois nomes — não é regressão, é a contradição ficando visível.
+**A produtividade conta pelo `analista_id`**, então o número está certo nos dois casos.
 
 ### 3. ⚠️ Os ajustes da tela **Estoque de TRs**
 

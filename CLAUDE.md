@@ -20,11 +20,19 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 > e pela tela. Antes eram duas, e 87 PCs caíam no vão.
 > ⚠️ **`recarga_exec.js` está DESARMADO** — zera 14.652 linhas, e o sistema está aberto.
 >
-> **📌 Quatro pendências registradas, sem executar** (detalhe no `SESSAO.md`):
-> **18 PCs em 5 TRs com `analista_id` sem `analista_nome`** (todas baixadas — a produtividade
-> conta certo, a tela é que mostra vazio) · **os ajustes da tela Estoque**, incluindo a tabela
-> `estoque` morta (4.476 linhas, parada em 18/07, sem consumidor) · e as listas
-> `CI_PENDENTE_POR_ANALISTA/` (42 arquivos, 1.487 PCs) já geradas e não versionadas.
+> **✅ As 18 PCs com `analista_id` sem `analista_nome` FORAM GRAVADAS** (16/08, doze escritas
+> no dia). Backup `_backup_nomevazio_20260816`; "PC com id e sem nome" = **0**.
+> ⚠️ **E elas revelaram o `MAPA_NOME` com TRÊS CHAVES MORTAS** — `Sandra Rocha`, `Ana Claudia`
+> e `Ana Leticia` eram o nome CURTO e nunca disparavam. Eram 5 analistas com rótulo errado, e
+> **os ids 22 e 23 viravam os dois "Ana"**. Mapa agora com **10 chaves**, 0 divergências
+> contra o banco. Ver a armadilha 1.
+>
+> **📌 O que continua registrado e sem executar** (detalhe no `SESSAO.md`):
+> **os ajustes da tela Estoque**, incluindo a tabela `estoque` morta (4.476 linhas, parada em
+> 18/07 — **0 FKs, 0 views, 0 triggers, 0 funções** dependem dela; o único consumidor vivo é o
+> `COUNT(*)` do `GET /contadores`) · as listas `CI_PENDENTE_POR_ANALISTA/` (42 arquivos,
+> 1.487 PCs) já geradas e não versionadas · e **10 PCs em que o `analista_nome` CONTRADIZ o
+> `analista_id`** (ids 41, 45, 47, 48).
 > As **PCs soltas em TR com dono já foram corrigidas** — 78 em 5 TRs; não repetir.
 >
 > **O sistema está ABERTO.** Os dois interruptores estão **desligados** e a equipe trabalha.
@@ -348,6 +356,21 @@ job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
 1. **Nome curto vs completo** — `prestacoes_contas.analista_nome` é curto ("Richard");
    `usuarios.nome` é completo ("Richard Motta Coelho").
    **Sempre filtrar por `analista_id`**, nunca por nome.
+
+   ⚠️ **A CHAVE DO `MAPA_NOME` É O `usuarios.nome`, SEMPRE (corrigido em 16/08/2026).**
+   Três das oito chaves eram o nome **curto** — `Sandra Rocha`, `Ana Claudia`, `Ana Leticia` —
+   e por isso **nunca disparavam**: ninguém se chama assim, o `MAPA_NOME[n]` não casava e a
+   função caía no `split(' ')[0]`. Eram **5 analistas** com o rótulo errado, e **os ids 22 e
+   23 viravam os dois "Ana"**. O mapa tem **10 chaves** agora, todas conferidas contra o banco.
+
+   ⚠️ **Uma entrada que não dispara NÃO DÁ ERRO** — ela só devolve outro nome, e o analista
+   passa a ter dois rótulos no próprio acervo. Ao acrescentar alguém, copie o `usuarios.nome`
+   **exatamente como está no cadastro, acento incluído**: a comparação é literal.
+
+   ⚠️ **E não é só "nome composto".** A Goreti (id 40) é chamada pelo **segundo** nome, e o
+   acervo da Janaína (id 51) está **sem acento** nas 188 PCs. O mapa é a lista de todo mundo
+   cujo rótulo não é o primeiro nome do cadastro. Há teste que percorre o mapa e recusa chave
+   que seja apelido.
 
 2. **`CREATE TABLE IF NOT EXISTS` não altera tabela existente.**
    Para colunas novas usar `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.

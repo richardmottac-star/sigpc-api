@@ -287,14 +287,18 @@ e o **ícone de pessoas antes do ponto verde** de "N usuários online".
 
 Tabela: **BAIXADAS e ANALISTA saíram** (9 colunas → 7), entidade com a maior largura e
 **quebrando em mais de uma linha**, cabeçalho centralizado, `nowrap` na TR e no SGPe MÃE.
-Larguras: TR 13% · SGPe 19% · **Entidade 36%** · PCs 6% · NLs 6% · Status 10% · Ações 10%.
+Larguras: TR 14% · SGPe 20% · **Entidade 32%** · PCs 7% · NLs 7% · Status 10% · Ações 10%.
 
 ⚠️ **O `table-layout:fixed` é o que faz o `nowrap` valer** — e mora na classe `.tbl-est`, não
 no seletor `table{}`, que é global e vale para o relatório CGE. Teste falha se vazar.
 
-⚠️ **A coluna STATUS ficou, e foi decisão do agente.** As larguras sugeridas pelo Richard
-somam 100% **sem ela**, mas ele mandou tirar só BAIXADAS e ANALISTA. Reverter é tirar um
-`<col>`, um `<th>`, uma `<td>` e pôr `colspan="6"`.
+⚠️ **A COLUNA STATUS FICOU — decisão do Richard.** E a conta das larguras não fechava: ele
+passou TR 14 · SGPe 20 · **Entidade 42** · PCs 7 · NLs 7 · Ações 10, que somam 100% para
+**seis** colunas, e com o Status são sete. **Os 10% saíram da ENTIDADE** (42 → 32), pela regra
+de desempate que ele mesmo escreveu: *"se faltar espaço, tira da ENTIDADE"*. As outras cinco
+estão intactas, e há teste que fixa cada uma.
+⚠️ **Isso não esconde nome nenhum:** com a quebra ligada a largura decide quantas **linhas** o
+nome ocupa, não se ele aparece.
 
 **17 suítes no `sigpc-gt` · 977 passaram · 0 falharam**, com a nova `teste_front_estoque.js`.
 **Não foi clicado por ninguém.** Detalhe no `SESSAO.md` do `sigpc-gt`.

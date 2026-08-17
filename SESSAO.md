@@ -1,6 +1,73 @@
-# SIGPC-API — ESTADO EM 16/08/2026
+# SIGPC-API — ESTADO EM 17/08/2026 (madrugada)
 
 Cole no início do chat novo. Este arquivo é o que basta para retomar.
+
+---
+
+## ✅ 17/08/2026, 00h–01h30 — O FECHAMENTO. Leia isto antes de tudo.
+
+> **NADA foi gravado no banco na madrugada de 17/08.** As **doze escritas** são de 16/08 e
+> estão no bloco seguinte. O que saiu aqui foi **tela, documentação e um script que espera
+> autorização**.
+
+**Quatro commits, os dois repositórios publicados, nada pendente na árvore de trabalho.**
+
+| repo | commit | o que é |
+|---|---|---|
+| `sigpc-gt` | `18a8e1e` `6130178` | as larguras finais do Estoque — a **entidade** cedeu os 10% do Status |
+| `sigpc-gt` | `72d2d13` | **regressão corrigida:** a etiqueta de reserva vazava por cima do SGPe MÃE |
+| `sigpc-gt` | `2f151f6` → `cbaf55c` | a **faixa de avisos** no Dashboard — primeiro errada (bloco parado), depois certa (rolando) |
+| `sigpc-api` | `ea3f7ee` | `atualizar_aviso_id6.js` — **dry-run, NÃO gravado** |
+
+### 🔴 O QUE ESPERA UMA ORDEM SUA — os dois itens
+
+**1. O `UPDATE` do aviso id 6.** `atualizar_aviso_id6.js`, dry-run passou nas **7
+conferências**. Troca **uma coluna de uma linha** (`texto`) e confere, na mesma transação, que
+`escopo`, `ativo`, `grupo`, `ordem` e o período não mudaram, e que nenhum outro aviso foi
+tocado. Saem **54 caracteres**: os primeiros 178 são idênticos, e a cauda
+*": há orientações sobre o que verificar e como proceder."* vira *"."*.
+
+```
+node atualizar_aviso_id6.js              dry-run — mostra o antes e o depois
+node atualizar_aviso_id6.js --gravar     grava
+```
+
+⚠️ **Vai por script e não por `psql` de propósito:** o texto tem travessão, acento e cedilha, e
+o `$1` do `pg` entrega a string byte a byte. Colar SQL com acento no terminal do Windows é como
+se perde um "ç" sem ninguém ver.
+
+⚠️ **E o aviso tem PERÍODO: início 17/08, fim 18/08.** Ele **sai do ar sozinho depois de
+amanhã** — o que provavelmente não é o esperado de um recado sobre a versão nova. Se for para
+ficar, é **outra coluna** e **outra autorização**; este script não encosta em `fim`.
+
+**2. O `isMeuTR` erra em 5 analistas, e o conserto certo é NESTE repositório.**
+A tela decide "esta TR é minha" **comparando NOME**, com uma segunda cópia do mapa de nomes
+curtos (`MAPA_PLAN_EST`, no `index.html`) — a **mesma tabela** que estava quebrada no
+`lib/assumir.js`, com **as mesmas três chaves mortas**. Para Sandra Rocha (19), Ana Claudia
+(22), Ana Letícia (23), Goreti (40) e Janaína (51) o botão **"Ver" não aparece** no Estoque.
+
+⚠️ **NÃO foi corrigido de propósito**, e o motivo é que copiar o mapa arrumado repetiria o
+defeito. O certo é a **armadilha 1**: comparar por `analista_id`. Mas
+`GET /prestacoes_contas/resumo_tr` **não devolve `analista_id`** — só `MAX(analista_nome)`.
+
+| saída | o que custa |
+|---|---|
+| **certa** — `MAX(analista_id)` no `resumo_tr` + `isMeuTR` por id | mexe na rota; **mata o `MAPA_PLAN_EST` inteiro** |
+| paliativa — arrumar as 3 chaves no `index.html` | resolve hoje e deixa a segunda cópia viva, para divergir de novo |
+
+**É decisão sua**, porque é frente nova no servidor e não o defeito que você relatou.
+
+### Os testes, medidos agora — não copiados de ontem
+
+| repo | suítes | checagens | falhas |
+|---|---|---|---|
+| `sigpc-api` | **19** | **949** | **0** |
+| `sigpc-gt` | **18** | **1.033** | **0** |
+
+⚠️ **Existe uma 20ª suíte no `sigpc-api` que NÃO está no `npm run teste`:
+`teste_rotas_parcela.js`.** Ela é de **integração** — sobe contra servidor e banco de verdade,
+e sozinha devolve `fetch failed`. **Isso não é regressão**, é o que ela é; não a inclua na
+cadeia achando que está faltando.
 
 ---
 

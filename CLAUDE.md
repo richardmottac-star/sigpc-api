@@ -4,7 +4,33 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 16/08/2026 — ver `SESSAO.md`. **DOZE escritas em produção nesse dia.**
+**Última sessão:** 17/08/2026 (madrugada) — ver `SESSAO.md`. **DOZE escritas em produção em
+16/08; NENHUMA em 17/08.**
+
+> ## ▶ 17/08/2026 — NADA GRAVADO NO BANCO. Duas coisas esperam ordem sua.
+>
+> A madrugada foi **tela e documentação**: as larguras finais do Estoque, a **regressão da
+> etiqueta de reserva** (vazava por cima do SGPe MÃE) e a **faixa de avisos no Dashboard**.
+> Tudo publicado nos dois repositórios; **árvore limpa**.
+>
+> **1. `atualizar_aviso_id6.js` — o `UPDATE` do aviso id 6 está PRONTO e NÃO foi rodado.**
+> Uma coluna (`texto`) de uma linha, 7 conferências na mesma transação, `ROLLBACK` se
+> qualquer uma falhar. Padrão dry-run; grava só com `--gravar`.
+> ⚠️ **O aviso tem período 17/08 → 18/08 e sai do ar sozinho.** Se for para ficar, é outra
+> coluna e **outra autorização**.
+>
+> **2. O `isMeuTR` da tela Estoque erra em 5 analistas** (Sandra Rocha 19, Ana Claudia 22,
+> Ana Letícia 23, Goreti 40, Janaína 51) — o botão "Ver" some nas TRs delas. É a **segunda
+> cópia** do mapa de nomes curtos (`MAPA_PLAN_EST`, no `index.html`), com as **mesmas três
+> chaves mortas** que o `lib/assumir.js` tinha. **Não corrigido de propósito:** o conserto
+> certo é comparar por `analista_id`, e o `GET /prestacoes_contas/resumo_tr` **não devolve
+> `analista_id`**. Acrescentar `MAX(analista_id)` mata o mapa da tela inteiro — **é decisão
+> sua**, e é rota deste repositório.
+>
+> **Testes medidos em 17/08:** `sigpc-api` **19 suítes · 949 checagens · 0 falhas** ·
+> `sigpc-gt` **18 · 1.033 · 0**.
+> ⚠️ `teste_rotas_parcela.js` **não está no `npm run teste`** — é de integração, exige servidor
+> e banco de verdade, e sozinha devolve `fetch failed`. **Não é regressão.**
 
 > ## ✅ 16/08/2026 — DOZE ESCRITAS EM PRODUÇÃO. Ver `SESSAO.md`.
 >
@@ -347,7 +373,12 @@ renumerar_parcial_num.js         a renumeração das parciais
 corrigir_processo_pc.js          correção em lote (aceita --mae)
 resolver_processos_restantes.js  os casos que a regra recusou
 job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
+atualizar_aviso_id6.js           troca o texto do aviso id 6 — ESCRITO EM 17/08, NAO RODADO
 ```
+
+⚠️ **`atualizar_aviso_id6.js` vai por script e não por `psql` de propósito:** o texto tem
+travessão, acento e cedilha, e o parâmetro `$1` do `pg` entrega a string byte a byte. Colar
+SQL com acento no terminal do Windows é como se perde um "ç" sem ninguém ver.
 
 ---
 
@@ -772,6 +803,15 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
 
 ### ▶ A PRÓXIMA SESSÃO — ver `SESSAO.md`, que tem o detalhe
 
+- [ ] **O `UPDATE` do aviso id 6 — `atualizar_aviso_id6.js`, escrito em 17/08 e NÃO rodado.**
+      Dry-run passou nas 7 conferências. **Espera sua ordem.** ⚠️ O aviso tem período
+      17/08 → 18/08: ele sai do ar sozinho, e mudar isso é outra coluna e outra autorização.
+- [ ] **O `isMeuTR` erra em 5 analistas — e a decisão é de ROTA, não de tela.** O botão "Ver"
+      some no Estoque para os ids 19, 22, 23, 40 e 51. Corrigir certo é acrescentar
+      `MAX(analista_id)` ao `GET /prestacoes_contas/resumo_tr` e comparar por id — isso
+      **elimina o `MAPA_PLAN_EST` do `index.html`**, que é a segunda cópia do mapa de nomes.
+      ⚠️ **Não copiar o mapa já arrumado do `lib/assumir.js` para a tela:** resolve hoje e
+      recria a divergência amanhã.
 - [ ] **⚠️ AUDITORIA: planilhas dos analistas × base do sistema. SÓ LEITURA PRIMEIRO.**
       Vários analistas relatam divergência de **número de PCs** e de **VALORES**. Ainda não
       medido.

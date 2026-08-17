@@ -3616,6 +3616,119 @@ app.post('/parcela/ci', async (req, res) => {
   }
 });
 
+// POST /parcela/ci_lote — body { tr, parciais: ['1','2','5'], analista_id, setorial_id? }
+//
+// Encaminha VÁRIAS parcelas da MESMA TR ao Controle Interno, numa transação só.
+//
+// ⚠️ POR QUE ELA EXISTE. `enviarAoCI` manda uma parcela por vez, com um modal cada. Medido em
+// 16/08/2026: **764 parcelas** baixadas com parecer e fora do C.I., em 41 analistas — a Geisa
+// clicaria 63 vezes, a Perla 77.
+//
+// ⚠️ E POR QUE É ROTA, E NÃO UM LAÇO NA TELA. É a armadilha 16 do `sigpc-gt`: *"a tela não
+// conta, não decide e não itera"*. Três lugares caíram nisso em 12–13/08 — a devolução, o
+// assumir e o modal do limite —, e todos viraram rota transacional. 63 `POST` em série com a
+// rede caindo no meio deixam metade feita.
+//
+// ⚠️ TUDO OU NADA (decisão do Richard, 16/08/2026). Uma parcela recusada aborta o lote, com a
+// lista do porquê. O motivo está na tela: ela só oferece as do **passo 2**, então uma recusa
+// significa que o estado mudou embaixo da pessoa — outro analista mexeu, ou a tela está
+// velha. Parar e recarregar é mais honesto que encaminhar seis de sete e explicar depois.
+//
+// ⚠️ UMA LINHA DE HISTÓRICO POR PARCELA. `parcela_historico` é chaveado por
+// `(tr, parcial_num)`: uma linha só para as sete não apareceria em seis delas.
+app.post('/parcela/ci_lote', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+  if (!b.tr) return res.status(400).json({ data: null, error: { message: 'tr é obrigatório' } });
+
+  // ⚠️ LISTA EXPLÍCITA DE CHAVES (regra 12) — nunca "todas as do passo 2 desta TR" calculado
+  // aqui. O que o servidor grava tem de ser o que a pessoa viu e confirmou na tela.
+  const parciais = [...new Set((Array.isArray(b.parciais) ? b.parciais : [])
+    .map(p => String(p ?? '').trim()).filter(Boolean))];
+  if (!parciais.length)
+    return res.status(400).json({ data: null, error: { message: 'parciais é obrigatório e não pode ser vazio' } });
+  if (parciais.length > 200)
+    return res.status(400).json({ data: null, error: { message: 'lote grande demais (máximo 200 parciais)' } });
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    await cli.query(`SET LOCAL lock_timeout = '15s'`);
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
+
+    // ── 1. carrega e confere TODAS antes de escrever QUALQUER uma ─────────────
+    const recusadas = [], aceitas = [];
+    for (const num of parciais) {
+      const pcs = await carregarParcela(cli, b.tr, num, setorial_id);
+      if (pcs.length === 0)            { recusadas.push({ parcial: num, motivo: 'Parcial não encontrada' }); continue; }
+      if (!pcs.some(p => p.parecer_tipo)) { recusadas.push({ parcial: num, motivo: 'CI exige parecer prévio' }); continue; }
+      const baixadas = pcs.filter(p => p.baixada === true);
+      // ⚠️ `enviado_ci` SUSTENTA A BAIXA, e o C.I. vem DEPOIS do parecer: só entra baixada.
+      // É a mesma regra do `AND baixada = true` que a rota individual ganhou hoje.
+      if (baixadas.length === 0)       { recusadas.push({ parcial: num, motivo: 'Parcial não está baixada' }); continue; }
+      if (baixadas.every(p => p.enviado_ci === true))
+                                       { recusadas.push({ parcial: num, motivo: 'Já encaminhada ao Controle Interno' }); continue; }
+      aceitas.push({ num, pcs, parecer: pcs.find(p => p.parecer_tipo)?.parecer_tipo || null });
+    }
+
+    if (recusadas.length) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({
+        data: { recusadas, aceitas: aceitas.map(a => a.num) },
+        error: {
+          message: `${recusadas.length} de ${parciais.length} parcelas não podem ser encaminhadas. ` +
+                   `Nada foi gravado — recarregue a TR e tente de novo.`,
+          recusadas
+        }
+      });
+    }
+
+    // ── 2. a escrita, por lista explícita de parciais ─────────────────────────
+    const nums = aceitas.map(a => a.num);
+    const { rows } = await cli.query(
+      `UPDATE prestacoes_contas
+          SET enviado_ci = true,
+              dt_envio_ci = NOW(),
+              ci_situacao = 'na_fila',
+              ci_rodada = GREATEST(ci_rodada, 1),
+              atualizado_em = NOW()
+        WHERE setorial_id = $1 AND tr = $2 AND parcial_num = ANY($3)
+          AND baixada = true AND enviado_ci = false
+        RETURNING codigo_pc, parcial_num`,
+      [setorial_id, b.tr, nums]);
+
+    // ── 3. uma linha de histórico POR PARCELA ─────────────────────────────────
+    for (const a of aceitas) {
+      const n = rows.filter(r => r.parcial_num === a.num).length;
+      await registrarHistorico(cli, {
+        tr: b.tr, parcial_num: a.num, setorial_id,
+        evento: 'ci',
+        valor_anterior: a.parecer,
+        valor_novo: 'enviado_ci = true',
+        analista_id: b.analista_id ?? null,
+        observacao: autoria.observacaoCom(
+          `em lote com outras ${nums.length - 1} parcela${nums.length - 1 === 1 ? '' : 's'} desta TR · ${n} PC${n > 1 ? 's' : ''}`,
+          b._autoria, b._autoria?.executor_nome),
+        executado_por: b._autoria?.executado_por ?? null
+      });
+    }
+
+    await cli.query('COMMIT');
+    res.json({
+      data: { tr: b.tr, encaminhadas: nums, pcs: rows.length,
+              codigos_pc: rows.map(r => r.codigo_pc), recusadas: [] },
+      count: nums.length,
+      error: null
+    });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
+  }
+});
+
 // POST /parcela/estornar — body { tr, parcial_num, motivo, usuario_id, usuario_nome, perfil, setorial_id? }
 // So coordenador/superadmin. Desfaz a parcial inteira.
 app.post('/parcela/estornar', async (req, res) => {

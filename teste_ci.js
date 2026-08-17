@@ -205,6 +205,68 @@ console.log('\n═══ 9. TRAVAS NO server.js ═══');
        'a migracao do CI roda no boot');
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// POST /parcela/ci_lote — encaminhar VARIAS parcelas numa transacao so (16/08/2026)
+//
+// Existe porque sao 764 parcelas baixadas com parecer e fora do CI, em 41 analistas:
+// a Geisa clicaria 63 vezes. E e ROTA, nao laco na tela — armadilha 16 do sigpc-gt.
+// ══════════════════════════════════════════════════════════════════════════════
+{
+  // `src` da secao 9 e local dela — leio de novo, que e barato e nao acopla os blocos.
+  const srv = fs.readFileSync('./server.js', 'utf8');
+  const ini = srv.indexOf("app.post('/parcela/ci_lote'");
+  const fim = srv.indexOf("app.post('/parcela/estornar'");
+  conf(ini > 0 && fim > ini, 'a rota /parcela/ci_lote existe');
+  const rota = srv.slice(ini, fim);
+  // sem os comentarios: teste de posicao/ausencia que le prosa mede a prosa, nao o programa
+  const cod = rota.split('\n').filter(l => !/^\s*(\/\/|--|\*)/.test(l.trim() ? l : '//')).join('\n');
+
+  conf(/await cli\.query\('BEGIN'\)/.test(rota) && (rota.match(/COMMIT/g) || []).length === 1,
+       'UMA transacao: um BEGIN e um COMMIT so');
+  conf(/parcial_num = ANY\(\$3\)/.test(rota),
+       'escreve por LISTA EXPLICITA de parciais (regra 12), nao por condicao derivada');
+  conf(/carregarParcela\(cli, b\.tr, num, setorial_id\)/.test(rota),
+       'usa a MESMA carregarParcela das outras cinco rotas — com FOR UPDATE');
+  conf(/resolverAutoria/.test(rota), 'resolve o dono e o executor contra o perfil do BANCO');
+  conf(/barrouPreparacao/.test(rota), 'respeita o modo preparacao');
+
+  // ── as travas, uma por uma ──
+  conf(/CI exige parecer previo|CI exige parecer prévio/.test(rota), 'recusa parcela sem parecer');
+  conf(/Parcial não está baixada|nao esta baixada/.test(rota), 'recusa parcela nao baixada');
+  conf(/Já encaminhada|Ja encaminhada/.test(rota), 'recusa parcela ja encaminhada');
+  conf(/AND baixada = true/.test(rota),
+       'e o UPDATE so pega baixada = true — enviado_ci sustenta a baixa');
+
+  // ⚠️ TUDO OU NADA: uma recusada aborta o lote. A tela so oferece as do passo 2, entao uma
+  // recusa quer dizer que o estado mudou embaixo da pessoa.
+  conf(/if \(recusadas\.length\)[\s\S]{0,200}ROLLBACK[\s\S]{0,200}409/.test(rota),
+       'TUDO OU NADA: qualquer recusa faz ROLLBACK e devolve 409 com a lista');
+  conf(rota.indexOf('recusadas.push') < rota.indexOf('UPDATE prestacoes_contas'),
+       'e confere TODAS antes de escrever qualquer uma');
+
+  // ⚠️ UMA LINHA DE HISTORICO POR PARCELA: parcela_historico e chaveado por (tr, parcial_num),
+  // e uma linha so para as sete nao apareceria em seis delas.
+  conf(/for \(const a of aceitas\)[\s\S]{0,400}registrarHistorico/.test(rota),
+       'grava UMA linha de historico por parcela, num laco sobre as aceitas');
+
+  // ⚠️ A BAIXA NUNCA E TOCADA — a mesma trava que as outras rotas do ciclo tem.
+  // ⚠️ SO O `SET`, NUNCA ATE O `RETURNING`. A primeira versao deste teste pegava o UPDATE
+  // inteiro e reprovava o codigo CERTO: o `AND baixada = true` do WHERE — que e' exatamente
+  // a trava que se quer — casava com o padrao de "mexe em baixada". Ler o WHERE aqui e' o
+  // mesmo erro de medir a prosa do comentario.
+  const sets = (rota.match(/UPDATE prestacoes_contas[\s\S]*?SET([\s\S]*?)WHERE/g) || [])
+    .map(u => u.slice(u.indexOf('SET'))).join(' ');
+  conf(sets.length > 0, 'o UPDATE tem um SET legivel');
+  conf(!/\bbaixada\s*=/.test(sets) && !/\bdata_baixa\s*=/.test(sets)
+       && !/\bparecer_tipo\s*=/.test(sets) && !/\bvalor\s*=/.test(sets),
+       'o SET NAO mexe em baixada, data_baixa, parecer_tipo nem valor');
+  conf(/\bbaixada = true\b/.test(rota.slice(rota.indexOf('UPDATE prestacoes_contas'))),
+       'e o WHERE do UPDATE exige baixada = true');
+
+  conf(/lock_timeout/.test(rota), 'e tem lock_timeout — o lote segura linhas de varias parcelas');
+  conf(/parciais\.length > 200/.test(rota), 'e recusa lote grande demais');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);
 process.exit(falhou ? 1 : 0);
 })();

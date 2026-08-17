@@ -4,20 +4,23 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 17/08/2026 (madrugada) — ver `SESSAO.md`. **DOZE escritas em produção em
-16/08; NENHUMA em 17/08.**
+**Última sessão:** 17/08/2026 — ver `SESSAO.md`. **DOZE escritas em produção em 16/08; UMA em
+17/08 — o aviso id 6.**
 
-> ## ▶ 17/08/2026 — NADA GRAVADO NO BANCO. Duas coisas esperam ordem sua.
+> ## ▶ 17/08/2026 — UMA escrita. E uma coisa ainda espera ordem sua.
 >
 > A madrugada foi **tela e documentação**: as larguras finais do Estoque, a **regressão da
 > etiqueta de reserva** (vazava por cima do SGPe MÃE) e a **faixa de avisos no Dashboard**.
 > Tudo publicado nos dois repositórios; **árvore limpa**.
 >
-> **1. `atualizar_aviso_id6.js` — o `UPDATE` do aviso id 6 está PRONTO e NÃO foi rodado.**
-> Uma coluna (`texto`) de uma linha, 7 conferências na mesma transação, `ROLLBACK` se
-> qualquer uma falhar. Padrão dry-run; grava só com `--gravar`.
-> ⚠️ **O aviso tem período 17/08 → 18/08 e sai do ar sozinho.** Se for para ficar, é outra
-> coluna e **outra autorização**.
+> **1. ✅ O AVISO id 6 FOI GRAVADO** (17/08, 09h54, `atualizar_aviso_id6.js --gravar`): o texto
+> curto (233 → **179** caracteres) e o `fim` de `2026-08-18` para **`2026-08-31`**, numa
+> **única transação**, com as **9 conferências** passando depois da escrita. `inicio`, `escopo`,
+> `ativo`, `grupo` e `ordem` **intactos**. Reversão em `reverter_aviso_id6_20260817.json`.
+> ⚠️ **O `fim` é INCLUSIVO** (`lib/faixa.js` filtra `fim >= HOJE_BR`): passa o dia 31 inteiro e
+> some em 01/09.
+> ⚠️ **A conferência "nenhum outro aviso foi tocado" deixou de ser uma CONTAGEM** e virou
+> `md5(string_agg(...))` das outras linhas — **contar linhas não prova que elas não mudaram**.
 >
 > **2. O `isMeuTR` da tela Estoque erra em 5 analistas** (Sandra Rocha 19, Ana Claudia 22,
 > Ana Letícia 23, Goreti 40, Janaína 51) — o botão "Ver" some nas TRs delas. É a **segunda
@@ -373,12 +376,16 @@ renumerar_parcial_num.js         a renumeração das parciais
 corrigir_processo_pc.js          correção em lote (aceita --mae)
 resolver_processos_restantes.js  os casos que a regra recusou
 job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
-atualizar_aviso_id6.js           troca o texto do aviso id 6 — ESCRITO EM 17/08, NAO RODADO
+atualizar_aviso_id6.js           o texto e o fim do aviso id 6 — JA RODADO em 17/08
 ```
 
 ⚠️ **`atualizar_aviso_id6.js` vai por script e não por `psql` de propósito:** o texto tem
 travessão, acento e cedilha, e o parâmetro `$1` do `pg` entrega a string byte a byte. Colar
 SQL com acento no terminal do Windows é como se perde um "ç" sem ninguém ver.
+
+⚠️ **Ele já rodou com `--gravar`, e é IDEMPOTENTE:** se o texto e o `fim` já forem os novos,
+ele dá `ROLLBACK` e diz "nada a fazer". Rodar de novo não estraga — mas também não serve de
+modelo cego: **o `FIM_NOVO` é uma constante `2026-08-31` escrita no arquivo.**
 
 ---
 
@@ -803,9 +810,8 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
 
 ### ▶ A PRÓXIMA SESSÃO — ver `SESSAO.md`, que tem o detalhe
 
-- [ ] **O `UPDATE` do aviso id 6 — `atualizar_aviso_id6.js`, escrito em 17/08 e NÃO rodado.**
-      Dry-run passou nas 7 conferências. **Espera sua ordem.** ⚠️ O aviso tem período
-      17/08 → 18/08: ele sai do ar sozinho, e mudar isso é outra coluna e outra autorização.
+- [x] ~~**O `UPDATE` do aviso id 6**~~ — **GRAVADO em 17/08/2026, 09h54.** Texto curto e `fim`
+      estendido para **31/08**, na mesma transação, 9 conferências. Não reabrir.
 - [ ] **O `isMeuTR` erra em 5 analistas — e a decisão é de ROTA, não de tela.** O botão "Ver"
       some no Estoque para os ids 19, 22, 23, 40 e 51. Corrigir certo é acrescentar
       `MAX(analista_id)` ao `GET /prestacoes_contas/resumo_tr` e comparar por id — isso

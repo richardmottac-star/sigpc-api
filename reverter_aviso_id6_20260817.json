@@ -1,0 +1,19 @@
+{
+ "quando": "2026-08-17T12:54:08.204Z",
+ "tabela": "faixa_aviso",
+ "antes": [
+  {
+   "id": 6,
+   "texto": "SISTEMA AJUSTADO E ATUALIZADO EM 16/08/2026 — Numeração das parciais corrigida e Controle Interno regularizado. Dê Ctrl+F5 para carregar a versão nova. Leia o recado no seu grupo: há orientações sobre o que verificar e como proceder.",
+   "fim": "2026-08-18",
+   "inicio": "2026-08-17"
+  }
+ ],
+ "depois": [
+  {
+   "id": 6,
+   "texto": "SISTEMA AJUSTADO E ATUALIZADO EM 16/08/2026 — Numeração das parciais corrigida e Controle Interno regularizado. Dê Ctrl+F5 para carregar a versão nova. Leia o recado no seu grupo.",
+   "fim": "2026-08-31"
+  }
+ ]
+}

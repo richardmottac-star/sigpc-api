@@ -4,43 +4,64 @@ Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
 ---
 
-## ✅ 17/08/2026, 00h–01h30 — O FECHAMENTO. Leia isto antes de tudo.
+## ✅ 17/08/2026 — O FECHAMENTO. Leia isto antes de tudo.
 
-> **NADA foi gravado no banco na madrugada de 17/08.** As **doze escritas** são de 16/08 e
-> estão no bloco seguinte. O que saiu aqui foi **tela, documentação e um script que espera
-> autorização**.
+> **UMA escrita no banco em 17/08: o aviso id 6, às 09h54.** Uma linha, duas colunas.
+> A **madrugada** (00h–01h30) foi só tela e documentação. As **doze escritas** grandes são de
+> 16/08 e estão no bloco seguinte.
 
-**Quatro commits, os dois repositórios publicados, nada pendente na árvore de trabalho.**
+**Cinco commits, os dois repositórios publicados, nada pendente na árvore de trabalho.**
 
 | repo | commit | o que é |
 |---|---|---|
 | `sigpc-gt` | `18a8e1e` `6130178` | as larguras finais do Estoque — a **entidade** cedeu os 10% do Status |
 | `sigpc-gt` | `72d2d13` | **regressão corrigida:** a etiqueta de reserva vazava por cima do SGPe MÃE |
 | `sigpc-gt` | `2f151f6` → `cbaf55c` | a **faixa de avisos** no Dashboard — primeiro errada (bloco parado), depois certa (rolando) |
-| `sigpc-api` | `ea3f7ee` | `atualizar_aviso_id6.js` — **dry-run, NÃO gravado** |
+| `sigpc-api` | `ea3f7ee` | `atualizar_aviso_id6.js` nasce — dry-run |
+| `sigpc-api` | **09h54** | **o aviso id 6 GRAVADO** — texto curto e `fim` em 31/08 |
 
-### 🔴 O QUE ESPERA UMA ORDEM SUA — os dois itens
+### ✅ 1. O AVISO id 6 — **GRAVADO EM 17/08/2026, às 09h54**
 
-**1. O `UPDATE` do aviso id 6.** `atualizar_aviso_id6.js`, dry-run passou nas **7
-conferências**. Troca **uma coluna de uma linha** (`texto`) e confere, na mesma transação, que
-`escopo`, `ativo`, `grupo`, `ordem` e o período não mudaram, e que nenhum outro aviso foi
-tocado. Saem **54 caracteres**: os primeiros 178 são idênticos, e a cauda
-*": há orientações sobre o que verificar e como proceder."* vira *"."*.
+**Ordem do Richard: trocar o texto E estender o fim para 31/08.** As duas coisas foram numa
+**única transação**, com as **9 conferências** passando depois da escrita.
 
-```
-node atualizar_aviso_id6.js              dry-run — mostra o antes e o depois
-node atualizar_aviso_id6.js --gravar     grava
-```
+| coluna | antes | depois |
+|---|---|---|
+| `texto` | 233 caracteres | **179** — saíram 54 |
+| `fim` | `2026-08-18` | **`2026-08-31`** |
+
+Os primeiros **178 caracteres são idênticos**: saiu a cauda *": há orientações sobre o que
+verificar e como proceder."* e entrou *"."*.
+
+**Não mudaram:** `inicio` (17/08), `escopo` (`urgente`), `ativo`, `grupo` (todos), `ordem`.
+**Conferido depois do COMMIT, em conexão nova:** `lib/faixa.ativas()` devolve o id 6, e o
+aviso id 5 (inativo) continua intacto.
+
+**Reversão:** `reverter_aviso_id6_20260817.json`, com o texto e o `fim` antigos.
+
+⚠️ **ESTE SCRIPT MUDOU DE ESCOPO.** Até 17/08 ele trocava **uma** coluna e o cabeçalho dizia,
+com todas as letras, que não encostava em `fim`. Agora são **duas**, e é de propósito: duas
+escritas separadas na mesma linha deixariam uma janela com o texto novo e o prazo velho.
 
 ⚠️ **Vai por script e não por `psql` de propósito:** o texto tem travessão, acento e cedilha, e
 o `$1` do `pg` entrega a string byte a byte. Colar SQL com acento no terminal do Windows é como
 se perde um "ç" sem ninguém ver.
 
-⚠️ **E o aviso tem PERÍODO: início 17/08, fim 18/08.** Ele **sai do ar sozinho depois de
-amanhã** — o que provavelmente não é o esperado de um recado sobre a versão nova. Se for para
-ficar, é **outra coluna** e **outra autorização**; este script não encosta em `fim`.
+⚠️ **`fim` é `DATE`, e o `pg` devolve `DATE` como objeto `Date`** — armadilha 25. Por isso toda
+leitura de data no script sai do banco **já como texto ISO** (`to_char`), e nenhuma comparação
+passa por `String(new Date(...))`, que daria `"Sun Aug 31 2026 ..."`.
 
-**2. O `isMeuTR` erra em 5 analistas, e o conserto certo é NESTE repositório.**
+⚠️ **O `fim` é INCLUSIVO** — `lib/faixa.js` filtra `fim >= HOJE_BR`. O aviso passa o dia **31
+inteiro** e some em **01/09**.
+
+⚠️ **A conferência "nenhum outro aviso foi tocado" deixou de ser uma CONTAGEM.** Ela era
+`COUNT(*) = 1`, e a contagem continuaria 1 se um `UPDATE` largo tivesse reescrito o texto do
+vizinho. Agora é `md5(string_agg(...))` de todas as outras linhas, antes e depois. **Contar
+linhas não prova que elas não mudaram.**
+
+### 🔴 2. O QUE AINDA ESPERA UMA ORDEM SUA — o `isMeuTR`
+
+**O conserto certo é NESTE repositório.**
 A tela decide "esta TR é minha" **comparando NOME**, com uma segunda cópia do mapa de nomes
 curtos (`MAPA_PLAN_EST`, no `index.html`) — a **mesma tabela** que estava quebrada no
 `lib/assumir.js`, com **as mesmas três chaves mortas**. Para Sandra Rocha (19), Ana Claudia

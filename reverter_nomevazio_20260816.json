@@ -1,0 +1,171 @@
+{
+ "quando": "2026-08-17T02:45:02.618Z",
+ "backup": "_backup_nomevazio_20260816",
+ "fonte": "acervo",
+ "antes": [
+  {
+   "codigo_pc": "2021PC000363",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2021PC000717",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2021PC001401",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC000344",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC000463",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC000962",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC001049",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC001385",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC001386",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC001387",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022PC003493",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2023PC000216",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2023PC000217",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2023PC001026",
+   "analista_id": 31,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2020TR001636-PFINAL",
+   "analista_id": 22,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2021TR002029-PFINAL",
+   "analista_id": 22,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2022TR001328-PFINAL",
+   "analista_id": 41,
+   "analista_nome": null
+  },
+  {
+   "codigo_pc": "2023TR000039-PFINAL",
+   "analista_id": 41,
+   "analista_nome": null
+  }
+ ],
+ "depois": [
+  {
+   "codigo_pc": "2021PC000363",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2021PC000717",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2021PC001401",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC000344",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC000463",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC000962",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC001049",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC001385",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC001386",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC001387",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2022PC003493",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2023PC000216",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2023PC000217",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2023PC001026",
+   "analista_nome": "Noici"
+  },
+  {
+   "codigo_pc": "2020TR001636-PFINAL",
+   "analista_nome": "Ana Claudia"
+  },
+  {
+   "codigo_pc": "2021TR002029-PFINAL",
+   "analista_nome": "Ana Claudia"
+  },
+  {
+   "codigo_pc": "2022TR001328-PFINAL",
+   "analista_nome": "Graciane"
+  },
+  {
+   "codigo_pc": "2023TR000039-PFINAL",
+   "analista_nome": "Graciane"
+  }
+ ]
+}

@@ -280,21 +280,76 @@ parcial diz "Juliana" com `analista_id = 41`, e a PFINAL que acabou de ser preen
 "Graciane". A TR mostra os dois nomes — não é regressão, é a contradição ficando visível.
 **A produtividade conta pelo `analista_id`**, então o número está certo nos dois casos.
 
-### 3. ⚠️ Os ajustes da tela **Estoque de TRs**
+### 3. ✅ Os ajustes da tela **Estoque de TRs** — **FEITOS em 16/08/2026**
 
-O que ficou de fora quando o vão foi fechado:
+Cabeçalho: faixa **54 → 62 px**, logo do Estado **40 → 48 px**, caixa branca **220 → 240 px**,
+e o **ícone de pessoas antes do ponto verde** de "N usuários online".
 
-- **A tabela `estoque` existe e ninguém usa.** 4.476 linhas, 1.030 TRs, última atualização
-  **18/07** (a data da carga). A tela lê `GET /prestacoes_contas/resumo_tr`, não ela. A rota
-  `GET /estoque` continua no servidor **sem consumidor**. Mesmo caso do `planilha_analista`,
-  já marcado como descontinuado. **Candidata a exclusão — confirmar antes.**
-- **O `desfazer_assuncoes.js`** mexe em `estoque` e `planilha_analista`, **nunca em
-  `prestacoes_contas`**. Se rodar hoje, não faz nada de útil e mexe em tabela morta.
+Tabela: **BAIXADAS e ANALISTA saíram** (9 colunas → 7), entidade com a maior largura e
+**quebrando em mais de uma linha**, cabeçalho centralizado, `nowrap` na TR e no SGPe MÃE.
+Larguras: TR 13% · SGPe 19% · **Entidade 36%** · PCs 6% · NLs 6% · Status 10% · Ações 10%.
+
+⚠️ **O `table-layout:fixed` é o que faz o `nowrap` valer** — e mora na classe `.tbl-est`, não
+no seletor `table{}`, que é global e vale para o relatório CGE. Teste falha se vazar.
+
+⚠️ **A coluna STATUS ficou, e foi decisão do agente.** As larguras sugeridas pelo Richard
+somam 100% **sem ela**, mas ele mandou tirar só BAIXADAS e ANALISTA. Reverter é tirar um
+`<col>`, um `<th>`, uma `<td>` e pôr `colspan="6"`.
+
+**17 suítes no `sigpc-gt` · 977 passaram · 0 falharam**, com a nova `teste_front_estoque.js`.
+**Não foi clicado por ninguém.** Detalhe no `SESSAO.md` do `sigpc-gt`.
+
+### 3-B. ⚠️ A tabela `estoque` — MEDIDA em 16/08, e nada depende dela
+
+| no banco | |
+|---|---|
+| FOREIGN KEYs apontando para ela | **0** |
+| VIEWs · TRIGGERs · FUNÇÕES | **0 · 0 · 0** |
+| linhas · TRs · disco | 4.476 · 1.030 · 1.176 kB |
+| `atualizado_em` | de **14/06** a **18/07/2026** — parada há um mês |
+| cobertura | **incompleta**: 536 TRs existem na `prestacoes_contas` e não nela |
+
+Na API são **6 rotas**, e o **único consumidor vivo é o `COUNT(*)` do `GET /contadores`**
+(`server.js:1036`). O `index.html` **não chama `/estoque` em lugar nenhum** — a tela lê
+`GET /prestacoes_contas/resumo_tr`.
+
+⚠️ **`GET /estoque/grupos-analistas` NUNCA RODA — é a armadilha 13, viva.** Está declarada na
+linha **838**, depois de `/estoque/:id` na **738**. O Express casa na ordem: o pedido cai na
+rota de cima com `id = "grupos-analistas"`, e como `estoque.id` é `integer`, o Postgres recusa
+e a rota devolve **HTTP 500**. E mesmo que rodasse devolveria lixo: os 45 pares
+`(tecnico_nome, grupo)` têm `grupo = NULL` nos **45**.
+
+⚠️ **`PATCH /estoque/:id` é um `UPDATE` aberto, sem credencial e sem lista de colunas.**
+O **nome da coluna vem do corpo do pedido** e é concatenado no SQL:
+`for (const [k,v] of Object.entries(b)) sets.push(\`${k} = $${i++}\`)`. Não há conferência de
+perfil nem `usuario_id`. Some junto se a tabela sair.
+
+⚠️ **7 chaves só existem na `estoque`, e não são dado — são lixo da carga:** `NULL`,
+`2020TR000`, **`ANA CLAUDIA`** (o nome de uma analista no campo TR), `2023TR000114`,
+`2023TR000845`, `2023TR001063` e `2021TR000719`. **A `2021TR000719` é uma das "6 TRs que não
+casaram"** que o `CLAUDE.md` marca como lista obsoleta — **é aqui que elas moram.**
+
+**O que se perderia:** `situacao` (4.476 linhas) e `prazo_analise` (3.802) — uma foto de 18/07
+que já não descreve o banco. As três colunas de devolução têm **uma linha cada**: o rastro do
+`confDev` morto, que gravava numa rota que nunca existiu.
+
+**A decisão é do Richard**, e é só uma: se a foto de 18/07 tem valor histórico, o caminho é
+renomear para `_backup_estoque_20260816` em vez de `DROP` — mesmo custo, e reversível.
+⚠️ **Vale o mesmo para a `planilha_analista`** (3.122 linhas, parada em 14/06, já marcada como
+DESCONTINUADA), e **o `desfazer_assuncoes.js` mexe nessas duas e em nenhuma outra**.
+
+### 3-C. O que ficou de fora dos ajustes da tela
+
+- **A tabela `estoque`** — medida em 16/08. Ver **3-B** acima: nada depende dela no banco, e
+  a decisão de apagar (ou renomear para backup) continua sendo do Richard.
 - **O filtro de status da tela** ainda tem `<option value="livre" selected>` fixo; com
   `pcs_livres` vindo do servidor, vale conferir se os outros valores do filtro continuam
-  batendo com o `statusDerivado`.
+  batendo com o `statusDerivado`. **Não foi tocado nos ajustes de 16/08.**
+- **⚠️ A coluna STATUS do filtro e a da tabela são a mesma pergunta.** Se o Status sair da
+  tabela (a alternativa registrada em 3), o filtro passa a ser o único lugar onde ele existe.
 - **Não foi clicado por ninguém.** A regra unificada foi provada contra o banco (788 TRs
-  Livres antes, 788 depois) e por teste, mas o Estoque não foi aberto no navegador.
+  Livres antes, 788 depois) e por teste; os ajustes de 16/08 têm 32 checagens novas. Mas o
+  Estoque **não foi aberto no navegador**.
 
 ### 4. ✅ `CI_PENDENTE_POR_ANALISTA/` — **42 arquivos já gerados**
 

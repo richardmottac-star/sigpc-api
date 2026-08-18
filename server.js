@@ -43,6 +43,11 @@ const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
 const bg = require('./lib/busca-global');
 const dup = require('./lib/duplicata');
+// As quatro frentes de 18/08/2026: corrigir situação, puxar do C.I., cadastrar PC e o
+// pedido de correção ao coordenador. A regra mora nas libs; aqui só a transação e o perfil.
+const correcao = require('./lib/correcao');
+const pcNova = require('./lib/pc-nova');
+const solCor = require('./lib/solicitacao-correcao');
 
 const app = express();
 app.use(cors());
@@ -3877,6 +3882,452 @@ app.post('/parcela/estornar', async (req, res) => {
   } finally {
     cli.release();
   }
+});
+
+// ══════════════════════════════════════
+//  CORRIGIR SITUAÇÃO · PUXAR DO C.I. · CADASTRAR PC · PEDIR CORREÇÃO   (18/08/2026)
+// ══════════════════════════════════════
+// A regra mora em `lib/correcao.js`, `lib/pc-nova.js` e `lib/solicitacao-correcao.js`.
+// Aqui só se abre a transação, confere-se quem pede (contra o BANCO) e responde.
+//
+// ⚠️ TODAS ESTAS ROTAS ENTRAM POR `codigo_pc`, NUNCA POR `parcial_num` — decisão do Richard,
+// 18/08/2026. `tr`, `parcial_num` e `setorial_id` saem da PRÓPRIA LINHA do banco; o navegador
+// não tem como provar nenhum dos três, e a PC final tem quatro grafias de `parcial_num`.
+
+/** Carrega a PC alvo e as irmãs, com lock, e resolve o alcance da ação. */
+async function carregarAlvoCorrecao(cli, codigoPc) {
+  const { rows } = await cli.query(correcao.SQL_CARREGAR_ALVO, [codigoPc]);
+  if (!rows.length) return null;
+  const pc = rows[0];
+  const { rows: irmas } = await cli.query(correcao.SQL_CARREGAR_IRMAS,
+    [pc.setorial_id, pc.tr, pc.parcial_num]);
+  return { pc, irmas, alvo: correcao.alvoDaAcao(pc, irmas) };
+}
+
+/**
+ * Executa a correção de situação. Usada pela rota direta (A) E pela aprovação do
+ * coordenador (D) — uma função só, porque duas divergiriam.
+ *
+ * ⚠️ O RAMO É DECIDIDO PELO ESTADO DA PC, não pelo destino pedido. Estava baixada? sai da
+ * produtividade pelas QUATRO colunas. Não estava? só muda a situação — marcar estorno em PC
+ * nunca baixada inventa um evento que não houve (é a correção de 16/08 no estornar).
+ */
+async function aplicarCorrecaoSituacao(cli, { pc, alvo }, destino, motivo, quemNome) {
+  const status = correcao.DESTINO_PARA_STATUS[destino];
+  const sitAtual = destino === 'Livre' ? null : destino;
+  if (pc.baixada === true) {
+    const { rows } = await cli.query(correcao.SQL_TIRAR_DA_PRODUTIVIDADE,
+      [alvo, status, sitAtual, motivo, quemNome ?? null]);
+    return { linhas: rows, desfezBaixa: true };
+  }
+  const { rows } = await cli.query(correcao.SQL_SO_SITUACAO, [alvo, status, sitAtual, motivo]);
+  return { linhas: rows, desfezBaixa: false };
+}
+
+/** Executa a volta do C.I. Mesma função para a rota direta (B) e para a aprovação (D). */
+async function aplicarPuxarCi(cli, { alvo }, motivo, quemNome) {
+  const { rows } = await cli.query(correcao.SQL_PUXAR_CI, [alvo, motivo, quemNome ?? null]);
+  return { linhas: rows, desfezBaixa: true };
+}
+
+// GET /parcela/acoes?codigo_pc=X&usuario_id=N — o que ESTE usuário pode fazer nesta parcial.
+//
+// ⚠️ É O SERVIDOR QUE DECIDE, e a tela só desenha. Sem esta rota o `index.html` teria de
+// repetir as regras de `podeCorrigirBaixa`/`podePuxarCi` — e a cópia divergiria no primeiro
+// ajuste, exatamente como aconteceu com o mapa de nomes curtos, que chegou a ter três cópias.
+app.get('/parcela/acoes', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, req.query.usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    const pe = papel.perfilEfetivo(quem);
+
+    const { rows } = await cli.query(
+      `SELECT codigo_pc, tr, parcial_num, setorial_id, tipo, baixada, status, situacao_atual,
+              parecer_tipo, origem_baixa, baixado_por, analista_id, enviado_ci, enviado_ci_por,
+              ci_situacao FROM prestacoes_contas WHERE codigo_pc = $1`, [req.query.codigo_pc]);
+    if (!rows.length) return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+    const pc = rows[0];
+
+    const corr = correcao.podeCorrigirBaixa(pe, quem.id, pc);
+    const puxar = correcao.podePuxarCi(pe, quem.id, pc);
+
+    // Já existe pedido pendente? A tela precisa saber para não oferecer "solicitar" de novo.
+    const { rows: pend } = await cli.query(
+      `SELECT acao FROM solicitacao_correcao WHERE codigo_pc = $1 AND status = 'pendente'`,
+      [pc.codigo_pc]);
+    const pendentes = pend.map(p => p.acao);
+
+    res.json({
+      data: {
+        codigo_pc: pc.codigo_pc, tr: pc.tr, tipo: pc.tipo, baixada: pc.baixada,
+        enviado_ci: pc.enviado_ci, destinos: correcao.DESTINOS,
+        corrigir_situacao: { ...corr, pendente: pendentes.includes('corrigir_situacao') },
+        puxar_ci: { ...puxar, pendente: pendentes.includes('puxar_ci') },
+        // Cadastrar PC é por TR, não por PC — a tela usa isto para acender o item do menu.
+        cadastrar_pc: pe === 'superadmin' || String(pc.analista_id ?? '') === String(quem.id),
+      }, error: null,
+    });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /parcela/corrigir_situacao — body { codigo_pc, situacao_destino, motivo, analista_id }
+app.post('/parcela/corrigir_situacao', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+  if (!b.codigo_pc) return res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório' } });
+  const eD = correcao.validarDestino(b.situacao_destino);
+  if (eD) return res.status(400).json({ data: null, error: { message: eD } });
+  const eM = correcao.validarMotivo(b.motivo);
+  if (eM) return res.status(400).json({ data: null, error: { message: eM } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
+    const quem = await lerUsuario(cli, b.executado_por ?? b.analista_id);
+    const pe = papel.perfilEfetivo(quem);
+
+    const alvo = await carregarAlvoCorrecao(cli, b.codigo_pc);
+    if (!alvo) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } }); }
+
+    // ⚠️ A PERMISSÃO É CONFERIDA AQUI, DENTRO DA TRANSAÇÃO E COM A LINHA TRAVADA. Conferir
+    // antes do lock deixaria a janela em que outro analista baixa a parcial no meio.
+    const ok = correcao.podeCorrigirBaixa(pe, quem.id, alvo.pc);
+    if (!ok.pode) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: ok.motivo, via_solicitacao: ok.viaSolicitacao } }); }
+
+    const antes = alvo.pc.situacao_atual || alvo.pc.status || null;
+    const r = await aplicarCorrecaoSituacao(cli, alvo, b.situacao_destino, b.motivo.trim(), quem.nome);
+
+    await registrarHistorico(cli, {
+      tr: alvo.pc.tr, parcial_num: alvo.pc.parcial_num, setorial_id: alvo.pc.setorial_id,
+      evento: 'correcao_situacao',
+      valor_anterior: antes, valor_novo: b.situacao_destino,
+      analista_id: b.analista_id ?? null,
+      observacao: autoria.observacaoCom(
+        `${b.motivo.trim()} · ${r.desfezBaixa ? 'DESFEZ A BAIXA — sai da produtividade' : 'parcial nao estava baixada'}`
+        + ` · ${r.linhas.length} PC${r.linhas.length > 1 ? 's' : ''}`,
+        b._autoria, b._autoria?.executor_nome),
+      executado_por: b._autoria?.executado_por ?? null,
+    });
+
+    await cli.query('COMMIT');
+    res.json({ data: { codigos_pc: r.linhas.map(x => x.codigo_pc), desfez_baixa: r.desfezBaixa,
+                       situacao: b.situacao_destino }, count: r.linhas.length, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /parcela/puxar_ci — body { codigo_pc, motivo, analista_id }
+app.post('/parcela/puxar_ci', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+  if (!b.codigo_pc) return res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório' } });
+  const eM = correcao.validarMotivo(b.motivo);
+  if (eM) return res.status(400).json({ data: null, error: { message: eM } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
+    const quem = await lerUsuario(cli, b.executado_por ?? b.analista_id);
+    const pe = papel.perfilEfetivo(quem);
+
+    const alvo = await carregarAlvoCorrecao(cli, b.codigo_pc);
+    if (!alvo) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } }); }
+
+    const ok = correcao.podePuxarCi(pe, quem.id, alvo.pc);
+    if (!ok.pode) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: ok.motivo, via_solicitacao: ok.viaSolicitacao } }); }
+
+    const r = await aplicarPuxarCi(cli, alvo, b.motivo.trim(), quem.nome);
+
+    await registrarHistorico(cli, {
+      tr: alvo.pc.tr, parcial_num: alvo.pc.parcial_num, setorial_id: alvo.pc.setorial_id,
+      evento: 'puxar_ci',
+      valor_anterior: alvo.pc.ci_situacao || 'enviado_ci = true', valor_novo: 'fora do C.I.',
+      analista_id: b.analista_id ?? null,
+      observacao: autoria.observacaoCom(
+        `${b.motivo.trim()} · DESFEZ A BAIXA — sai da produtividade · ${r.linhas.length} PC${r.linhas.length > 1 ? 's' : ''}`,
+        b._autoria, b._autoria?.executor_nome),
+      executado_por: b._autoria?.executado_por ?? null,
+    });
+
+    await cli.query('COMMIT');
+    res.json({ data: { codigos_pc: r.linhas.map(x => x.codigo_pc) }, count: r.linhas.length, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /prestacoes_contas/nova — body { tr, tipo, codigo_pc?, parcial_num?, valor?, codigo_nl?,
+//                                       processo_pc?, dt_limite_pc?, prazo_analise_dias?, analista_id }
+//
+// ⚠️ O NOME DA ROTA É `/nova` E NÃO `POST /prestacoes_contas`, por causa da armadilha 13:
+// rota de nome fixo tem de vir ANTES da rota com `:codigo_pc`, e `PATCH
+// /prestacoes_contas/:codigo_pc` já existe. Um `POST /prestacoes_contas` puro conviveria,
+// mas o par GET/PATCH/POST no mesmo caminho é onde esse erro nasce.
+app.post('/prestacoes_contas/nova', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+
+  const setorial_id = b.setorial_id || 'FCEE';
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, b.analista_id);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+    const pe = papel.perfilEfetivo(quem);
+
+    const m = pcNova.montar(b, b.tr);
+    if (m.erro) { await cli.query('ROLLBACK');
+      return res.status(400).json({ data: null, error: { message: m.erro } }); }
+    const linha = m.linha;
+
+    const { rows: daTr } = await cli.query(pcNova.SQL_PCS_DA_TR, [setorial_id, linha.tr]);
+    const podeC = pcNova.podeCadastrar(pe, quem.id, daTr);
+    if (!podeC.pode) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: podeC.motivo } }); }
+
+    const { rows: jaTem } = await cli.query(pcNova.SQL_JA_EXISTE, [linha.codigo_pc]);
+    if (jaTem.length) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: `A PC ${linha.codigo_pc} já existe (TR ${jaTem[0].tr}, ${jaTem[0].tipo}).` } }); }
+
+    // Herda o que a TR já sabe. O dono vem do acervo, não do corpo — ver `SQL_INSERIR`.
+    const base = daTr.find(p => p.analista_id != null) || daTr[0] || {};
+    const dono = pe === 'superadmin' && base.analista_id != null ? base.analista_id : quem.id;
+    const donoLinha = daTr.find(p => String(p.analista_id) === String(dono)) || base;
+
+    const { rows: inseridas } = await cli.query(pcNova.SQL_INSERIR, [
+      linha.codigo_pc, linha.codigo_nl, linha.tipo, linha.tr, linha.parcela_seq, linha.parcial_num,
+      linha.valor, linha.processo_pc, linha.processo_mae || base.processo_mae || null,
+      linha.entidade || base.entidade || null, linha.cnpj_cpf || base.cnpj_cpf || null,
+      linha.dt_limite_pc, linha.prazo_analise_dias,
+      setorial_id, dono, donoLinha.analista_nome ?? null, donoLinha.grupo ?? null, quem.nome,
+    ]);
+
+    await registrarHistorico(cli, {
+      tr: linha.tr, parcial_num: linha.parcial_num, setorial_id,
+      evento: 'pc_nova',
+      valor_anterior: null,
+      valor_novo: `${linha.codigo_pc} (${linha.tipo})`,
+      analista_id: dono,
+      observacao: `PC cadastrada por ${quem.nome}`
+        + (linha.tipo === 'final'
+            ? ` · FINAL: sem valor financeiro, parcela_seq ${pcNova.PARCELA_SEQ_FINAL}, sem NL`
+            : ` · parcial ${linha.parcial_num}`),
+      executado_por: String(dono) === String(quem.id) ? null : quem.id,
+    });
+
+    await cli.query('COMMIT');
+    res.json({ data: inseridas[0], count: 1, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    // O UNIQUE do banco é a trava de verdade — duas abas no mesmo código chegam juntas.
+    if (e.code === '23505')
+      return res.status(409).json({ data: null, error: { message: 'Esta PC já existe.' } });
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /solicitacao_correcao — o analista PEDE ao coordenador do grupo dele
+app.post('/solicitacao_correcao', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+  const erro = solCor.validarPedido(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, b.analista_id);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+
+    const alvo = await carregarAlvoCorrecao(cli, b.codigo_pc);
+    if (!alvo) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } }); }
+
+    // ⚠️ SÓ SE PEDE O QUE NÃO SE PODE FAZER SOZINHO. Sem esta conferência o analista mandaria
+    // à fila do coordenador uma correção que ele mesmo poderia aplicar num clique — e a fila
+    // dos três coordenadores é o recurso escasso aqui.
+    const pe = papel.perfilEfetivo(quem);
+    const r = b.acao === 'puxar_ci'
+      ? correcao.podePuxarCi(pe, quem.id, alvo.pc)
+      : correcao.podeCorrigirBaixa(pe, quem.id, alvo.pc);
+    if (r.pode) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: 'Você mesmo pode fazer esta correção — não precisa pedir.' } }); }
+    if (!r.viaSolicitacao) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: r.motivo } }); }
+
+    const autorOriginal = b.acao === 'puxar_ci' ? alvo.pc.enviado_ci_por : alvo.pc.baixado_por;
+    const { rows } = await cli.query(solCor.SQL_CRIAR, [
+      quem.id, alvo.pc.codigo_pc, alvo.pc.tr, alvo.pc.setorial_id, b.acao,
+      b.acao === 'corrigir_situacao' ? b.situacao_destino : null,
+      b.motivo.trim(), alvo.alvo.length, autorOriginal ?? null,
+    ]);
+
+    await registrarHistorico(cli, {
+      tr: alvo.pc.tr, parcial_num: alvo.pc.parcial_num, setorial_id: alvo.pc.setorial_id,
+      evento: 'solicitacao_correcao',
+      valor_anterior: alvo.pc.situacao_atual || alvo.pc.status || null,
+      valor_novo: `pedido #${rows[0].id}: ${solCor.acaoTexto(b.acao)}`,
+      analista_id: quem.id,
+      observacao: `${b.motivo.trim()} · aguardando o coordenador do grupo ${quem.grupo ?? '—'}`,
+    });
+
+    await cli.query('COMMIT');
+
+    // O coordenador do grupo é avisado pelo sino. Cai para o superadmin se o grupo não tiver
+    // coordenador — a mesma proteção de `notificacao.coordenadoresDoGrupo`.
+    notif.coordenadoresDoGrupo(pool, quem.grupo).then(ids => Promise.all(ids.map(id => notif.criar(pool, {
+      destinatario_id: id, tipo: 'aprovacao',
+      titulo: `Pedido de correção — ${alvo.pc.tr}`,
+      mensagem: `${quem.nome} pediu: ${solCor.acaoTexto(b.acao)} na PC ${alvo.pc.codigo_pc}. `
+              + `Motivo: "${b.motivo.trim()}"`,
+      link: '#aprovacoes', ref_tipo: 'solicitacao_correcao', ref_id: `sc-${rows[0].id}`,
+    })))).catch(e => console.error('Falha ao notificar pedido de correcao:', e.message));
+
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    if (e.code === '23505')
+      return res.status(409).json({ data: null, error: {
+        message: 'Já existe um pedido pendente para esta PC e esta ação.' } });
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// GET /solicitacao_correcao?usuario_id=N&status=pendente — a fila, recortada pelo SERVIDOR
+app.get('/solicitacao_correcao', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, req.query.usuario_id);
+    if (!quem) return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    const pe = papel.perfilEfetivo(quem);
+
+    // ⚠️ O RECORTE É DO SERVIDOR. O analista vê só os dele; o coordenador, só os do grupo
+    // dele; o superadmin, todos. Esconder na tela não impediria ninguém de pedir a fila
+    // inteira por HTTP — é a mesma trava de `GET /solicitacao_devolucao`.
+    let fAnalista = null, fGrupo = null;
+    if (pe === 'analista') fAnalista = quem.id;
+    else if (pe === 'coordenador') fGrupo = String(quem.grupo ?? '');
+    else if (pe !== 'superadmin')
+      return res.status(403).json({ data: null, error: { message: 'Sem acesso a esta fila.' } });
+
+    const { rows } = await cli.query(solCor.SQL_LISTAR, [req.query.status || null, fAnalista, fGrupo]);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// PATCH /solicitacao_correcao/:id — body { status:'aprovada'|'negada', decidido_por, motivo_decisao }
+//
+// ⚠️ APROVAR EXECUTA A AÇÃO NA MESMA TRANSAÇÃO, e pelas MESMAS funções da rota direta
+// (`aplicarCorrecaoSituacao` / `aplicarPuxarCi`). Duas regras de "o que a aprovação faz"
+// divergiriam — é o mesmo motivo que faz a aprovação da devolução chamar `devol.SQL_DEVOLVER`.
+app.patch('/solicitacao_correcao/:id', async (req, res) => {
+  const b = req.body || {};
+  const erro = solCor.validarDecisao(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, b.decidido_por);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+    const pe = papel.perfilEfetivo(quem);
+
+    const { rows: ped } = await cli.query(solCor.SQL_LER_PARA_DECIDIR, [parseInt(req.params.id) || 0]);
+    if (!ped.length) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Pedido não encontrado.' } }); }
+    const p = ped[0];
+
+    if (!solCor.podeDecidir(quem, p, pe)) { await cli.query('ROLLBACK');
+      const proprio = String(p.analista_id) === String(quem.id);
+      return res.status(403).json({ data: null, error: { message: proprio
+        ? 'Você não decide o próprio pedido. Ele vai para o coordenador do seu grupo.'
+        : 'Só o coordenador do grupo ou o superadmin decidem este pedido.' } }); }
+
+    if (p.status !== 'pendente') { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: `Este pedido já foi ${p.status}.` } }); }
+
+    const autodec = String(p.analista_id) === String(quem.id);
+    let aplicadas = [];
+    if (b.status === 'aprovada') {
+      const alvo = await carregarAlvoCorrecao(cli, p.codigo_pc);
+      if (!alvo) { await cli.query('ROLLBACK');
+        return res.status(409).json({ data: null, error: { message: 'A PC do pedido não existe mais.' } }); }
+
+      // Reconferido AGORA: entre o pedido e a decisão a parcial pode ter mudado de estado.
+      if (p.acao === 'puxar_ci' && alvo.pc.enviado_ci !== true) { await cli.query('ROLLBACK');
+        return res.status(409).json({ data: null, error: {
+          message: 'Esta parcial já não está no Controle Interno. O pedido perdeu o objeto.' } }); }
+
+      const motivoExec = `${p.motivo} · aprovado por ${quem.nome}: ${b.motivo_decisao.trim()}`
+        + (autodec ? ` · ${solCor.MARCA_AUTODECIDIDO}` : '');
+      const r = p.acao === 'puxar_ci'
+        ? await aplicarPuxarCi(cli, alvo, motivoExec, quem.nome)
+        : await aplicarCorrecaoSituacao(cli, alvo, p.situacao_destino, motivoExec, quem.nome);
+      aplicadas = r.linhas;
+
+      await registrarHistorico(cli, {
+        tr: alvo.pc.tr, parcial_num: alvo.pc.parcial_num, setorial_id: alvo.pc.setorial_id,
+        evento: p.acao === 'puxar_ci' ? 'puxar_ci' : 'correcao_situacao',
+        valor_anterior: alvo.pc.situacao_atual || alvo.pc.status || null,
+        valor_novo: p.acao === 'puxar_ci' ? 'fora do C.I.' : p.situacao_destino,
+        // ⚠️ O DONO do trabalho é quem PEDIU; quem clicou foi o coordenador.
+        analista_id: p.analista_id,
+        observacao: motivoExec + ` · pedido #${p.id} · ${r.desfezBaixa ? 'DESFEZ A BAIXA' : 'sem baixa a desfazer'}`,
+        executado_por: autodec ? null : quem.id,
+      });
+    } else {
+      await registrarHistorico(cli, {
+        tr: p.tr, parcial_num: null, setorial_id: p.setorial_id,
+        evento: 'correcao_negada',
+        valor_anterior: `pedido #${p.id}`, valor_novo: 'negada',
+        analista_id: p.analista_id,
+        observacao: `${quem.nome} negou: ${b.motivo_decisao.trim()}`,
+        executado_por: autodec ? null : quem.id,
+      });
+    }
+
+    const { rows: fim } = await cli.query(solCor.SQL_DECIDIR,
+      [p.id, b.status, quem.id, b.motivo_decisao.trim()]);
+    if (!fim.length) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: 'Este pedido acabou de ser decidido.' } }); }
+
+    await cli.query('COMMIT');
+
+    notif.criar(pool, {
+      destinatario_id: p.analista_id, tipo: 'aprovacao',
+      titulo: (b.status === 'aprovada' ? 'Correção aprovada — ' : 'Correção recusada — ') + p.codigo_pc,
+      mensagem: (b.status === 'aprovada'
+          ? `${solCor.acaoTexto(p.acao)} foi aplicada em ${aplicadas.length} PC${aplicadas.length > 1 ? 's' : ''}.`
+          : `${solCor.acaoTexto(p.acao)} NÃO foi aplicada.`)
+        + ` ${quem.nome} escreveu: "${b.motivo_decisao.trim()}"`,
+      link: '#planilha', ref_tipo: 'solicitacao_correcao', ref_id: `dec-${p.id}`,
+    }).catch(e => console.error('Falha ao notificar decisao de correcao:', e.message));
+
+    res.json({ data: { ...fim[0], aplicadas: aplicadas.map(x => x.codigo_pc), autodecidido: autodec },
+               error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
 });
 
 // ══════════════════════════════════════

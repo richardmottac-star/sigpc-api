@@ -1355,30 +1355,38 @@ app.patch('/prestacoes_contas/baixar', async (req, res) => {
   }
 });
 
-// PATCH /prestacoes_contas/estornar — body { codigos_pc: [], motivo, usuario_id, usuario_nome, perfil, grupo }
+// PATCH /prestacoes_contas/estornar — body { codigos_pc: [], motivo, usuario_id, usuario_nome }
+//
+// ⚠️ SÓ SUPERADMIN, desde 18/08/2026 — decisão do Richard. Antes: analista (as PCs dele),
+// coordenador (o grupo dele) e superadmin.
+//
+// O MOTIVO É QUE ESTE É O CAMINHO SEM RASTRO. Ele grava `motivo_estorno`/`estornado_por` na
+// própria PC, mas **não abre linha em `parcela_historico`** — então o estorno em lote não
+// aparece no histórico da parcial e não responde "quem desfez esta baixa, e quando". O
+// `POST /parcela/corrigir_situacao` faz o mesmo com motivo obrigatório, destino escolhido e
+// trilha; é por lá que analista e coordenador passam agora.
+//
+// ⚠️ E O `perfil`/`grupo` DO CORPO SUMIRAM DAQUI. Eram lidos do body: bastava mandar
+// `perfil: 'superadmin'` para o ramo do 403 não disparar — o mesmo buraco que as quatro
+// rotas de 14/08 fecharam. Agora o único perfil que vale é o do BANCO.
 app.patch('/prestacoes_contas/estornar', async (req, res) => {
   try {
-    const { codigos_pc, motivo, usuario_id, usuario_nome, perfil, grupo } = req.body;
+    const { codigos_pc, motivo, usuario_id, usuario_nome } = req.body;
     if (!Array.isArray(codigos_pc) || codigos_pc.length === 0)
       return res.status(400).json({ data: null, error: { message: 'codigos_pc é obrigatório' } });
     if (!motivo || motivo.trim().length < 15)
       return res.status(400).json({ data: null, error: { message: 'motivo deve ter no mínimo 15 caracteres' } });
 
-    const params = [motivo, usuario_nome, codigos_pc];
-    let where = 'codigo_pc = ANY($3)';
-    // ⚠️ Perfil EFETIVO, lido do banco: no papel analista o superadmin estorna como
-    // analista — so as PCs dele —, e nao como superadmin.
+    // ⚠️ Perfil EFETIVO, lido do BANCO: no papel analista o superadmin também leva 403 —
+    // é o mesmo princípio das outras dez rotas, e sem ele trocar de papel não significaria nada.
     const quemLote = await lerUsuario(pool, usuario_id);
-    const perfilEf = papel.perfilEfetivo(quemLote) || perfil;
-    if (perfilEf === 'analista') {
-      params.push(usuario_id);
-      where += ` AND analista_id = $${params.length}`;
-    } else if (perfil === 'coordenador') {
-      params.push(parseInt(grupo));
-      where += ` AND grupo = $${params.length}`;
-    } else if (perfil !== 'superadmin') {
-      return res.status(403).json({ data: null, error: { message: 'perfil não autorizado a estornar' } });
-    }
+    if (papel.perfilEfetivo(quemLote) !== 'superadmin')
+      return res.status(403).json({ data: null, error: {
+        message: 'Apenas o técnico do sistema estorna em lote. '
+               + 'Use "Corrigir situação" — ela desfaz a baixa e fica no histórico da parcial.' } });
+
+    const params = [motivo, usuario_nome, codigos_pc];
+    const where = 'codigo_pc = ANY($3)';
 
     const { rows } = await pool.query(
       `UPDATE prestacoes_contas
@@ -3810,8 +3818,19 @@ app.post('/parcela/estornar', async (req, res) => {
   // ⚠️ O perfil vem do BANCO. Antes vinha do corpo, e o corpo nunca provou nada.
   const quemEst = await lerUsuario(pool, b.usuario_id);
   const peEst = papel.perfilEfetivo(quemEst);
-  if (peEst !== 'coordenador' && peEst !== 'superadmin')
-    return res.status(403).json({ data: null, error: { message: 'Apenas coordenador ou superadmin podem estornar' } });
+  // ⚠️ SÓ SUPERADMIN, desde 18/08/2026 — o coordenador saiu junto com o do lote.
+  //
+  // Isto NÃO estava na lista do Richard, que citou só a rota em lote. Está aqui porque o
+  // pedido dele foi esconder o botão do cartão para o coordenador, e esconder botão sem
+  // fechar a rota é cortina, não tranca: quem montar o `POST` à mão continua estornando.
+  // É a mesma lição das quatro rotas que liam `perfil` do corpo até 14/08.
+  //
+  // O coordenador não fica sem saída: ele decide os pedidos da fila de Correções, e a
+  // aprovação executa a mesma coisa pelo caminho que deixa rastro.
+  if (peEst !== 'superadmin')
+    return res.status(403).json({ data: null, error: {
+      message: 'Apenas o técnico do sistema estorna. '
+             + 'Use "Corrigir situação" — ela desfaz a baixa e fica no histórico da parcial.' } });
   if (!b.motivo || b.motivo.trim().length < 15)
     return res.status(400).json({ data: null, error: { message: 'motivo deve ter no mínimo 15 caracteres' } });
 

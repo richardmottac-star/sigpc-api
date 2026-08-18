@@ -1,0 +1,46 @@
+{
+ "quando": "2026-08-18T14:48:31.913Z",
+ "tabela": "prestacoes_contas",
+ "coluna": "parecer_tipo",
+ "de": "Parecer Regular com Ressalva(s)",
+ "para": "Parecer Regular com Ressalvas",
+ "codigos": [
+  "2021PC002004",
+  "2021TR000777-PFINAL",
+  "2021TR001601-PFINAL",
+  "2021TR001622-PFINAL",
+  "2021TR001657-PFINAL",
+  "2021TR001682-PFINAL",
+  "2021TR001739-PFINAL"
+ ],
+ "antes": [
+  {
+   "codigo_pc": "2021PC002004",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  },
+  {
+   "codigo_pc": "2021TR000777-PFINAL",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  },
+  {
+   "codigo_pc": "2021TR001601-PFINAL",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  },
+  {
+   "codigo_pc": "2021TR001622-PFINAL",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  },
+  {
+   "codigo_pc": "2021TR001657-PFINAL",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  },
+  {
+   "codigo_pc": "2021TR001682-PFINAL",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  },
+  {
+   "codigo_pc": "2021TR001739-PFINAL",
+   "parecer_tipo": "Parecer Regular com Ressalva(s)"
+  }
+ ]
+}

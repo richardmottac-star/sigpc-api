@@ -2308,41 +2308,99 @@ app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
   }
 });
 
-// POST /prestacoes_contas/registrar_parecer — body { codigo_pc, parecer_tipo, analista_nome, analista_id, baixar_nl_completa }
+// POST /prestacoes_contas/registrar_parecer — body { codigo_pc, parecer_tipo, analista_id,
+//                                            registrado_por, observacao?, baixar_nl_completa? }
+//
+// ⚠️ ROTA LEGADA, E ELA BAIXA DE VERDADE. É o botão "Registrar parecer" do detalhe da TR
+// (`index.html:3329`). Até 18/08/2026 gravava SEM transação, SEM histórico e SEM autoria: as
+// 12 baixas dela são as únicas do acervo sem autor identificável por id. Agora usa as MESMAS
+// peças do `POST /parcela/parecer` — `resolverAutoria`, `carregarParcela`, `registrarHistorico`.
+//
+// ⚠️ ELA CONTINUA SENDO POR PC, e não por parcela (decisão do Richard, 18/08/2026). O
+// `carregarParcela` está aqui pelo LOCK, não pelo alcance da escrita: `registrarHistorico` é
+// chaveado por (tr, parcial_num), e sem travar a parcela dois pareceres simultâneos em PCs
+// irmãs gravariam duas linhas sobre um estado que mudou no meio. Quem baixa a parcela
+// inteira é o cartão da Minha Planilha.
 app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+  if (!b.codigo_pc)
+    return res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório' } });
+  // ⚠️ A MESMA lista do parecer do cartão. Sem ela entraram 7 PCs com
+  // 'Parecer Regular com Ressalva(s)', que era o rótulo do `<select>` desta tela.
+  if (!PARECERES_VALIDOS.includes(b.parecer_tipo))
+    return res.status(400).json({ data: null,
+      error: { message: `parecer_tipo inválido. Use um de: ${PARECERES_VALIDOS.join(', ')}` } });
+
+  const cli = await pool.connect();
   try {
-    const { codigo_pc, parecer_tipo, analista_nome, baixar_nl_completa } = req.body;
-    if (await barrouPreparacao(res, req.body.analista_id)) return;
-    if (!codigo_pc)
-      return res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório' } });
+    await cli.query('BEGIN');
+    // ⚠️ DONO x EXECUTOR, contra o perfil lido no BANCO, dentro da transação.
+    if (await resolverAutoria(cli, b, res)) { await cli.query('ROLLBACK'); return; }
 
-    const pcRes = await pool.query('SELECT codigo_nl FROM prestacoes_contas WHERE codigo_pc = $1', [codigo_pc]);
-    if (pcRes.rows.length === 0)
-      return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } });
-    const { codigo_nl } = pcRes.rows[0];
+    const { rows: alvo } = await cli.query(
+      `SELECT codigo_pc, codigo_nl, tr, parcial_num, setorial_id, baixada, status, situacao_atual
+         FROM prestacoes_contas WHERE codigo_pc = $1`, [b.codigo_pc]);
+    if (!alvo.length) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada' } }); }
+    const pc = alvo[0];
 
-    const params = [parecer_tipo, analista_nome];
+    // Trava a parcela inteira (FOR UPDATE). Ver o cabeçalho: é lock, não alcance.
+    await carregarParcela(cli, pc.tr, pc.parcial_num, pc.setorial_id);
+
+    if (pc.baixada === true) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null,
+        error: { message: 'PC já baixada. Estorne antes de registrar novo parecer.' } }); }
+
+    const params = [b.parecer_tipo, b.registrado_por ?? null];
     let where;
-    if (baixar_nl_completa === true && codigo_nl) {
-      params.push(codigo_nl);
-      where = `codigo_nl = $3 AND status != 'baixada'`;
+    if (b.baixar_nl_completa === true && pc.codigo_nl) {
+      params.push(pc.codigo_nl);
+      where = `codigo_nl = $3`;
     } else {
-      params.push(codigo_pc);
+      params.push(pc.codigo_pc);
       where = `codigo_pc = $3`;
     }
+    params.push(b.analista_id ?? null);
 
-    const { rows } = await pool.query(
+    const { rows } = await cli.query(
       `UPDATE prestacoes_contas
        SET baixada = true, status = 'baixada', parecer_tipo = $1,
            data_baixa = NOW(), origem_baixa = 'sistema', registrado_por = $2,
+           analista_id = COALESCE(analista_id, $4::int),
+           situacao_atual = NULL, estornada = false, data_estorno = NULL,
            atualizado_em = NOW()
-       WHERE ${where}
-       RETURNING codigo_pc`,
+       -- ⚠️ AND baixada = false — a mesma correção de 16/08 do parecer e do estorno.
+       -- O status != 'baixada' do ramo da NL NAO era equivalente: as duas colunas
+       -- divergem (24 PCs estornadas estão com status='livre' e baixada=false).
+       WHERE ${where} AND baixada = false
+       RETURNING codigo_pc, tr, parcial_num, setorial_id`,
       params
     );
+
+    // ⚠️ UMA LINHA POR PARCELA AFETADA. Pela PC só há uma; pelo ramo da NL pode haver
+    // várias, inclusive de TRs diferentes — e uma linha só não apareceria nas outras.
+    const parcelas = [...new Map(rows.map(r =>
+      [`${r.setorial_id}|${r.tr}|${r.parcial_num}`, r])).values()];
+    for (const p of parcelas) {
+      await registrarHistorico(cli, {
+        tr: p.tr, parcial_num: p.parcial_num, setorial_id: p.setorial_id,
+        evento: 'parecer',
+        valor_anterior: pc.situacao_atual || pc.status || null,
+        valor_novo: b.parecer_tipo,
+        analista_id: b.analista_id ?? null,
+        observacao: autoria.observacaoCom(b.observacao, b._autoria, b._autoria?.executor_nome),
+        executado_por: b._autoria?.executado_por ?? null,
+      });
+    }
+
+    await cli.query('COMMIT');
     res.json({ data: rows.map(r => r.codigo_pc), count: rows.length, error: null });
   } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
   }
 });
 

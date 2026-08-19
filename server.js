@@ -1480,6 +1480,49 @@ app.get('/prestacoes_contas/painel', async (req, res) => {
   }
 });
 
+// GET /prestacoes_contas/painel_equipe?setorial_id=Y
+//
+// OS NÚMEROS DE TODOS OS ANALISTAS, DE UMA VEZ.  (19/08/2026)
+//
+// ⚠️ POR QUE NÃO SERVE CHAMAR `/prestacoes_contas/painel` POR PESSOA: são 46 analistas, e a
+// tela "Agir pela conta de" mostra todos juntos. Seriam 46 idas ao Railway a cada abertura,
+// e o painel por pessoa faz duas consultas cada — 92 no total. Aqui é UM `GROUP BY`.
+//
+// ⚠️ E É UM `SELECT` SÓ, com `FILTER`: seis números por analista vindos de seis consultas
+// seriam seis fotos de instantes diferentes, e a linha da tela não fecharia consigo mesma.
+app.get('/prestacoes_contas/painel_equipe', async (req, res) => {
+  try {
+    const cond = ['analista_id IS NOT NULL'];
+    const val = [];
+    if (req.query.setorial_id) { val.push(req.query.setorial_id); cond.push(`setorial_id = $${val.length}`); }
+
+    const { rows } = await pool.query(
+      `SELECT analista_id,
+              COUNT(*)::int                                                   AS total,
+              COUNT(*) FILTER (WHERE status = 'baixada')::int                 AS baixadas,
+              COUNT(*) FILTER (WHERE status = 'analise')::int                 AS analise,
+              COUNT(*) FILTER (WHERE ci_situacao = 'na_fila')::int            AS no_ci,
+              -- o passo 3 de 3 que ficou aberto: baixada e nunca encaminhada
+              COUNT(*) FILTER (WHERE baixada = true AND enviado_ci = false)::int AS falta_ci,
+              -- ⚠️ VENCIDAS PELO prazo_diligencia, e NUNCA pelo dt_limite_pc. O dt_limite_pc
+              -- do acervo antigo e' calculo em lote e NAO e' prazo — decisao do Richard,
+              -- 10/08/2026 — e usa-lo aqui poria "4.721 vencidas" na tela de gente que nao
+              -- deve nada. O prazo_diligencia e' data que o analista inseriu, e vence mesmo.
+              COUNT(*) FILTER (WHERE status = 'diligencia' AND prazo_diligencia IS NOT NULL
+                                 AND prazo_diligencia < ${HOJE_BR})::int       AS vencidas
+         FROM prestacoes_contas
+        WHERE ${cond.join(' AND ')}
+        GROUP BY analista_id`, val);
+
+    // Devolve como mapa por id: a tela cruza com a lista de usuários sem varrer um array.
+    const porId = {};
+    rows.forEach(r => { porId[r.analista_id] = r; });
+    res.json({ data: porId, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // GET /prestacoes_contas/produtividade?corte=YYYY-MM-DD&analista_id=X
 app.get('/prestacoes_contas/produtividade', async (req, res) => {
   try {

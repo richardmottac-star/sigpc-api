@@ -1,0 +1,22 @@
+{
+ "quando": "2026-08-19T02:26:44.590Z",
+ "desfazer": [
+  "DROP TABLE IF EXISTS repositorio_categoria",
+  "ALTER TABLE repositorio DROP COLUMN IF EXISTS fixado",
+  "ALTER TABLE repositorio DROP COLUMN IF EXISTS ordem"
+ ],
+ "ja_existia": {
+  "colunas": [],
+  "tabela": false
+ },
+ "categorias_semeadas": [
+  "Relatórios CGE",
+  "Orientações",
+  "Planilhas",
+  "Legislação",
+  "Modelos",
+  "Sem categoria",
+  "Relatórios"
+ ],
+ "itens_tocados": 0
+}

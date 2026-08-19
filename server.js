@@ -1000,14 +1000,125 @@ app.get('/repositorio', async (req, res) => {
   }
 });
 
+/**
+ * QUEM MEXE NO REPOSITÓRIO: superadmin e coordenador. Decisão do Richard, 18/08/2026.
+ *
+ * ⚠️ O ANALISTA E O CONTROLE INTERNO SÓ LEEM. A tela esconde os botões deles, mas esconder
+ * botão nunca foi a trava — quem montar o `POST` à mão passa. A tranca é esta, e ela lê o
+ * perfil no BANCO pelo `usuario_id`: até 14/08 quatro rotas liam `perfil` do CORPO, e bastava
+ * mandar `perfil: 'superadmin'` para entrar.
+ *
+ * ⚠️ E É `perfilEfetivo`, não `u.perfil`: no papel analista o superadmin também leva 403.
+ */
+async function barrouRepositorio(res, usuarioId) {
+  const quem = await lerUsuario(pool, usuarioId);
+  const pe = papel.perfilEfetivo(quem);
+  if (pe !== 'superadmin' && pe !== 'coordenador') {
+    res.status(403).json({ data: null, error: {
+      message: 'Apenas coordenador ou o técnico do sistema podem alterar o repositório.' } });
+    return true;
+  }
+  return false;
+}
+
 app.post('/repositorio', async (req, res) => {
   try {
-    const b = req.body;
+    const b = req.body || {};
+    // ⚠️ ATÉ 18/08/2026 ESTA ROTA NÃO CONFERIA NADA — qualquer um acrescentava item ao
+    // repositório de todo mundo. O `DELETE` ao lado já conferia desde 14/08; o `POST`, não.
+    if (await barrouRepositorio(res, b.usuario_id)) return;
+    if (!b.nome || !String(b.nome).trim())
+      return res.status(400).json({ data: null, error: { message: 'nome é obrigatório' } });
+    if (!b.url || !String(b.url).trim())
+      return res.status(400).json({ data: null, error: { message: 'url é obrigatório' } });
+
     const { rows } = await pool.query(
-      `INSERT INTO repositorio (nome, descricao, url, categoria, setorial_id, adicionado_por)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [b.nome, b.descricao, b.url, b.categoria, b.setorial_id, b.adicionado_por]
+      `INSERT INTO repositorio (nome, descricao, url, categoria, setorial_id, adicionado_por, fixado)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [b.nome.trim(), b.descricao ?? null, b.url.trim(),
+       // Sem categoria escolhida, a linha nasce em "Sem categoria" — que É uma categoria de
+       // verdade, com cor e chip. NULL faria cada tela inventar o próprio rótulo para ela.
+       (b.categoria && String(b.categoria).trim()) || 'Sem categoria',
+       b.setorial_id, b.adicionado_por, b.fixado === true]
     );
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /repositorio/categorias — a lista com as cores. Leitura livre: todo mundo vê a tela.
+app.get('/repositorio/categorias', async (req, res) => {
+  try {
+    // ⚠️ O ITEM SEM CATEGORIA CONTA EM "Sem categoria", e o dado NÃO é reescrito. Havia 2 dos
+    // 4 com `categoria` nula em 18/08/2026; o Richard pediu que aparecessem numa categoria
+    // cinza, "nunca escondidos". Fazer isso por UPDATE apagaria a informação de que ninguém
+    // classificou aquele item — e é a mesma resposta na tela, sem tocar no histórico.
+    const { rows } = await pool.query(
+      `SELECT c.*, (SELECT COUNT(*)::int FROM repositorio r
+                     WHERE ($1::text IS NULL OR r.setorial_id = $1::text)
+                       AND (lower(btrim(r.categoria)) = lower(btrim(c.nome))
+                            OR (c.nome = 'Sem categoria'
+                                AND (r.categoria IS NULL OR btrim(r.categoria) = '')))) AS itens
+         FROM repositorio_categoria c ORDER BY c.ordem, c.nome`, [req.query.setorial_id || null]);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /repositorio/categorias — criar categoria. Só superadmin e coordenador.
+app.post('/repositorio/categorias', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (await barrouRepositorio(res, b.usuario_id)) return;
+    const nome = (b.nome ?? '').toString().trim();
+    if (!nome) return res.status(400).json({ data: null, error: { message: 'nome é obrigatório' } });
+
+    // ⚠️ AS TRÊS CORES SÃO CONFERIDAS AQUI E NO BANCO. O CHECK do banco é a tranca; esta é a
+    // mensagem legível. A tela põe o valor direto num `style`, e texto livre ali vira layout
+    // quebrado sem erro nenhum.
+    const hex = /^#[0-9a-fA-F]{6}$/;
+    for (const [k, v] of [['cor', b.cor], ['cor_bg', b.cor_bg], ['cor_txt', b.cor_txt]])
+      if (!hex.test(String(v ?? '')))
+        return res.status(400).json({ data: null, error: { message: `${k} deve ser hexadecimal (#RRGGBB)` } });
+
+    const { rows } = await pool.query(
+      `INSERT INTO repositorio_categoria (nome, cor, cor_bg, cor_txt, ordem)
+       VALUES ($1,$2,$3,$4,COALESCE($5, 50)) RETURNING *`,
+      [nome, b.cor, b.cor_bg, b.cor_txt, b.ordem ?? null]);
+    res.json({ data: rows[0], error: null });
+  } catch (e) {
+    // O índice único por `lower(btrim(nome))` é a trava de verdade contra duplicata.
+    if (e.code === '23505')
+      return res.status(409).json({ data: null, error: { message: 'Já existe uma categoria com esse nome.' } });
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// PATCH /repositorio/:id — editar. Só superadmin e coordenador.
+app.patch('/repositorio/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (await barrouRepositorio(res, b.usuario_id)) return;
+
+    // ⚠️ LISTA BRANCA DE CAMPOS. Sem ela, o corpo escolheria o que atualizar — inclusive
+    // `id`, `criado_em` ou `adicionado_por`, que são a trilha de quem pôs o item ali.
+    const permitidos = ['nome', 'descricao', 'url', 'categoria', 'fixado', 'ordem'];
+    const campos = [], valores = [];
+    for (const k of permitidos) {
+      if (b[k] === undefined) continue;
+      valores.push(k === 'fixado' ? b[k] === true : b[k]);
+      campos.push(`${k} = $${valores.length}`);
+    }
+    if (!campos.length)
+      return res.status(400).json({ data: null, error: { message: 'nada a atualizar' } });
+
+    valores.push(parseInt(req.params.id) || 0);
+    const { rows } = await pool.query(
+      `UPDATE repositorio SET ${campos.join(', ')} WHERE id = $${valores.length} RETURNING *`, valores);
+    if (!rows.length)
+      return res.status(404).json({ data: null, error: { message: 'Item não encontrado' } });
     res.json({ data: rows[0], error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });

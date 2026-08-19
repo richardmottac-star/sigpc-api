@@ -1328,32 +1328,25 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
   }
 });
 
-// PATCH /prestacoes_contas/baixar — body { codigos_pc: [], parecer_tipo, analista_id, registrado_por, override }
-app.patch('/prestacoes_contas/baixar', async (req, res) => {
-  try {
-    const { codigos_pc, parecer_tipo, analista_id, registrado_por, override } = req.body;
-    if (await barrouPreparacao(res, analista_id)) return;
-    if (!Array.isArray(codigos_pc) || codigos_pc.length === 0)
-      return res.status(400).json({ data: null, error: { message: 'codigos_pc é obrigatório' } });
-    const params = [parecer_tipo, registrado_por, codigos_pc];
-    let where = 'codigo_pc = ANY($3)';
-    if (override !== true) {
-      params.push(analista_id);
-      where += ' AND analista_id = $4';
-    }
-    const { rows } = await pool.query(
-      `UPDATE prestacoes_contas
-       SET baixada = true, data_baixa = NOW(), origem_baixa = 'sistema', status = 'baixada',
-           parecer_tipo = $1, registrado_por = $2, atualizado_em = NOW()
-       WHERE ${where}
-       RETURNING codigo_pc`,
-      params
-    );
-    res.json({ data: rows, count: rows.length, error: null });
-  } catch (e) {
-    res.status(500).json({ data: null, error: { message: e.message } });
-  }
-});
+// ⚠️ `PATCH /prestacoes_contas/baixar` FOI REMOVIDA em 18/08/2026, e não comentada — código
+// que ninguém chama é código que ninguém revisa. Conferido antes de apagar: ZERO chamadas no
+// `index.html`, nos testes dos dois repositórios e nos scripts. (A única ocorrência do texto
+// era um *fixture* de host falso — `http://api.teste/...` — no `teste_front_vercomo.js`.)
+//
+// POR QUE ELA TINHA DE SAIR. Ela baixava por lista de `codigo_pc` sem transação, sem linha em
+// `parcela_historico`, sem `AND baixada = false` e — depois de 18/08 — sem gravar
+// `baixado_por`. Era o terceiro caminho de baixa do sistema, e o único que continuaria
+// criando baixa sem autoria depois de as outras quatro rotas passarem a gravá-la. Uma rota
+// morta não incomoda ninguém até o dia em que alguém a religa.
+//
+// Quem baixa hoje: `POST /parcela/parecer` (o cartão) e `POST
+// /prestacoes_contas/registrar_parecer` (o detalhe da TR). As duas são transacionais, gravam
+// histórico e gravam o autor.
+//
+// ⚠️ EFEITO COLATERAL A SABER: sem esta rota, um `PATCH /prestacoes_contas/baixar` cai no
+// `PATCH /prestacoes_contas/:codigo_pc` logo abaixo, com `codigo_pc = 'baixar'` — não acha
+// PC nenhuma e responde 200 com zero linhas, em vez de 404. É a armadilha 13 pelo avesso.
+// Nenhum cliente faz esse pedido hoje; se um dia fizer, o silêncio é o sintoma.
 
 // PATCH /prestacoes_contas/estornar — body { codigos_pc: [], motivo, usuario_id, usuario_nome }
 //
@@ -2222,7 +2215,8 @@ app.patch('/prestacoes_contas/inicio_analise', async (req, res) => {
 });
 
 // PATCH /prestacoes_contas/:codigo_pc — atualização pontual (ex: assumir TR)
-// precisa vir depois de /baixar e /estornar, senão "baixar"/"estornar" seriam capturados como codigo_pc
+// ⚠️ Precisa vir DEPOIS de /estornar, senão "estornar" seria capturado como codigo_pc — é a
+// armadilha 13. (A irmã /baixar foi removida em 18/08/2026; ver o comentário no lugar dela.)
 app.patch('/prestacoes_contas/:codigo_pc', async (req, res) => {
   try {
     const campos = req.body;

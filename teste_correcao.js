@@ -299,5 +299,20 @@ T('e a correcao de situacao tambem', /baixado_por    = NULL/.test(
 // Confundir os dois faria toda baixa normal nascer sem dono conhecido.
 T('o porque da diferenca esta escrito', /NÃO É O MESMO CRITÉRIO DO/.test(srv));
 
+// ⚠️ A ROTA MORTA NAO PODE VOLTAR. `PATCH /prestacoes_contas/baixar` foi removida em
+// 18/08/2026: era o TERCEIRO caminho de baixa, sem transacao, sem historico, sem
+// `AND baixada = false` e sem gravar `baixado_por` — o unico que continuaria criando baixa
+// sem autoria depois de as outras quatro passarem a grava-la. Ressuscita-la reabre o buraco
+// que a secao 9 inteira existe para fechar.
+T('a rota morta /prestacoes_contas/baixar continua removida',
+  !/app\.patch\('\/prestacoes_contas\/baixar'/.test(srv));
+T('e ficou escrito por que ela saiu', /FOI REMOVIDA em 18\/08\/2026, e não comentada/.test(srv));
+
+// ⚠️ Armadilha 13: rota de nome fixo ANTES da rota com :param. Removida a /baixar, sobra a
+// /estornar — e ela nao pode escorregar para depois da /:codigo_pc.
+T('/estornar continua declarada ANTES de /:codigo_pc',
+  srv.indexOf("app.patch('/prestacoes_contas/estornar'") <
+  srv.indexOf("app.patch('/prestacoes_contas/:codigo_pc'"));
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exitCode = falhou ? 1 : 0;

@@ -265,5 +265,39 @@ T('a permissao e conferida DENTRO da transacao, com a linha travada',
 T('o perfil vem do BANCO pelo perfilEfetivo, nunca do corpo',
   !/req\.body\.perfil/.test(srv.slice(srv.indexOf('CORRIGIR SITUAÇÃO'))));
 
+// ═════════════════════════════════════════════════════════════════════════════
+S('9. AS COLUNAS DE AUTORIA SAO PREENCHIDAS — nao so lidas');
+
+// ⚠️ ESTA SECAO EXISTE POR UM DEFEITO REAL. A migracao de 18/08/2026 criou `baixado_por` e
+// `enviado_ci_por` e fez o backfill (234 baixas, 926 encaminhamentos), mas NENHUMA rota as
+// gravava. Toda baixa nova nascia com autor NULO, caia no caso 3 da regra ("sem autoria
+// registrada") e liberava QUALQUER analista a corrigir a baixa de QUALQUER outro — o oposto
+// exato do que as colunas existem para fazer. Passou pelas 1.059 checagens porque todas
+// mediam a LEITURA da regra, e nenhuma media a escrita.
+T('existe um so lugar que decide QUEM CLICOU', /function executorDe\(b\)/.test(srv));
+T('e ele prefere o executor ao dono', /b\?\._autoria\?\.executado_por \?\? /.test(srv));
+
+// As QUATRO rotas que criam baixa ou encaminhamento.
+T('POST /parcela/parecer grava baixado_por', /baixado_por = \$7/.test(srv));
+T('registrar_parecer grava baixado_por', /baixado_por = \$5::int/.test(srv));
+T('POST /parcela/ci grava enviado_ci_por', /enviado_ci_por = \$5/.test(srv));
+T('POST /parcela/ci_lote grava enviado_ci_por', /enviado_ci_por = \$4/.test(srv));
+T('as quatro passam pelo executorDe',
+  (srv.match(/executorDe\(b\)/g) || []).length >= 4,
+  `${(srv.match(/executorDe\(b\)/g) || []).length} usos`);
+
+// ⚠️ E OS DOIS ESTORNOS LIMPAM. PC nao baixada carregando `baixado_por` afirma a autoria de
+// algo que nao existe, e a migracao tem conferencia exata para isso.
+T('os dois estornos limpam baixado_por',
+  (srv.match(/baixado_por = NULL/g) || []).length >= 2,
+  `${(srv.match(/baixado_por = NULL/g) || []).length} ocorrencias`);
+T('e a correcao de situacao tambem', /baixado_por    = NULL/.test(
+  require('fs').readFileSync('./lib/correcao.js', 'utf8')));
+
+// ⚠️ O CRITERIO AQUI E DIFERENTE DO parcela_historico.executado_por, e isso e proposital:
+// la nulo quer dizer "foi o proprio dono"; aqui nulo quer dizer "sem autoria registrada".
+// Confundir os dois faria toda baixa normal nascer sem dono conhecido.
+T('o porque da diferenca esta escrito', /NÃO É O MESMO CRITÉRIO DO/.test(srv));
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exitCode = falhou ? 1 : 0;

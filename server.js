@@ -1391,7 +1391,12 @@ app.patch('/prestacoes_contas/estornar', async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE prestacoes_contas
        SET estornada = true, data_estorno = NOW(), status = 'analise', baixada = false,
-           motivo_estorno = $1, estornado_por = $2, atualizado_em = NOW()
+           motivo_estorno = $1, estornado_por = $2,
+           -- ⚠️ LIMPA O AUTOR DA BAIXA — a baixa deixou de existir. Ver o par desta linha
+           -- em POST /parcela/estornar. (Sem crase: comentario dentro de template literal
+           -- nao leva crase, e uma so' fecha a string — armadilha 10.)
+           baixado_por = NULL,
+           atualizado_em = NOW()
        WHERE ${where}
        RETURNING codigo_pc`,
       params
@@ -2375,12 +2380,17 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
       where = `codigo_pc = $3`;
     }
     params.push(b.analista_id ?? null);
+    params.push(executorDe(b));
 
     const { rows } = await cli.query(
       `UPDATE prestacoes_contas
        SET baixada = true, status = 'baixada', parecer_tipo = $1,
            data_baixa = NOW(), origem_baixa = 'sistema', registrado_por = $2,
            analista_id = COALESCE(analista_id, $4::int),
+           -- ⚠️ QUEM CLICOU — ver executorDe. Esta rota é o botão "Registrar parecer" do
+           -- detalhe da TR, e as 12 baixas que ela fez até 18/08 são justamente as que
+           -- ficaram sem autor nenhum no acervo.
+           baixado_por = $5::int,
            situacao_atual = NULL, estornada = false, data_estorno = NULL,
            atualizado_em = NOW()
        -- ⚠️ AND baixada = false — a mesma correção de 16/08 do parecer e do estorno.
@@ -3291,6 +3301,29 @@ async function resolverAutoria(cli, b, res) {
   return false;
 }
 
+/**
+ * QUEM CLICOU DE FATO — o id que vai para `baixado_por` e `enviado_ci_por`.
+ *
+ * ⚠️ NÃO É O MESMO CRITÉRIO DO `parcela_historico.executado_por`, e a diferença é de
+ * propósito. Lá o campo fica NULO quando o dono executou, porque o valor da trilha está em
+ * mostrar a linha em que os dois DIFEREM. Aqui não: estas duas colunas respondem "quem fez
+ * esta baixa?" e "quem mandou isto ao C.I.?", e a resposta tem de valer SEMPRE — é ela que
+ * `lib/correcao.js` compara com quem está pedindo a correção.
+ *
+ * Nulo aqui já tem outro significado, fixado na migração de 18/08/2026: **"não há autoria
+ * registrada"**, que é o caso 3 da regra de A (e libera o analista a corrigir sozinho).
+ * Deixar nulo porque "foi o próprio dono" transformaria toda baixa normal em baixa sem dono
+ * conhecido, e a regra viraria "todo mundo pode" — exatamente o defeito que estas colunas
+ * existem para fechar.
+ *
+ * Então: quando o Richard age pela conta da Marisa, `baixado_por` é o Richard (quem clicou),
+ * `analista_id` continua sendo a Marisa (de quem é o trabalho e a produtividade), e
+ * `parcela_historico` guarda os dois.
+ */
+function executorDe(b) {
+  return b?._autoria?.executado_por ?? (b?.analista_id == null ? null : parseInt(b.analista_id) || null);
+}
+
 // Carrega as PCs da parcial com lock, para a transacao ser toda-ou-nenhuma.
 //
 // ⚠️ A CHAVE E' (setorial_id, tr, parcial_num) — NUNCA `processo_pc`, e isto foi conferido em
@@ -3399,6 +3432,11 @@ app.post('/parcela/parecer', async (req, res) => {
               parecer_tipo = $1,
               analista_id = COALESCE($2, analista_id),
               registrado_por = $3,
+              -- ⚠️ QUEM CLICOU, e não o dono — ver executorDe. É esta coluna que
+              -- lib/correcao.js compara para decidir se o analista corrige sozinho ou se
+              -- o pedido vai ao coordenador. Sem ela, toda baixa nova nascia sem autoria e
+              -- caía no caso 3 da regra ("sem autoria registrada"), que libera qualquer um.
+              baixado_por = $7,
               situacao_atual = NULL,
               estornada = false,
               data_estorno = NULL,
@@ -3424,7 +3462,7 @@ app.post('/parcela/parecer', async (req, res) => {
           AND baixada = false
         RETURNING codigo_pc`,
       [b.parecer_tipo, b.analista_id ?? null, b.registrado_por ?? null,
-       setorial_id, b.tr, String(b.parcial_num)]
+       setorial_id, b.tr, String(b.parcial_num), executorDe(b)]
     );
 
     await registrarHistorico(cli, {
@@ -3649,6 +3687,10 @@ app.post('/parcela/ci', async (req, res) => {
           SET enviado_ci = true,
               dt_envio_ci = NOW(),
               parecer_ci = COALESCE($1, parecer_ci),
+              -- ⚠️ QUEM CLICOU — ver executorDe. É esta coluna que correcao.podePuxarCi
+              -- compara para decidir se o analista desfaz o encaminhamento sozinho. Sem
+              -- ela, todo encaminhamento novo nascia sem autor e qualquer um podia puxá-lo.
+              enviado_ci_por = $5,
               -- Entra na fila do CI. A coluna enviado_ci continua dizendo "foi ao CI" e
               -- sustenta a baixa; ci_situacao diz onde está no ciclo. Sem esta linha o
               -- encaminhamento não apareceria na tela do CI, que lista por ci_situacao.
@@ -3667,7 +3709,7 @@ app.post('/parcela/ci', async (req, res) => {
         WHERE setorial_id = $2 AND tr = $3 AND parcial_num = $4
           AND baixada = true
         RETURNING codigo_pc`,
-      [b.parecer_ci ?? null, setorial_id, b.tr, String(b.parcial_num)]
+      [b.parecer_ci ?? null, setorial_id, b.tr, String(b.parcial_num), executorDe(b)]
     );
 
     await registrarHistorico(cli, {
@@ -3770,13 +3812,16 @@ app.post('/parcela/ci_lote', async (req, res) => {
       `UPDATE prestacoes_contas
           SET enviado_ci = true,
               dt_envio_ci = NOW(),
+              -- ⚠️ QUEM CLICOU — ver executorDe. O lote encaminha até 200 parcelas de uma
+              -- vez, e todas ficam com o mesmo autor: foi um clique só.
+              enviado_ci_por = $4,
               ci_situacao = 'na_fila',
               ci_rodada = GREATEST(ci_rodada, 1),
               atualizado_em = NOW()
         WHERE setorial_id = $1 AND tr = $2 AND parcial_num = ANY($3)
           AND baixada = true AND enviado_ci = false
         RETURNING codigo_pc, parcial_num`,
-      [setorial_id, b.tr, nums]);
+      [setorial_id, b.tr, nums, executorDe(b)]);
 
     // ── 3. uma linha de histórico POR PARCELA ─────────────────────────────────
     for (const a of aceitas) {
@@ -3864,6 +3909,11 @@ app.post('/parcela/estornar', async (req, res) => {
               estornado_por = $2,
               parecer_tipo = NULL,
               situacao_atual = NULL,
+              -- ⚠️ LIMPA O AUTOR DA BAIXA, porque a baixa deixou de existir. Uma PC não
+              -- baixada carregando baixado_por afirma uma autoria de algo que não há — e
+              -- a migração de 18/08 tem conferência exata para isso ("baixado_por so em
+              -- baixada"). É o mesmo que correcao.SQL_TIRAR_DA_PRODUTIVIDADE já faz.
+              baixado_por = NULL,
               atualizado_em = NOW()
         -- ⚠️ AND baixada = true — o espelho da correção do parecer, mesma data.
         --

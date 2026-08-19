@@ -1307,6 +1307,68 @@ app.get('/prestacoes_contas/nl_compartilhada', async (req, res) => {
   }
 });
 
+// GET /prestacoes_contas/painel?analista_id=X&setorial_id=Y&dias=15
+//
+// OS NÚMEROS DO BLOCO "PRECISA DE VOCÊ" E DO C.I., numa ida só.  (18/08/2026)
+//
+// ⚠️ POR QUE ESTA ROTA EXISTE, e não é a tela somando. Cinco dos seis números até dariam para
+// calcular no cliente baixando o acervo do analista, mas o sexto — a espera MÉDIA do setorial
+// — precisa de todos os analistas, e isso é o acervo inteiro: 14.658 linhas por abertura de
+// Dashboard, 51 pessoas. É o problema dos 11 MB por tela que já está nas Pendências; não vale
+// criar mais um caso dele por causa de um número.
+//
+// ⚠️ E É UM `SELECT` SÓ, com `FILTER`. Seis consultas separadas dariam seis fotos de
+// instantes diferentes — e num painel que se atualiza a cada 60 s isso aparece: o "falta
+// encaminhar" de um segundo e o "no C.I." de outro não fecham a conta que a tela desenha.
+app.get('/prestacoes_contas/painel', async (req, res) => {
+  try {
+    const { analista_id, setorial_id } = req.query;
+    if (!analista_id)
+      return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
+    // Janela de "vencendo": o padrão são 15 dias, e quem chama pode apertar ou afrouxar.
+    const dias = Math.max(1, Math.min(365, parseInt(req.query.dias) || 15));
+
+    const cond = ['analista_id = $1'];
+    const val = [parseInt(analista_id)];
+    if (setorial_id) { val.push(setorial_id); cond.push(`setorial_id = $${val.length}`); }
+    val.push(dias);
+    const pDias = `$${val.length}`;
+
+    const { rows } = await pool.query(
+      `SELECT
+         -- ⚠️ baixada = true AND enviado_ci = false: é o passo 3 de 3 que ficou aberto.
+         COUNT(*) FILTER (WHERE baixada = true AND enviado_ci = false)::int AS falta_ci,
+         -- ⚠️ prazo_diligencia, e NÃO dt_limite_pc. São prazos diferentes: o dt_limite_pc do
+         -- acervo antigo é cálculo em lote e não vale como prazo (decisão do Richard,
+         -- 10/08/2026); o prazo_diligencia é data que o analista inseriu, e vence de verdade.
+         COUNT(*) FILTER (WHERE status = 'diligencia' AND prazo_diligencia IS NOT NULL
+                            AND prazo_diligencia - ${HOJE_BR} BETWEEN 0 AND ${pDias})::int AS dilig_vencendo,
+         COUNT(*) FILTER (WHERE ci_situacao = 'na_fila')::int       AS ci_na_fila,
+         COUNT(*) FILTER (WHERE ci_situacao = 'encerrado')::int     AS ci_encerrado,
+         COUNT(*) FILTER (WHERE ci_situacao = 'com_analista')::int  AS ci_com_analista,
+         -- A mais antiga AINDA no ciclo: encerrada já voltou, e contá-la faria o número só
+         -- crescer para sempre.
+         MAX(${HOJE_BR} - dt_envio_ci::date) FILTER
+             (WHERE ci_situacao IN ('na_fila','com_analista') AND dt_envio_ci IS NOT NULL)::int AS ci_mais_antigo_dias
+       FROM prestacoes_contas WHERE ${cond.join(' AND ')}`, val);
+
+    // A média do setorial — sobre TODO MUNDO, e por isso fora do WHERE do analista.
+    const vs = [];
+    let condS = [`ci_situacao IN ('na_fila','com_analista')`, `dt_envio_ci IS NOT NULL`];
+    if (setorial_id) { vs.push(setorial_id); condS.push(`setorial_id = $${vs.length}`); }
+    const { rows: med } = await pool.query(
+      `SELECT ROUND(AVG(${HOJE_BR} - dt_envio_ci::date))::int AS media
+         FROM prestacoes_contas WHERE ${condS.join(' AND ')}`, vs);
+
+    res.json({
+      data: { ...rows[0], ci_espera_media_setorial: med[0].media, janela_dias: dias },
+      error: null
+    });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // GET /prestacoes_contas/produtividade?corte=YYYY-MM-DD&analista_id=X
 app.get('/prestacoes_contas/produtividade', async (req, res) => {
   try {

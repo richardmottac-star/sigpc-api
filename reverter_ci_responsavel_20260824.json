@@ -1,0 +1,16 @@
+{
+  "o_que": "criacao da tabela ci_responsavel e do indice ci_responsavel_tecnico_idx",
+  "quando": "2026-08-24T13:57:04.185Z",
+  "criado": [
+    "ci_responsavel",
+    "ci_responsavel_tecnico_idx"
+  ],
+  "reverter_com": "DROP TABLE IF EXISTS ci_responsavel;",
+  "atencao": "reverter apaga as atribuicoes existentes; a trilha em parcela_historico permanece",
+  "nao_tocado": [
+    "prestacoes_contas",
+    "usuarios",
+    "parcela_historico",
+    "ci_mensagem"
+  ]
+}

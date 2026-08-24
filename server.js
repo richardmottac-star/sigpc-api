@@ -18,6 +18,7 @@ const auth = require('./lib/auth');
 const prep = require('./lib/preparacao');
 const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
+const ciFila = require('./lib/ci-fila');
 const devol = require('./lib/devolucao');
 // ⚠️ NÃO É A MESMA COISA que `devol`: aquela é a devolução do superadmin, que executa na
 // hora; esta é o PEDIDO do analista, que espera decisão. Quando o pedido é aprovado, quem
@@ -2022,6 +2023,109 @@ app.get('/ci/mensagens', async (req, res) => {
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
+});
+
+// ══════════════════════════════════════
+//  FILA DE TRABALHO DO C.I.  (24/08/2026)
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/ci-fila.js. ⚠️ NADA aqui toca em `ci_situacao`, `baixada`,
+// `data_baixa` nem `enviado_ci`: quem está com a TR é outra pergunta, e responder a ela não
+// pode mover a parcela no ciclo. Há teste que falha se um UPDATE daqui mencionar qualquer uma.
+
+// GET /ci/fila_trabalho?usuario_id=X&setorial_id=Y — a lista, os chips e a equipe
+app.get('/ci/fila_trabalho', async (req, res) => {
+  try {
+    const quem = await lerUsuario(pool, req.query.usuario_id);
+    if (!ciFila.podeAgir(quem))
+      return res.status(403).json({ data: null, error: { message: 'Esta fila é do Controle Interno.' } });
+
+    const [fila, tecnicos] = await Promise.all([
+      pool.query(ciFila.SQL_FILA),
+      pool.query(ciFila.SQL_TECNICOS),
+    ]);
+    // Os dias de espera saem do servidor, e não da tela: `dt_envio_ci` é `timestamp` em UTC, e
+    // deixar cada navegador fazer a conta é como o "9.221 dias de atraso" nasceu (armadilha 25).
+    const hoje = new Date();
+    const linhas = fila.rows.map(l => {
+      const dias = ciFila.diasEspera(l.enviada_em, hoje);
+      return { ...l, dias_espera: dias, faixa_espera: ciFila.faixaEspera(dias) };
+    });
+    // ⚠️ SEM `linksDeLinhas`: esta lista não desenha processo SGPe — ela mostra TR, entidade,
+    // volume, analista, espera e responsável. Devolver um mapa de links que ninguém usa é
+    // peso no transporte e uma consulta a mais por abertura de tela.
+    res.json({ data: linhas, count: linhas.length,
+               resumo: ciFila.resumir(linhas, tecnicos.rows, quem.id),
+               tecnicos: tecnicos.rows, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /ci/tr/assumir  ·  /devolver  ·  /passar   body { tr, usuario_id, motivo?, destino_id? }
+//
+// ⚠️ AS TRÊS LEEM QUEM PEDE DO BANCO, pelo `usuario_id`. Quatro rotas deste servidor já
+// confiaram no `perfil` do corpo, e bastava mandar `perfil: 'superadmin'` para passar.
+async function guardaCi(req, res) {
+  const quem = await lerUsuario(pool, (req.body || {}).usuario_id);
+  if (!ciFila.podeAgir(quem)) {
+    res.status(quem ? 403 : 401).json({ data: null, error: { message: 'Só o Controle Interno mexe nesta fila.' } });
+    return null;
+  }
+  const tr = String((req.body || {}).tr || '').trim();
+  if (!tr) { res.status(400).json({ data: null, error: { message: 'tr é obrigatório.' } }); return null; }
+  return { quem, tr, setorial_id: (req.body || {}).setorial_id || 'FCEE' };
+}
+
+app.post('/ci/tr/assumir', async (req, res) => {
+  try {
+    const g = await guardaCi(req, res); if (!g) return;
+    const r = await ciFila.assumir(pool, g);
+    if (!r.ok)
+      return res.status(409).json({ data: null, error: {
+        message: r.jaTem ? `${r.jaTem.tecnico_nome} assumiu esta TR primeiro — recarregue a tela.`
+                         : 'Esta TR já tem responsável.' } });
+    res.json({ data: r.linha, error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
+app.post('/ci/tr/devolver', async (req, res) => {
+  try {
+    const g = await guardaCi(req, res); if (!g) return;
+    const erro = ciFila.validarMotivo(req.body.motivo);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    const r = await ciFila.devolver(pool, { ...g, motivo: req.body.motivo });
+    if (!r.ok)
+      return res.status(409).json({ data: null, error: { message: 'Esta TR já está livre — recarregue a tela.' } });
+    res.json({ data: { devolvida: g.tr, era_de: r.antigo.tecnico_nome }, error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
+app.post('/ci/tr/passar', async (req, res) => {
+  try {
+    const g = await guardaCi(req, res); if (!g) return;
+    const erro = ciFila.validarMotivo(req.body.motivo);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    // ⚠️ O DESTINO É CONFERIDO CONTRA O BANCO, pela MESMA fonte de "quem é do C.I.". Sem isto
+    // daria para passar a demanda para um analista qualquer, e ela sumiria da fila do C.I.
+    // sem sair do ciclo — órfã, que é o estado que esta tela existe para acabar.
+    const d = await lerUsuario(pool, req.body.destino_id);
+    if (!d || papel.perfilEfetivo(d) !== 'controle_interno' || !d.ativo)
+      return res.status(400).json({ data: null, error: { message: 'O destino precisa ser um técnico ativo do Controle Interno.' } });
+    if (d.id === g.quem.id)
+      return res.status(400).json({ data: null, error: { message: 'Para ficar com a TR, use Assumir.' } });
+
+    const r = await ciFila.passar(pool, { ...g, destino: d, motivo: req.body.motivo });
+    // O destino é avisado no sino: passar a demanda sem contar a quem recebeu é o mesmo
+    // buraco do retorno do C.I. que 24/08 fechou do outro lado.
+    notif.criar(pool, {
+      destinatario_id: d.id, tipo: 'recado',
+      titulo: `C.I. — você recebeu a TR ${g.tr}`,
+      mensagem: `${g.quem.nome} passou a demanda para você.\n\nMotivo: ${String(req.body.motivo).trim()}`,
+      link: '#ci', ref_tipo: 'tr', ref_id: `${g.tr}|ci_passou|${d.id}|${Date.now()}`,
+    }).catch(() => {});
+    res.json({ data: { tr: g.tr, agora_com: d.nome, era_de: r.antigo ? r.antigo.tecnico_nome : null }, error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
 });
 
 // POST /ci/decidir  body { codigos_pc[], decisao: 'de_acordo'|'ressalva', texto?, autor_id }

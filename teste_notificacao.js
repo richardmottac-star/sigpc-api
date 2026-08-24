@@ -14,6 +14,9 @@
 const N = require('./lib/notificacao');
 const J = require('./job_notificacoes');
 const D = require('./lib/datas');
+// A notificação das decisões do C.I. mora na ROTA, não numa lib — então o teste dela lê o
+// `server.js` como texto, que é o padrão das travas de rota deste repositório.
+const fs = require('fs');
 
 let ok = 0, falhou = 0;
 const conf = (passou, rotulo, detalhe) => {
@@ -236,6 +239,70 @@ function db(resposta) {
     const comCoord = { query: async (sql) => /coordenador/.test(sql) ? { rows: [{ id: 8 }] } : { rows: [{ id: 4 }] } };
     const r2 = await N.coordenadoresDoGrupo(comCoord, '1');
     conf(r2.length === 1 && r2[0] === 8, 'havendo coordenador, o superadmin nao e incomodado');
+  }
+
+  console.log('\n═══ 8. AS DUAS DECISOES DO C.I. AVISAM (24/08/2026) ═══');
+  {
+    // ⚠️ O DEFEITO QUE ISTO FECHA: ate 24/08 so a devolucao notificava. Medido no banco no
+    // mesmo dia — 1.736 PCs `encerrado` no ciclo do C.I. e ZERO notificacao de "de acordo".
+    // O analista encaminhava, a parcela sumia da vista dele, e o desfecho bom nao chegava.
+    const src = fs.readFileSync('./server.js', 'utf8');
+    const i = src.indexOf("app.post('/ci/decidir'");
+    const rota = src.slice(i, src.indexOf('\n});', i));
+    conf(i > 0, 'a rota POST /ci/decidir foi localizada');
+
+    // O gate que existia. Se ele voltar, o "de acordo" volta a ser silencioso.
+    conf(!/if \(b\.decisao === 'ressalva'\) \{[\s\S]{0,80}?for \(const g of ci\.agruparPorParcela/.test(rota),
+         'o laco de notificacao NAO esta mais dentro de um if de ressalva');
+    conf(/for \(const g of ci\.agruparPorParcela\(pcs\)\)/.test(rota),
+         'e roda para toda decisao, agrupado por encaminhamento');
+
+    conf(/'C\.I\. aprovou' : 'C\.I\. devolveu'/.test(rota), 'os dois titulos existem');
+    conf(/titulo: `\$\{aprovou \? 'C\.I\. aprovou' : 'C\.I\. devolveu'\} · \$\{g\.tr\}`/.test(rota),
+         'e a TR entra no titulo, dos dois lados');
+    conf(/Decidido por \$\{autor\.nome\}/.test(rota), 'a mensagem diz quem do C.I. decidiu');
+    conf(/O que o C\.I\. pediu:/.test(rota), 'e a devolucao rotula a manifestacao');
+
+    // ⚠️ O LINK LEVA A PARCELA. `#planilha` puro abria a tela inteira e deixava a pessoa
+    // procurar entre 54 TRs qual delas voltou.
+    conf(/link: `#planilha:\$\{g\.tr\}:\$\{g\.parcial_num\}`/.test(rota),
+         'o link carrega TR e parcela');
+
+    // ⚠️ AS DUAS FAMILIAS DE ref_id SAO DIFERENTES, e o +1 so existe de um lado: `ci.decidir`
+    // ja subiu `ci_rodada` no banco para a devolucao, mas `g.rodada` foi lido ANTES do UPDATE.
+    // Sem essa diferenca, aprovar depois de uma devolucao na mesma rodada seria engolido pelo
+    // dedupe — e o analista nunca saberia que a parcela fechou.
+    conf(/ci_de_acordo\|\$\{g\.rodada \|\| 1\}/.test(rota), 'o de acordo usa a rodada lida');
+    conf(/ci_ressalva\|\$\{\(g\.rodada \|\| 1\) \+ 1\}/.test(rota), 'e a devolucao usa a rodada +1');
+    conf(/tipo: aprovou \? 'aprovacao' : 'diligencia'/.test(rota),
+         'o que exige acao e diligencia; o que so informa e aprovacao');
+
+    // A baixa nao e tocada em caminho nenhum do ciclo — vale para o bloco novo tambem.
+    conf(!/baixada|data_baixa|enviado_ci/.test(rota.slice(rota.indexOf('agruparPorParcela'))),
+         'o bloco de notificacao nao menciona baixada, data_baixa nem enviado_ci');
+  }
+
+  console.log('\n═══ 9. O PRAZO DA DILIGENCIA JA AVISA NAS TRES FAIXAS ═══');
+  {
+    // Isto ja existia antes de 24/08 — o teste esta aqui para que continue existindo.
+    conf(J.DILIG_AVISO_PREVIO === 3, 'avisa 3 dias antes de vencer', String(J.DILIG_AVISO_PREVIO));
+    const previo = J.montarAvisoDiligencia({ codigo_pc:'2022PC000456', tr:'2020TR000739', analista_id:9,
+      entidade:'APAE', prazo_diligencia:new Date(2026,7,27), dias:3, faixa:'previo' });
+    conf(/vence em 3 dias/i.test(previo.titulo), 'o aviso previo diz quantos dias faltam', previo.titulo);
+    conf(previo.urgente === false, 'e nao e urgente — ainda da tempo');
+
+    const hoje = J.montarAvisoDiligencia({ codigo_pc:'2022PC000456', tr:'2020TR000739', analista_id:9,
+      entidade:'APAE', prazo_diligencia:new Date(2026,7,24), dias:0, faixa:'hoje' });
+    conf(/vence hoje/i.test(hoje.titulo), 'no dia do vencimento avisa de novo', hoje.titulo);
+    conf(hoje.urgente === true, 'e esse e urgente');
+
+    // ⚠️ AS TRES FAIXAS TEM ref_id DIFERENTE. Com a chave so no codigo_pc, o aviso do dia
+    // seria engolido pelo de 3 dias antes e nunca sairia.
+    conf(previo.ref_id !== hoje.ref_id, 'as duas faixas nao se engolem no dedupe');
+    conf(/\|dilig-previo\|/.test(previo.ref_id) && /\|dilig-hoje\|/.test(hoje.ref_id),
+         'e a faixa aparece na chave');
+    conf(/2026-08-27/.test(previo.ref_id),
+         'o prazo entra na chave: cada RODADA de diligencia avisa por conta propria', previo.ref_id);
   }
 
   console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

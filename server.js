@@ -2046,21 +2046,50 @@ app.post('/ci/decidir', async (req, res) => {
       return res.status(409).json({ data: null, error: { message: 'Estas PCs já saíram da fila — recarregue a tela.' } });
 
     // Uma notificação POR ENCAMINHAMENTO. Ver o comentário de `agruparPorParcela`.
-    if (b.decisao === 'ressalva') {
-      for (const g of ci.agruparPorParcela(pcs)) {
-        if (!g.analista_id) continue;
-        await notif.criar(pool, {
-          destinatario_id: g.analista_id,
-          tipo: 'diligencia',
-          titulo: 'Controle Interno devolveu com ressalvas',
-          mensagem: `${g.tr} · Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
-                    `${g.entidade ? ` (${g.entidade})` : ''}.\n\n${String(b.texto || '').trim()}`,
-          link: '#planilha', ref_tipo: 'pc',
-          // ⚠️ A rodada no ref_id é o que faz a SEGUNDA volta avisar. Sem ela o dedupe
-          // leria a devolução nova como repetição da primeira. Lição do `num_diligencia`.
-          ref_id: `${g.pcs[0]}|ci_ressalva|${(g.rodada || 1) + 1}`,
-        });
-      }
+    //
+    // ⚠️ AS DUAS DECISÕES AVISAM — a de acordo passou a avisar em 24/08/2026.
+    //
+    // Até aqui só a devolução notificava. Quem recebia "de acordo" não ficava sabendo de
+    // nada: a parcela saía da fila do C.I. em silêncio, e o analista só descobria abrindo a
+    // tela por conta própria. É o mesmo buraco dos dois lados — ele encaminha, a parcela some
+    // da vista dele, e o retorno não chega. Encerrar bem é notícia tanto quanto voltar.
+    for (const g of ci.agruparPorParcela(pcs)) {
+      if (!g.analista_id) continue;
+      const aprovou = b.decisao === 'de_acordo';
+      const manif = String(b.texto || '').trim();
+      const onde = `Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
+                   `${g.entidade ? ` (${g.entidade})` : ''}.`;
+      const quem = `Decidido por ${autor.nome}.`;
+      // ⚠️ A manifestação da devolução leva rótulo, a da aprovação não. Na devolução ela é o
+      // que diz o que corrigir — sem o rótulo, o texto se confunde com o resto do recado. E
+      // ela é obrigatória ali (`ci.validar`); no de acordo pode não existir.
+      const corpo = aprovou
+        ? [onde, quem].concat(manif ? [manif] : []).join('\n\n')
+        : [onde, quem, 'O que o C.I. pediu:\n' + manif].join('\n\n');
+
+      await notif.criar(pool, {
+        destinatario_id: g.analista_id,
+        // 'aprovacao' e 'diligencia' são dois dos quatro tipos de `lib/notificacao.js`. O que
+        // exige ação do analista é diligência; o que só informa o desfecho é aprovação.
+        tipo: aprovou ? 'aprovacao' : 'diligencia',
+        titulo: `${aprovou ? 'C.I. aprovou' : 'C.I. devolveu'} · ${g.tr}`,
+        mensagem: corpo,
+        // ⚠️ O LINK LEVA À PARCELA, não à tela. `#planilha` sozinho abria a Minha Planilha
+        // inteira e deixava a pessoa procurar entre 54 TRs qual delas voltou. O formato é
+        // `#planilha:{tr}:{parcial}`, e quem o lê é o `sinoClicar` do index.html.
+        link: `#planilha:${g.tr}:${g.parcial_num}`,
+        ref_tipo: 'pc',
+        // ⚠️ A rodada no ref_id é o que faz a SEGUNDA volta avisar. Sem ela o dedupe
+        // leria a devolução nova como repetição da primeira. Lição do `num_diligencia`.
+        //
+        // ⚠️ E A DEVOLUÇÃO SOMA 1 ENQUANTO A APROVAÇÃO NÃO. Não é descuido: `ci.decidir` já
+        // subiu `ci_rodada` no banco para a devolução, mas `g.rodada` veio da leitura feita
+        // ANTES do UPDATE — o +1 alcança o valor novo. O de acordo não mexe na rodada, então
+        // usar o valor lido é usar o valor certo.
+        ref_id: aprovou
+          ? `${g.pcs[0]}|ci_de_acordo|${g.rodada || 1}`
+          : `${g.pcs[0]}|ci_ressalva|${(g.rodada || 1) + 1}`,
+      });
     }
     res.json({ data: { afetadas: pcs.length }, error: null });
   } catch (e) {

@@ -1,0 +1,42 @@
+{
+  "o_que": "mesclagem do cadastro 73 no 49",
+  "quando": "2026-08-24T12:35:39.088Z",
+  "apagado": {
+    "id": 73,
+    "nome": "SCHEILA ZIMMERMANN FURTADO",
+    "cpf": "058.835.709-09",
+    "email": "scheilazf@fcee.sc.gov.br",
+    "telefone": "48999338165",
+    "setorial_id": "FCEE",
+    "perfil": "analista",
+    "ativo": false,
+    "aguardando_aprovacao": true,
+    "senha_provisoria": false,
+    "criado_em": "2026-08-21T19:32:23.813Z"
+  },
+  "alterado": {
+    "id": 49,
+    "antes": {
+      "nome": "Scheila",
+      "cpf": null,
+      "email": null,
+      "telefone": null,
+      "senha_provisoria": true
+    },
+    "depois": {
+      "cpf": "058.835.709-09",
+      "email": "scheilazf@fcee.sc.gov.br",
+      "telefone": "48999338165",
+      "senha_hash": "(a senha escolhida no Primeiro Acesso)",
+      "senha_provisoria": false,
+      "nome": "Scheila Zimmermann Furtado"
+    }
+  },
+  "nao_tocado": {
+    "pcs": 161,
+    "baixas": 134,
+    "md5_acervo": "7f396e0f5051903f9c592ae0fbd549bb",
+    "md5_demais_usuarios": "56da01555c1e77bceea3627385a76521"
+  },
+  "atencao": "os dois senha_hash (o antigo do 49 e o do 73) NAO estao aqui, de proposito. Sem eles a reversao da senha nao e possivel — ver o arquivo de hashes fora do repositorio."
+}

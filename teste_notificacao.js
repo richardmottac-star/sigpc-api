@@ -241,6 +241,40 @@ function db(resposta) {
     conf(r2.length === 1 && r2[0] === 8, 'havendo coordenador, o superadmin nao e incomodado');
   }
 
+  console.log('\n═══ 7-B. QUEM PODE LER AS NOTIFICACOES DE QUEM (24/08/2026) ═══');
+  {
+    // ⚠️ ATE HOJE NINGUEM CONFERIA. `GET /notificacao?destinatario_id=X` devolvia a caixa de
+    // qualquer pessoa a quem soubesse um id — sem senha, sem sessao. Medido contra a producao
+    // no mesmo dia: a chamada crua trouxe os avisos da Sandra (id 19), com TR, entidade e
+    // prazo. Estava nas Pendencias desde 13/08 e nada explorava, porque o front sempre
+    // mandava o PROPRIO id — ate o sino passar a seguir o `alvo()`.
+    const sandra   = { id: 19, perfil: 'analista',    papel_ativo: 'analista' };
+    const coord    = { id: 56, perfil: 'coordenador', papel_ativo: 'analista' };
+    const tecnico  = { id: 4,  perfil: 'superadmin',  papel_ativo: 'tecnico'  };
+    const analistaSA = { id: 4, perfil: 'superadmin', papel_ativo: 'analista' };
+
+    conf(N.podeLer(sandra, 19) === true, 'a pessoa le as PROPRIAS');
+    conf(N.podeLer(sandra, 4) === false, 'e nao le as de outro');
+    conf(N.podeLer(tecnico, 19) === true, 'o superadmin le as de qualquer um');
+    conf(N.podeLer(coord, 56) === true, 'o coordenador le as dele');
+    // ⚠️ O COORDENADOR NAO LE AS DO GRUPO — decisao do Richard. Ele decide sobre pedidos e ve
+    // a produtividade do grupo, mas a caixa de avisos e pessoal: tem recado do sininho e
+    // assunto que nao e dele.
+    conf(N.podeLer(coord, 19) === false, 'mas NAO as do analista do grupo dele');
+
+    // ⚠️ `perfilEfetivo`, e nao `perfil` cru — a regra unica das rotas desde 14/08.
+    conf(N.podeLer(analistaSA, 19) === false,
+         'o superadmin NO PAPEL ANALISTA nao le as de outro');
+    conf(N.podeLer(analistaSA, 4) === true, 'mas continua lendo as dele');
+    // Isso casa com o modo "agir pela conta de", que ja exige papel tecnico: quem consegue
+    // entrar no modo consegue ler, e quem nao consegue, nao.
+
+    conf(N.podeLer(null, 19) === false, 'sem usuario nenhum, ninguem le');
+    conf(N.podeLer(sandra, null) === false, 'sem destinatario, ninguem le');
+    conf(N.podeLer(sandra, 0) === false, 'id zero nao vira coringa');
+    conf(N.podeLer({ ...sandra, id: '19' }, '19') === true, 'id como texto tambem casa');
+  }
+
   console.log('\n═══ 8. AS DUAS DECISOES DO C.I. AVISAM (24/08/2026) ═══');
   {
     // ⚠️ O DEFEITO QUE ISTO FECHA: ate 24/08 so a devolucao notificava. Medido no banco no

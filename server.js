@@ -1732,9 +1732,23 @@ app.delete('/faixa_aviso/:id', async (req, res) => {
 // GET /notificacao?destinatario_id=X&limite=15
 app.get('/notificacao', async (req, res) => {
   try {
-    const { destinatario_id, limite, apenas_nao_lidas } = req.query;
+    const { destinatario_id, usuario_id, limite, apenas_nao_lidas } = req.query;
     if (!destinatario_id)
       return res.status(400).json({ data: null, error: { message: 'destinatario_id é obrigatório' } });
+
+    // ⚠️ QUEM PEDE É LIDO DO BANCO, pelo `usuario_id` — nunca do que vem na query. A regra
+    // mora em `notif.podeLer`: a pessoa lê as próprias, o superadmin lê as de qualquer um, e
+    // coordenador e analista só as próprias.
+    //
+    // ⚠️ ATÉ 24/08/2026 ESTA ROTA NÃO CONFERIA NADA. Quem soubesse um id lia a caixa de
+    // qualquer pessoa, sem credencial — medido contra a produção. `usuario_id` é obrigatório
+    // de propósito: aceitá-lo como opcional deixaria a fresta aberta para quem simplesmente
+    // não o mandasse, que é o mesmo buraco com um passo a mais.
+    const quem = await lerUsuario(pool, usuario_id);
+    if (!notif.podeLer(quem, destinatario_id))
+      return res.status(quem ? 403 : 401).json({ data: null, error: {
+        message: quem ? 'Você só pode ler as suas notificações.' : 'usuario_id é obrigatório.' } });
+
     const id = parseInt(destinatario_id);
     // O sino pede só as não lidas; "ver todas" pede tudo. `nao_lidas` vem nos dois casos,
     // porque é o contador do cabeçalho e ele não depende do que a lista mostra.

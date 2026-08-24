@@ -185,6 +185,38 @@ setTimeout(async () => {
       }
     }
 
+    console.log('\n═══ 8-A. GET /notificacao CONFERE QUEM PEDE (24/08/2026) ═══');
+    {
+      // ⚠️ O DUBLE responde a linha do usuario 57 (ZZ TESTE TRAVA, analista) para o id 57 e
+      // rows vazio para qualquer outro id — entao `lerUsuario` devolve o analista, e a regra
+      // de `notif.podeLer` decide.
+      const sem = await pedir('/notificacao?destinatario_id=57');
+      conf(sem.status === 401, 'sem usuario_id: 401, e nao a caixa de alguem', `status ${sem.status}`);
+      conf(!/titulo/.test(sem.texto), 'e nao vaza notificacao nenhuma');
+
+      const proprio = await pedir('/notificacao?destinatario_id=57&usuario_id=57');
+      conf(proprio.status === 200, 'lendo as PROPRIAS: 200', `status ${proprio.status}`);
+
+      // ⚠️ O ANALISTA PEDINDO A CAIXA DE OUTRO. Era exatamente isto que a rota entregava sem
+      // perguntar nada — medido contra a producao com o id 19, a Sandra.
+      const alheia = await pedir('/notificacao?destinatario_id=19&usuario_id=57');
+      conf(alheia.status === 403, 'analista pedindo a de outro: 403', `status ${alheia.status}`);
+      conf(!/titulo|mensagem/.test(alheia.texto), 'e a resposta nao traz conteudo nenhum');
+
+      // ⚠️ E O `perfil` NA QUERY NAO AJUDA: quem decide e o perfil lido do BANCO.
+      const mentindo = await pedir('/notificacao?destinatario_id=19&usuario_id=57&perfil=superadmin');
+      conf(mentindo.status === 403, 'declarar-se superadmin na query nao abre a caixa de ninguem',
+           `status ${mentindo.status}`);
+
+      // Usuario que nao existe: 401, e nao 500.
+      const fantasma = await pedir('/notificacao?destinatario_id=57&usuario_id=99999');
+      conf(fantasma.status === 401, 'usuario_id inexistente: 401', `status ${fantasma.status}`);
+
+      // ⚠️ E o 400 de sempre continua vindo antes de tudo.
+      const semDest = await pedir('/notificacao?usuario_id=57');
+      conf(semDest.status === 400, 'sem destinatario_id: 400', `status ${semDest.status}`);
+    }
+
     console.log('\n═══ 8-B. AS ROTAS DA FILA DO C.I. EXISTEM E SAO GUARDADAS (24/08/2026) ═══');
     {
       // ⚠️ ISTO E O QUE O DUBLE NAO PEGA: duble nao roteia. A armadilha 13 nasceu assim —

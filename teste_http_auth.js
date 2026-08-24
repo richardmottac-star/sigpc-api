@@ -185,6 +185,41 @@ setTimeout(async () => {
       }
     }
 
+    console.log('\n═══ 8-B. AS ROTAS DA FILA DO C.I. EXISTEM E SAO GUARDADAS (24/08/2026) ═══');
+    {
+      // ⚠️ ISTO E O QUE O DUBLE NAO PEGA: duble nao roteia. A armadilha 13 nasceu assim —
+      // `/usuarios/pendentes` declarada depois de `/usuarios/:id` caiu nela em producao com
+      // HTTP 500, e os 220 testes com duble passavam. Aqui o servidor sobe de verdade.
+      //
+      // 404 significaria rota inexistente ou engolida por outra; 403 prova que ela existe,
+      // foi alcancada, e que a guarda rodou.
+      const g = await pedir('/ci/fila_trabalho?usuario_id=57');
+      conf(g.status === 403, 'GET /ci/fila_trabalho existe e recusa quem nao e do C.I.', `status ${g.status}`);
+      conf(/Controle Interno/.test(g.texto), 'e a recusa diz de quem e a fila');
+
+      // ⚠️ O ANALISTA E RECUSADO MESMO MANDANDO O PROPRIO id: quem decide e o perfil LIDO DO
+      // BANCO, nunca o que vem no pedido. Quatro rotas deste servidor ja confiaram no corpo.
+      const s = await pedir('/ci/fila_trabalho?usuario_id=57&perfil=controle_interno');
+      conf(s.status === 403, 'e mandar perfil na query nao ajuda ninguem a entrar', `status ${s.status}`);
+
+      // Sem usuario nenhum: 403 tambem, e nao 500.
+      const v = await pedir('/ci/fila_trabalho');
+      conf(v.status === 403, 'sem usuario_id devolve 403, e nao estoura', `status ${v.status}`);
+
+      for (const acao of ['assumir', 'devolver', 'passar']) {
+        const r = await pedir(`/ci/tr/${acao}`, { method: 'POST', body: JSON.stringify({ tr: '2020TR000657', usuario_id: 57 }) });
+        conf(r.status === 403, `POST /ci/tr/${acao} existe e e guardada`, `status ${r.status}`);
+        conf(!/Cannot POST/.test(r.texto), `e nao caiu no 404 do Express`);
+      }
+
+      // ⚠️ `/ci/tr/...` NAO PODE SER ENGOLIDA por `/ci/fila` nem por `/ci/decidir`: nenhuma
+      // delas tem parametro de rota, mas se um dia alguem declarar `/ci/:algo` antes, estas
+      // tres passam a cair la. O teste acima quebra no dia em que isso acontecer.
+      const src = require('fs').readFileSync('./server.js', 'utf8');
+      conf(!/app\.(get|post|patch)\('\/ci\/:/.test(src),
+           'nao ha rota /ci/:param que possa engolir /ci/tr/...');
+    }
+
     console.log('\n═══ 9. COMPRESSAO ═══');
     {
       // corpo pequeno não é comprimido por padrão (limiar de 1KB), então o que se confere é

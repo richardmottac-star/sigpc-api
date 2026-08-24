@@ -60,8 +60,11 @@ console.log('\n═══ 1. QUEM PODE MEXER NA FILA ═══');
   conf(CF.podeAgir(RICHARD) === true, 'superadmin tambem, sem restricao');
   conf(CF.podeAgir(ANALISTA) === false, 'analista NAO');
   conf(CF.podeAgir(null) === false, 'ninguem logado, ninguem mexe');
-  conf(CF.podeAgir({ ...ANALISTA, perfil: 'coordenador' }) === false,
-       'coordenador tambem nao — a fila e do C.I.');
+  // ⚠️ O COORDENADOR ENTROU EM 24/08/2026 — decisao do Richard: ele e o superadmin veem a
+  // Fila COMO os tecnicos. Antes desta linha ele via o item de menu, clicava e lia
+  // 'Esta fila e do Controle Interno': tela que aceita ser aberta e nao responde.
+  conf(CF.podeAgir({ ...ANALISTA, perfil: 'coordenador' }) === true,
+       'coordenador PODE — o menu abre a Fila para ele');
   // ⚠️ O SUPERADMIN NO PAPEL ANALISTA E ANALISTA EM TODA PARTE (regra unica de 14/08).
   conf(CF.podeAgir({ ...RICHARD, papel_ativo: 'analista' }) === false,
        'o superadmin no papel analista NAO mexe na fila do C.I.');

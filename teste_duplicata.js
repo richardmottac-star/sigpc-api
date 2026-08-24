@@ -16,6 +16,9 @@
 // USO: node teste_duplicata.js
 
 const D = require('./lib/duplicata');
+// O rotulo curto do acervo tem um dono so — e o teste do nome confere contra ELE, nao contra
+// uma copia da regra escrita aqui dentro.
+const as = require('./lib/assumir');
 const fs = require('fs');
 
 let ok = 0, falhou = 0;
@@ -141,6 +144,94 @@ console.log('\n═══ 7. O PLANO DA MESCLAGEM ═══');
   conf(!!D.planoMesclagem(null, franVelha).erro, 'nulo nao quebra');
 }
 
+console.log('\n═══ 7-B. A SENHA VAI JUNTO (24/08/2026) ═══');
+{
+  // ⚠️ O CASO REAL: a Scheila se cadastrou em 21/08 e escolheu uma senha. Ate 24/08 essa
+  // senha morria no DELETE, e ela teria de entrar na conta antiga com uma senha provisoria
+  // que ninguem lhe disse. Agora a senha do cadastro NOVO passa a valer na conta que fica.
+  const comSenha = { ...franNova, senha_hash: '$2b$10$hashDoNovo', senha_provisoria: false };
+  const velhoProv = { ...franVelha, senha_hash: '$2b$10$hashAntigo', senha_provisoria: true };
+  const p = D.planoMesclagem(comSenha, velhoProv);
+  conf(p.copiar.senha_hash === '$2b$10$hashDoNovo',
+       'copia a senha do cadastro novo POR CIMA da do antigo');
+  conf(p.copiar.senha_provisoria === false,
+       'e leva senha_provisoria junto — nao adianta copiar a senha e mandar troca-la');
+
+  // ⚠️ Senha vazia NAO e copiada: `null` por cima trancaria a pessoa do lado de fora.
+  const semSenhaNova = { ...franNova, senha_hash: null };
+  const p2 = D.planoMesclagem(semSenhaNova, velhoProv);
+  conf(p2.copiar.senha_hash === undefined, 'NAO copia senha vazia por cima da que existe');
+  conf(/senha/.test(p2.naoCopiado.senha_hash || ''), 'e diz por que nao copiou');
+
+  // ⚠️ ARMADILHA 8: o hash nao pode sair do servidor nem dentro do "copiado".
+  const dito = D.semSenha(p.copiar);
+  conf(dito.senha_hash === '(a senha escolhida no Primeiro Acesso)',
+       'semSenha troca o hash por um rotulo', String(dito.senha_hash));
+  conf('senha_hash' in dito, 'mas a chave fica — e ela que a tela conta');
+  conf(p.copiar.senha_hash === '$2b$10$hashDoNovo', 'e o plano original nao e alterado');
+}
+
+console.log('\n═══ 7-C. O NOME COMPLETO — SO QUANDO O ROTULO DO ACERVO NAO MUDA ═══');
+{
+  // A CAIXA. "SCHEILA ZIMMERMANN FURTADO" veio do CAPS LOCK no Primeiro Acesso; copiado como
+  // veio, `nomeCurto` gravaria "SCHEILA" nas PCs futuras contra as 161 que dizem "Scheila".
+  conf(D.nomeExibicao('SCHEILA ZIMMERMANN FURTADO') === 'Scheila Zimmermann Furtado',
+       'nome todo em maiusculas vira caixa mista', D.nomeExibicao('SCHEILA ZIMMERMANN FURTADO'));
+  conf(D.nomeExibicao('MARIA DA SILVA DOS SANTOS') === 'Maria da Silva dos Santos',
+       'e as particulas ficam minusculas', D.nomeExibicao('MARIA DA SILVA DOS SANTOS'));
+  conf(D.nomeExibicao('Ana Letícia Wloch de Oliveira') === 'Ana Letícia Wloch de Oliveira',
+       'nome que ja veio em caixa mista passa INTACTO');
+  conf(D.nomeExibicao('  Rita   Inês  Martini ') === 'Rita Inês Martini', 'e o espaco sobrando some');
+
+  // O caso da Scheila, com os dados reais de 24/08.
+  const scheilaVelha = { id:49, nome:'Scheila', cpf:null, grupo:'3', pcs:161, baixas:134 };
+  const scheilaNova  = { id:73, nome:'SCHEILA ZIMMERMANN FURTADO', cpf:'058.835.709-09',
+                         email:'scheilazf@fcee.sc.gov.br', pcs:0, aguardando_aprovacao:true,
+                         senha_hash:'$2b$10$x', senha_provisoria:false };
+  const ps = D.planoMesclagem(scheilaNova, scheilaVelha);
+  conf(ps.copiar.nome === 'Scheila Zimmermann Furtado', 'copia o nome completo da Scheila', String(ps.copiar.nome));
+  conf(as.nomeCurto(ps.copiar.nome) === 'Scheila',
+       'e o rotulo do acervo continua "Scheila" — as 161 PCs nao ficam orfas',
+       as.nomeCurto(ps.copiar.nome || ''));
+
+  // ⚠️ A CONDICAO. Se o rotulo curto mudasse, o acervo ficaria com dois nomes para a mesma
+  // pessoa — a armadilha 1 do CLAUDE.md — e nenhuma consulta daria erro para avisar.
+  const pc = D.planoMesclagem({ ...anaClaudia, nome:'Ana Claudia Carvalho Costa', pcs:0,
+                                aguardando_aprovacao:true, cpf:null }, claudia);
+  conf(pc.copiar.nome === undefined, 'NAO troca "Claudia" por "Ana Claudia Carvalho Costa"');
+  conf(/Ana Claudia/.test(pc.naoCopiado.nome || ''),
+       'e o motivo diz qual rotulo mudaria', pc.naoCopiado.nome || '');
+
+  // ⚠️ O ROTULO MEDIDO VENCE A DEDUCAO — e foi este teste que mostrou por que.
+  //
+  // Com o cadastro antigo escrito "Ana Leticia", `nomeCurto` DEDUZ "Ana" (split do primeiro
+  // nome), mas as 149 PCs dela dizem "Ana Leticia". Comparando contra a deducao, a mesclagem
+  // recusaria uma troca que na verdade CONSERTA o rotulo das PCs futuras.
+  const semMedida = D.planoMesclagem({ ...letNova, senha_hash:'$2b$10$y' }, letVelha);
+  conf(semMedida.copiar.nome === undefined,
+       'sem o rotulo do acervo a funcao e conservadora e nao troca o nome');
+  conf(/"Ana"/.test(semMedida.naoCopiado.nome || ''),
+       'e o motivo mostra a deducao que causou a recusa', semMedida.naoCopiado.nome || '');
+
+  const pl = D.planoMesclagem({ ...letNova, senha_hash:'$2b$10$y' }, letVelha, 'Ana Leticia');
+  conf(pl.copiar.nome === 'Ana Letícia Wloch de Oliveira',
+       'com o rotulo medido no acervo ("Ana Leticia"), a troca passa', String(pl.copiar.nome));
+  conf(as.nomeCurto(pl.copiar.nome || '') === 'Ana Leticia',
+       'e o MAPA_NOME devolve o mesmo rotulo depois da troca');
+
+  // E o rotulo medido tambem RECUSA, quando e o caso: acervo "Claudia" x nome "Ana Claudia...".
+  const pcm = D.planoMesclagem({ ...anaClaudia, nome:'Ana Claudia Carvalho Costa', pcs:0,
+                                 aguardando_aprovacao:true, cpf:null }, claudia, 'Claudia');
+  conf(pcm.copiar.nome === undefined, 'o rotulo medido nao afrouxa a trava — so a torna exata');
+
+  // Nunca ENCURTA o que o cadastro ja tem.
+  const pe = D.planoMesclagem({ ...franNova, nome:'Franciani' },
+                              { ...franVelha, nome:'Franciani Mary Daniel Pereira' });
+  conf(pe.copiar.nome === undefined, 'NAO substitui o nome completo do antigo por um mais curto');
+  conf(D.planoMesclagem(franNova, { ...franVelha, nome:'Franciani' }).copiar.nome ===
+       'Franciani Mary Daniel Pereira', 'mas o curto vira completo quando pode');
+}
+
 console.log('\n═══ 8. TRAVAS NO server.js ═══');
 {
   const src = fs.readFileSync('./server.js', 'utf8');
@@ -162,15 +253,18 @@ console.log('\n═══ 8. TRAVAS NO server.js ═══');
   // A mesclagem apaga — e apagar so por id explicito.
   conf(/DELETE FROM usuarios WHERE id = \$1`, \[novo\.id\]/.test(src),
        'o DELETE e por id explicito, nunca por condicao derivada');
-  conf(/dup\.planoMesclagem\(novo, velho\)[\s\S]{0,200}?plano\.erro[\s\S]{0,120}?ROLLBACK/.test(src),
+  conf(/dup\.planoMesclagem\(novo, velho[^)]*\)[\s\S]{0,200}?plano\.erro[\s\S]{0,120}?ROLLBACK/.test(src),
        'e so acontece depois de o plano aprovar');
 
   // ⚠️ ORDEM: APAGA ANTES DE COPIAR. `usuarios` tem UNIQUE (cpf); copiar o CPF para a conta
   // antiga antes de apagar a nova deixa as duas com o mesmo CPF por um instante, e o
   // Postgres recusa com "duplicate key value violates unique constraint usuarios_cpf_key".
   // Aconteceu na primeira mesclagem real, em 12/08.
-  const bm = src.slice(src.indexOf("app.post('/usuarios/mesclar'"),
-                       src.indexOf("app.post('/usuarios/mesclar'") + 2600);
+  // ⚠️ A JANELA E POR TAMANHO, e a rota cresce. Em 24/08 ela passou de 2600 caracteres com os
+  // comentarios da senha e do rotulo do acervo, e este teste acusou "update em -1" — falha
+  // que era do teste, nao do codigo. Fecha-se no fim da rota, nao num numero chutado.
+  const iRota = src.indexOf("app.post('/usuarios/mesclar'");
+  const bm = src.slice(iRota, src.indexOf("\n});", iRota));
   const iDel = bm.indexOf('DELETE FROM usuarios WHERE id = $1');
   const iUpd = bm.indexOf('UPDATE usuarios SET ${sets.join');
   conf(iDel > 0 && iUpd > 0 && iDel < iUpd,
@@ -178,6 +272,19 @@ console.log('\n═══ 8. TRAVAS NO server.js ═══');
        `delete em ${iDel}, update em ${iUpd}`);
   conf(/FOR UPDATE/.test(src.slice(src.indexOf("app.post('/usuarios/mesclar'"), src.indexOf("app.post('/usuarios/mesclar'") + 1400)),
        'as duas linhas sao travadas na transacao');
+
+  // ⚠️ ARMADILHA 8 — desde 24/08 o plano carrega `senha_hash`, e a resposta da rota nao pode
+  // devolve-lo. `copiado: plano.copiar` cru mandaria o bcrypt da pessoa pela resposta HTTP.
+  conf(/copiado: dup\.semSenha\(plano\.copiar\)/.test(src),
+       'a resposta da mesclagem passa por dup.semSenha');
+  conf(!/copiado: plano\.copiar\b/.test(src),
+       'e o plano CRU nao chega mais a resposta');
+
+  // ⚠️ O rotulo do acervo e MEDIDO na mesma consulta travada, e entregue ao plano. Sem isto a
+  // trava do nome cai na deducao por `nomeCurto`, que erra nos tres casos do MAPA_NOME.
+  conf(/rotulo_acervo/.test(src), 'a consulta da mesclagem mede o rotulo do acervo');
+  conf(/dup\.planoMesclagem\(novo, velho, velho && velho\.rotulo_acervo\)/.test(src),
+       'e passa esse rotulo para o plano');
 
   // ⚠️ O FILTRO DE SETORIAL NAO PODE ESCONDER PENDENTE.
   // Em 12/08 a Marlene se cadastrou como "SED" — a unica SED de 56 pessoas — e sumiu da

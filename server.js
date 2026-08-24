@@ -551,6 +551,11 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
 //
 // Copia para o cadastro ANTIGO o que ele não tem (CPF, e-mail, telefone) e apaga o novo.
 // O antigo é o que carrega as PCs e as baixas — é ele que sobrevive, sempre.
+//
+// ⚠️ E DESDE 24/08/2026 COPIA TAMBÉM A SENHA E, SOB CONDIÇÃO, O NOME COMPLETO — o porquê de
+// cada um está em `lib/duplicata.js`. Consequência a não esquecer: a senha que passa a valer
+// na conta antiga é a do cadastro NOVO. Quem mescla o par errado não erra só o dado, dá
+// acesso — e o `avaliar` deste mesmo arquivo aponta candidato por nome, inclusive FRACO.
 app.post('/usuarios/mesclar', async (req, res) => {
   const cli = await pool.connect();
   try {
@@ -562,14 +567,22 @@ app.post('/usuarios/mesclar', async (req, res) => {
       return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin pode mesclar cadastros.' } });
 
     await cli.query('BEGIN');
+    // ⚠️ `rotulo_acervo` É O NOME QUE AS PCs DA PESSOA JÁ USAM — o `analista_nome` dominante
+    // daquele `analista_id`. É ele que decide se o nome completo pode entrar no cadastro sem
+    // partir o acervo em dois rótulos (ver `planoNome`). Medido, não deduzido: a dedução por
+    // `nomeCurto(usuarios.nome)` erra nos três casos do MAPA_NOME.
     const { rows } = await cli.query(`
-      SELECT u.*, (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs
+      SELECT u.*,
+             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
+             (SELECT analista_nome FROM prestacoes_contas
+               WHERE analista_id = u.id AND analista_nome IS NOT NULL
+               GROUP BY analista_nome ORDER BY COUNT(*) DESC, analista_nome LIMIT 1) AS rotulo_acervo
         FROM usuarios u WHERE u.id = ANY($1) FOR UPDATE`,
       [[parseInt(id_novo) || 0, parseInt(id_existente) || 0]]);
 
     const novo  = rows.find(u => u.id === parseInt(id_novo));
     const velho = rows.find(u => u.id === parseInt(id_existente));
-    const plano = dup.planoMesclagem(novo, velho);
+    const plano = dup.planoMesclagem(novo, velho, velho && velho.rotulo_acervo);
     if (plano.erro) {
       await cli.query('ROLLBACK');
       return res.status(409).json({ data: null, error: { message: plano.erro } });
@@ -598,7 +611,11 @@ app.post('/usuarios/mesclar', async (req, res) => {
 
     await cli.query('COMMIT');
 
-    res.json({ data: { copiado: plano.copiar, excluido: novo.id, mantido: velho.id }, error: null });
+    // ⚠️ `dup.semSenha` NÃO É ENFEITE. Desde 24/08 o plano carrega `senha_hash`, e devolver
+    // `plano.copiar` cru mandaria o bcrypt da pessoa pela resposta HTTP — exatamente o que a
+    // armadilha 8 do CLAUDE.md proíbe. A chave continua na resposta; o valor, não.
+    res.json({ data: { copiado: dup.semSenha(plano.copiar), nao_copiado: plano.naoCopiado || {},
+                       excluido: novo.id, mantido: velho.id }, error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });

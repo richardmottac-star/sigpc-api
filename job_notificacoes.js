@@ -20,7 +20,32 @@
 //   node job_notificacoes.js --dry-run       só mostra o que gravaria
 //   node job_notificacoes.js --limite=50     teto de avisos nesta passagem
 //
-// CRON no Railway: de hora em hora, ao lado do job_sgpe_links.
+// ⚠️⚠️ ESTE JOB NUNCA RODOU EM PRODUÇÃO. MEDIDO EM 24/08/2026.
+//
+// A linha que estava aqui dizia "CRON no Railway: de hora em hora, ao lado do
+// job_sgpe_links". Não é verdade, e a diferença é o recurso inteiro: sem alguém executando
+// este arquivo, nenhum aviso de prazo existe — o código está certo e não acontece.
+//
+// A PROVA, contra o banco:
+//   · `SELECT COUNT(*) FROM notificacao WHERE tipo = 'prazo'`            → 0
+//   · `SELECT COUNT(*) FROM notificacao WHERE ref_id LIKE '%|dilig-%'`   → 0
+//   · e havia 38 PCs em diligência DENTRO da faixa de aviso no mesmo instante.
+// As 280 notificações que existem no banco vieram todas de rotas, de cliques de gente.
+//
+// ⚠️ E O SILÊNCIO DO job_sgpe_links NÃO PROVA NADA sobre ele: a fila daquele job está em
+// ZERO (7.784 de 7.764 processos já resolvidos), então ele rodando ou não escreve a mesma
+// coisa — nada. Só este aqui tem trabalho pendente, e por isso só a ausência DELE é medível.
+//
+// O QUE FALTA CONFIGURAR (painel do Railway, não dá para fazer por código):
+//   Serviço novo no mesmo projeto, apontando para este repositório:
+//     Start Command  →  npm run job:notif
+//     Cron Schedule  →  0 * * * *          (de hora em hora)
+//   Serviço separado, e não um comando encadeado no cron do SGPe: assim uma falha de um não
+//   leva o outro junto, e cada um tem o próprio log.
+//
+// ⚠️ NA PRIMEIRA PASSAGEM saem 22 avisos de uma vez, para 11 analistas — a fila acumulada de
+// quem nunca foi avisado. Não é erro; é a dívida aparecendo. Para escalonar, `--limite=5`
+// nas primeiras rodadas.
 
 const { Pool } = require('pg');
 const { HOJE_BR } = require('./lib/datas');
@@ -189,31 +214,71 @@ function dataIso(d) {
   return String(d).slice(0, 10);
 }
 
-function montarAvisoDiligencia(pc) {
-  const onde = `${pc.codigo_pc}${pc.tr ? ` (TR ${pc.tr})` : ''} — ${pc.entidade || 'entidade não informada'}`;
-  const prazoIso = dataIso(pc.prazo_diligencia);
+/**
+ * UM AVISO POR PARCELA, NÃO POR PC.  (24/08/2026)
+ *
+ * ⚠️ O PRAZO DA DILIGÊNCIA É DA PARCELA, e a consulta devolve PCs. Sem agrupar, a mesma
+ * parcela vira um aviso por PC — todos com o mesmo texto, a mesma data e a mesma entidade.
+ *
+ * Medido no dia em que isto foi escrito, com o cron ainda desligado: **38 PCs na faixa de
+ * aviso viram 22 avisos** ao agrupar. A Cris (id 9) receberia CINCO avisos idênticos da
+ * parcela 7 da 2020TR000619; a Sandra Paul, QUATRO da parcela 6 da 2020TR000821.
+ *
+ * É o mesmo defeito que `ci.agruparPorParcela` já evita do outro lado, e pela mesma razão:
+ * um sino que enche de repetição para de ser lido. Corrigido ANTES de o cron ligar de
+ * propósito — depois de gravadas, as linhas soltas não se reagrupam.
+ *
+ * A chave é (analista, TR, parcela, faixa). A faixa entra porque o aviso de 3 dias antes e o
+ * do dia são dois avisos, não um repetido.
+ */
+function agruparDiligencias(pcs) {
+  const mapa = new Map();
+  (pcs || []).forEach(p => {
+    const k = `${p.analista_id}|${p.tr}|${p.parcial_num}|${p.faixa}`;
+    if (!mapa.has(k)) mapa.set(k, {
+      analista_id: p.analista_id, tr: p.tr, parcial_num: p.parcial_num, faixa: p.faixa,
+      entidade: p.entidade, setorial_id: p.setorial_id,
+      prazo_diligencia: p.prazo_diligencia, dias: p.dias, pcs: [],
+    });
+    mapa.get(k).pcs.push(p.codigo_pc);
+  });
+  return [...mapa.values()];
+}
+
+function montarAvisoDiligencia(g) {
+  const qtd = (g.pcs || []).length;
+  const onde = `${g.tr} · Parcela ${g.parcial_num}${qtd ? ` — ${qtd} PC${qtd > 1 ? 's' : ''}` : ''}` +
+               `${g.entidade ? ` (${g.entidade})` : ''}`;
+  const prazoIso = dataIso(g.prazo_diligencia);
   const prazoBr = prazoIso.split('-').reverse().join('/');
   const m = {
-    previo:   { t: `Diligência vence em ${pc.dias} dia${pc.dias === 1 ? '' : 's'}`,
+    previo:   { t: `Diligência vence em ${g.dias} dia${g.dias === 1 ? '' : 's'}`,
                 msg: `${onde}. Prazo dado à entidade: ${prazoBr}.`, urgente: false },
     hoje:     { t: 'Diligência vence hoje',
                 msg: `${onde}. É o último dia do prazo dado à entidade.`, urgente: true },
-    cobranca: { t: `Diligência vencida há ${Math.abs(pc.dias)} dias, sem resposta`,
+    cobranca: { t: `Diligência vencida há ${Math.abs(g.dias)} dias, sem resposta`,
                 msg: `${onde}. Venceu em ${prazoBr} e a entidade não respondeu.`, urgente: true },
-  }[pc.faixa];
+  }[g.faixa];
   return {
-    destinatario_id: pc.analista_id,
+    destinatario_id: g.analista_id,
     tipo: 'diligencia',
     urgente: m.urgente,
     titulo: m.t,
     mensagem: m.msg,
-    link: '#planilha',
+    // ⚠️ O LINK LEVA À PARCELA, no mesmo formato que a notificação do C.I. usa desde 24/08 —
+    // quem o lê é o `sinoClicar` do index.html. `#planilha` puro abria a tela inteira e
+    // deixava a pessoa procurar entre dezenas de TRs qual delas tem a diligência vencendo.
+    link: `#planilha:${g.tr}:${g.parcial_num}`,
     ref_tipo: 'pc',
+    // ⚠️ A CHAVE É A PARCELA, NÃO A PRIMEIRA PC DELA. Com `pcs[0]`, o dia em que aquela PC
+    // saísse do conjunto — baixada, por exemplo — a chave mudaria e a mesma parcela avisaria
+    // de novo, do zero. A parcela é o que não muda enquanto a diligência é a mesma.
+    //
     // O prazo entra na chave: cada RODADA de diligência avisa por conta própria, e a segunda
     // não é confundida com a primeira. A faixa também, senão o aviso do dia seria engolido
     // pelo de 3 dias antes.
-    ref_id: `${pc.codigo_pc}|dilig-${pc.faixa}|${prazoIso}`,
-    setorial_id: pc.setorial_id || null,
+    ref_id: `${g.tr}|${g.parcial_num}|dilig-${g.faixa}|${prazoIso}`,
+    setorial_id: g.setorial_id || null,
   };
 }
 
@@ -267,8 +332,12 @@ async function rodar() {
     }
 
     // ── Prazo da diligência ──────────────────────────────────────────────────
-    const diligs = await buscarDiligencias(pool);
-    console.log(`${diligs.length} diligência(s) na faixa de aviso`);
+    // As duas contagens saem impressas: quem investigar "por que só 22 avisos se são 38 PCs"
+    // precisa ver o agrupamento acontecendo, e não deduzi-lo do código.
+    const diligPcs = await buscarDiligencias(pool);
+    const diligs = agruparDiligencias(diligPcs);
+    console.log(`${diligPcs.length} PC(s) em diligência na faixa de aviso · `
+              + `${diligs.length} aviso(s) depois de agrupar por parcela`);
     for (const pc of diligs) {
       const aviso = montarAvisoDiligencia(pc);
       if (DRY) { console.log(`  [dry] ${aviso.titulo}: ${aviso.mensagem}`); continue; }
@@ -304,7 +373,7 @@ async function rodar() {
 if (require.main === module) rodar();
 
 module.exports = {
-  buscarAlvos, montarAviso, buscarDiligencias, montarAvisoDiligencia, rodar,
+  buscarAlvos, montarAviso, buscarDiligencias, agruparDiligencias, montarAvisoDiligencia, rodar,
   DIAS_AVISO_PREVIO, CORTE_PRAZO, DIAS_GUARDA_LIDA,
   DILIG_AVISO_PREVIO, DILIG_COBRANCA, DILIG_COBRANCA_ATE,
 };

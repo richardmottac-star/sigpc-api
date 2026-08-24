@@ -282,27 +282,66 @@ function db(resposta) {
          'o bloco de notificacao nao menciona baixada, data_baixa nem enviado_ci');
   }
 
-  console.log('\n═══ 9. O PRAZO DA DILIGENCIA JA AVISA NAS TRES FAIXAS ═══');
+  console.log('\n═══ 9. O PRAZO DA DILIGENCIA AVISA NAS TRES FAIXAS ═══');
   {
-    // Isto ja existia antes de 24/08 — o teste esta aqui para que continue existindo.
+    // As tres faixas ja existiam antes de 24/08 — o teste esta aqui para que continuem.
     conf(J.DILIG_AVISO_PREVIO === 3, 'avisa 3 dias antes de vencer', String(J.DILIG_AVISO_PREVIO));
-    const previo = J.montarAvisoDiligencia({ codigo_pc:'2022PC000456', tr:'2020TR000739', analista_id:9,
-      entidade:'APAE', prazo_diligencia:new Date(2026,7,27), dias:3, faixa:'previo' });
+    const g = (o) => Object.assign({ tr:'2020TR000739', parcial_num:'13', analista_id:9,
+      entidade:'APAE', pcs:['2022PC000456'], prazo_diligencia:new Date(2026,7,27), dias:3, faixa:'previo' }, o);
+
+    const previo = J.montarAvisoDiligencia(g());
     conf(/vence em 3 dias/i.test(previo.titulo), 'o aviso previo diz quantos dias faltam', previo.titulo);
     conf(previo.urgente === false, 'e nao e urgente — ainda da tempo');
 
-    const hoje = J.montarAvisoDiligencia({ codigo_pc:'2022PC000456', tr:'2020TR000739', analista_id:9,
-      entidade:'APAE', prazo_diligencia:new Date(2026,7,24), dias:0, faixa:'hoje' });
+    const hoje = J.montarAvisoDiligencia(g({ prazo_diligencia:new Date(2026,7,24), dias:0, faixa:'hoje' }));
     conf(/vence hoje/i.test(hoje.titulo), 'no dia do vencimento avisa de novo', hoje.titulo);
     conf(hoje.urgente === true, 'e esse e urgente');
 
-    // ⚠️ AS TRES FAIXAS TEM ref_id DIFERENTE. Com a chave so no codigo_pc, o aviso do dia
+    // ⚠️ AS TRES FAIXAS TEM ref_id DIFERENTE. Com a chave so na parcela, o aviso do dia
     // seria engolido pelo de 3 dias antes e nunca sairia.
     conf(previo.ref_id !== hoje.ref_id, 'as duas faixas nao se engolem no dedupe');
     conf(/\|dilig-previo\|/.test(previo.ref_id) && /\|dilig-hoje\|/.test(hoje.ref_id),
          'e a faixa aparece na chave');
     conf(/2026-08-27/.test(previo.ref_id),
          'o prazo entra na chave: cada RODADA de diligencia avisa por conta propria', previo.ref_id);
+    // ⚠️ A CHAVE E A PARCELA, NAO A PRIMEIRA PC DELA. Com `pcs[0]`, o dia em que aquela PC
+    // saisse do conjunto — baixada, por exemplo — a chave mudaria e a parcela avisaria de novo.
+    conf(J.montarAvisoDiligencia(g({ pcs:['OUTRA','2022PC000456'] })).ref_id === previo.ref_id,
+         'trocar as PCs do grupo NAO muda a chave do dedupe');
+    conf(previo.link === '#planilha:2020TR000739:13',
+         'e o link leva a parcela, no mesmo formato da notificacao do C.I.', previo.link);
+  }
+
+  console.log('\n═══ 9b. UM AVISO POR PARCELA, NAO POR PC (24/08/2026) ═══');
+  {
+    // ⚠️ O PRAZO E DA PARCELA e a consulta devolve PCs. Medido no dia em que isto foi escrito,
+    // com o cron ainda desligado: 38 PCs na faixa viravam 38 avisos; agrupadas, 22. A Cris
+    // (id 9) receberia CINCO avisos identicos da parcela 7 da 2020TR000619.
+    const pc = (o) => Object.assign({ analista_id:9, tr:'2020TR000619', parcial_num:'7',
+      entidade:'APAE', setorial_id:'FCEE', prazo_diligencia:new Date(2026,7,17), dias:-7,
+      faixa:'cobranca', codigo_pc:'X' }, o);
+
+    const cinco = ['2022PC002306','2023PC000226','2022PC003405','2022PC002305','2022PC001651']
+      .map(c => pc({ codigo_pc:c }));
+    const r = J.agruparDiligencias(cinco);
+    conf(r.length === 1, 'cinco PCs da mesma parcela viram UM aviso', String(r.length));
+    conf(r[0].pcs.length === 5, 'e o aviso sabe que sao cinco', String(r[0].pcs.length));
+    conf(/5 PCs/.test(J.montarAvisoDiligencia(r[0]).mensagem), 'a mensagem diz quantas sao');
+
+    // ⚠️ A FAIXA SEPARA. O aviso de 3 dias antes e o do dia sao dois avisos, nao um repetido.
+    const duasFaixas = J.agruparDiligencias([pc({ faixa:'previo' }), pc({ faixa:'hoje' })]);
+    conf(duasFaixas.length === 2, 'faixas diferentes nao se fundem', String(duasFaixas.length));
+
+    // Parcelas diferentes da MESMA TR continuam separadas — sao dois prazos distintos.
+    const duasParcelas = J.agruparDiligencias([pc({ parcial_num:'7' }), pc({ parcial_num:'8' })]);
+    conf(duasParcelas.length === 2, 'parcelas diferentes da mesma TR nao se fundem');
+
+    // E analistas diferentes nunca se misturam, por mais que a parcela coincida.
+    const dois = J.agruparDiligencias([pc({ analista_id:9 }), pc({ analista_id:13 })]);
+    conf(dois.length === 2, 'analistas diferentes nao se fundem');
+
+    conf(J.agruparDiligencias([]).length === 0, 'lista vazia nao estoura');
+    conf(J.agruparDiligencias(null).length === 0, 'nulo nao estoura');
   }
 
   console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

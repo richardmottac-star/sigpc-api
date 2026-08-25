@@ -19,6 +19,7 @@ const prep = require('./lib/preparacao');
 const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
 const ciFila = require('./lib/ci-fila');
+const nov = require('./lib/novidades');
 const devol = require('./lib/devolucao');
 // ⚠️ NÃO É A MESMA COISA que `devol`: aquela é a devolução do superadmin, que executa na
 // hora; esta é o PEDIDO do analista, que espera decisão. Quando o pedido é aprovado, quem
@@ -36,7 +37,12 @@ const papel = require('./lib/papel');
  */
 async function lerUsuario(cli, id) {
   const { rows } = await cli.query(
-    `SELECT id, nome, perfil, grupo, ativo, papel_ativo FROM usuarios WHERE id = $1`,
+    // ⚠️ `novidades_visto_em` entrou aqui em 25/08 e NÃO é enfeite: `GET /novidades` decide o
+    // "novo para você" comparando com ela. Sem a coluna na projeção o campo chega `undefined`,
+    // que a lib lê como "nunca viu" — e TODA novidade ficaria marcada como nova para sempre,
+    // sem erro nenhum para acusar. É a lista de colunas que precisa acompanhar quem a usa.
+    `SELECT id, nome, perfil, grupo, ativo, papel_ativo, novidades_visto_em
+       FROM usuarios WHERE id = $1`,
     [parseInt(id) || 0]);
   return rows[0] || null;
 }
@@ -713,6 +719,115 @@ app.patch('/usuarios/:id/rejeitar', async (req, res) => {
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
+});
+
+// ══════════════════════════════════════
+//  NOVIDADES DO SISTEMA  (25/08/2026)
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/novidades.js — inclusive por que "não lida" se mede pelo
+// `criado_em` e nunca pela `data` editorial.
+
+// GET /novidades?usuario_id=X — a lista que ESTA pessoa vê, já com o "novo para você"
+app.get('/novidades', async (req, res) => {
+  try {
+    const quem = await lerUsuario(pool, req.query.usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'usuario_id é obrigatório.' } });
+
+    const { rows } = await pool.query(nov.SQL_LISTAR);
+    // ⚠️ O RECORTE POR PÚBLICO ACONTECE NO SERVIDOR. Mandar tudo e esconder na tela deixaria
+    // a novidade da coordenação a um DevTools de distância de qualquer analista — e é a
+    // mesma lição da senha que o `index.html` conferia até 11/08.
+    const visiveis = rows.filter(n => nov.visivelPara(quem, n));
+    // A imagem vira o endereço que a `<img>` desenha aqui, e não na tela: a regra do Drive
+    // mora num lugar só, e linha antiga se beneficia de qualquer correção futura.
+    const comImagem = visiveis.map(n => ({ ...n, imagem_src: n.imagem_url ? nov.imagemDireta(n.imagem_url) : null }));
+    const lista = nov.marcarNovas(comImagem, quem.novidades_visto_em);
+
+    res.json({
+      data: lista, count: lista.length,
+      nao_lidas: lista.filter(n => n.nova).length,
+      contagem: nov.contar(lista),
+      categorias: nov.CATEGORIAS, publicos: nov.PUBLICOS,
+      pode_publicar: nov.podePublicar(quem),
+      visto_em: quem.novidades_visto_em || null,
+      error: null,
+    });
+  } catch (e) {
+    // ⚠️ A tela de Novidades quebrada não pode derrubar o menu de todo mundo — o contador do
+    // item de menu vem daqui, e ele é desenhado em toda navegação.
+    res.json({ data: [], count: 0, nao_lidas: 0, contagem: {}, error: null });
+  }
+});
+
+// POST /novidades/marcar_visto  body { usuario_id } — "vi até aqui"
+app.post('/novidades/marcar_visto', async (req, res) => {
+  try {
+    const quem = await lerUsuario(pool, (req.body || {}).usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'usuario_id é obrigatório.' } });
+    // ⚠️ SEMPRE O PRÓPRIO. Não há caminho para marcar o "visto" de outra pessoa: seria apagar
+    // o aviso dela sem que ela tivesse visto — o mesmo motivo pelo qual o sino, no modo "agir
+    // pela conta de", lê do alvo mas escreve no logado.
+    const { rows } = await pool.query(nov.SQL_MARCAR_VISTO, [quem.id]);
+    res.json({ data: { visto_em: rows[0].novidades_visto_em }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /novidades — publica. PATCH /novidades/:id — edita. DELETE /novidades/:id — exclui.
+//
+// ⚠️ AS TRÊS CONFEREM O PERFIL LIDO DO BANCO, pelo `usuario_id`. Esconder o botão na tela não
+// é trava: quatro rotas deste servidor já confiaram no `perfil` do corpo, e bastava mandar
+// `perfil: 'superadmin'` para passar.
+async function guardaNovidade(req, res) {
+  const quem = await lerUsuario(pool, (req.body || {}).usuario_id);
+  if (!nov.podePublicar(quem)) {
+    res.status(quem ? 403 : 401).json({ data: null, error: { message: 'Só o superadmin publica novidades.' } });
+    return null;
+  }
+  return quem;
+}
+
+app.post('/novidades', async (req, res) => {
+  try {
+    const quem = await guardaNovidade(req, res); if (!quem) return;
+    const b = req.body || {};
+    const erro = nov.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    const { rows } = await pool.query(nov.SQL_INSERIR, [
+      String(b.titulo).trim(), String(b.texto).trim(), b.categoria || 'melhoria', b.publico || 'todos',
+      b.imagem_url || null, b.imagem_legenda || null, b.guia_url || null, b.data || null,
+      quem.id, quem.nome,
+    ]);
+    res.json({ data: rows[0], error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
+app.patch('/novidades/:id', async (req, res) => {
+  try {
+    const quem = await guardaNovidade(req, res); if (!quem) return;
+    const b = req.body || {};
+    const erro = nov.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    const { rows } = await pool.query(nov.SQL_ATUALIZAR, [
+      parseInt(req.params.id) || 0, String(b.titulo).trim(), String(b.texto).trim(),
+      b.categoria || 'melhoria', b.publico || 'todos', b.imagem_url || null,
+      b.imagem_legenda || null, b.guia_url || null, b.data || null,
+    ]);
+    if (!rows.length) return res.status(404).json({ data: null, error: { message: 'Novidade não encontrada.' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
+app.delete('/novidades/:id', async (req, res) => {
+  try {
+    const quem = await guardaNovidade(req, res); if (!quem) return;
+    // Lista explícita de chave — regra 12 do CLAUDE.md, WHERE de exclusão nunca derivado.
+    const { rows } = await pool.query(`DELETE FROM novidade WHERE id = $1 RETURNING id, titulo`,
+                                      [parseInt(req.params.id) || 0]);
+    if (!rows.length) return res.status(404).json({ data: null, error: { message: 'Novidade não encontrada.' } });
+    res.json({ data: rows[0], error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
 });
 
 // ══════════════════════════════════════

@@ -1,0 +1,21 @@
+{
+  "o_que": "tabela novidade + coluna usuarios.novidades_visto_em",
+  "quando": "2026-08-25T02:15:43.205Z",
+  "criado": [
+    "novidade",
+    "novidade_data_idx",
+    "novidade_publico_valido",
+    "usuarios.novidades_visto_em"
+  ],
+  "reverter_com": [
+    "DROP TABLE IF EXISTS novidade;",
+    "ALTER TABLE usuarios DROP COLUMN IF EXISTS novidades_visto_em;"
+  ],
+  "atencao": "reverter apaga as novidades publicadas e a marca de leitura de todos",
+  "nao_tocado": [
+    "prestacoes_contas",
+    "parcela_historico",
+    "notificacao",
+    "ci_responsavel"
+  ]
+}

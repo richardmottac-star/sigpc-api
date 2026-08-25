@@ -185,6 +185,43 @@ setTimeout(async () => {
       }
     }
 
+    console.log('\n═══ 8-C. NOVIDADES — as rotas existem e so o superadmin publica ═══');
+    {
+      // ⚠️ DUBLE NAO ROTEIA. `/novidades/marcar_visto` declarada DEPOIS de `/novidades/:id`
+      // cairia nela com id = "marcar_visto" — foi assim que a armadilha 13 nasceu, com HTTP
+      // 500 em producao. Aqui o servidor sobe de verdade.
+      const l = await pedir('/novidades?usuario_id=57');
+      conf(l.status === 200, 'GET /novidades responde 200 para quem esta logado', `status ${l.status}`);
+      conf(l.corpo && l.corpo.pode_publicar === false, 'e diz que o analista NAO pode publicar');
+
+      const semQuem = await pedir('/novidades');
+      conf(semQuem.status === 401, 'sem usuario_id: 401', `status ${semQuem.status}`);
+
+      // ⚠️ O ANALISTA NAO PUBLICA, e a trava e do servidor — esconder o botao na tela nao e trava.
+      const pub = await pedir('/novidades', { method: 'POST',
+        body: JSON.stringify({ usuario_id: 57, titulo: 'x', texto: 'y' }) });
+      conf(pub.status === 403, 'POST /novidades recusa o analista', `status ${pub.status}`);
+      conf(/superadmin/.test(pub.texto), 'e diz de quem e a permissao');
+
+      // ⚠️ E MANDAR `perfil: superadmin` NO CORPO NAO AJUDA: quem decide e o perfil do BANCO.
+      const mentindo = await pedir('/novidades', { method: 'POST',
+        body: JSON.stringify({ usuario_id: 57, perfil: 'superadmin', titulo: 'x', texto: 'y' }) });
+      conf(mentindo.status === 403, 'declarar-se superadmin no corpo nao publica nada',
+           `status ${mentindo.status}`);
+
+      for (const [rota, metodo] of [['/novidades/9999', 'PATCH'], ['/novidades/9999', 'DELETE']]) {
+        const r = await pedir(rota, { method: metodo, body: JSON.stringify({ usuario_id: 57, titulo:'x', texto:'y' }) });
+        conf(r.status === 403, `${metodo} ${rota} recusa o analista`, `status ${r.status}`);
+        conf(!/Cannot /.test(r.texto), 'e nao caiu no 404 do Express');
+      }
+
+      // ⚠️ A rota de nome fixo tem de vir ANTES da de `:id` — e o teste bate nela de verdade.
+      const visto = await pedir('/novidades/marcar_visto', { method: 'POST', body: JSON.stringify({ usuario_id: 57 }) });
+      conf(visto.status === 200, 'POST /novidades/marcar_visto responde 200, e nao cai na rota :id',
+           `status ${visto.status}`);
+      conf(!/invalid input syntax/.test(visto.texto), 'sem "invalid input syntax for type integer"');
+    }
+
     console.log('\n═══ 8-A. GET /notificacao CONFERE QUEM PEDE (24/08/2026) ═══');
     {
       // ⚠️ O DUBLE responde a linha do usuario 57 (ZZ TESTE TRAVA, analista) para o id 57 e

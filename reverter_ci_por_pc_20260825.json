@@ -1,0 +1,25 @@
+{
+  "o_que": "C.I. por PC: colunas ci_tecnico_id/ci_tecnico_em e rename da ci_responsavel",
+  "quando": "2026-08-25T15:24:13.942Z",
+  "criado": [
+    "prestacoes_contas.ci_tecnico_id",
+    "prestacoes_contas.ci_tecnico_em",
+    "pc_ci_tecnico_idx"
+  ],
+  "renomeado": [],
+  "nada_foi_apagado": true,
+  "reverter_com": [
+    "BEGIN;",
+    "ALTER TABLE prestacoes_contas DROP COLUMN IF EXISTS ci_tecnico_id;",
+    "ALTER TABLE prestacoes_contas DROP COLUMN IF EXISTS ci_tecnico_em;",
+    "DROP INDEX IF EXISTS pc_ci_tecnico_idx;",
+    "COMMIT;"
+  ],
+  "atencao": "reverter apaga quem esta com cada PC — ver ci_tecnico_id antes de rodar. O rename de volta e exato: a tabela nunca foi derrubada.",
+  "nao_tocado": [
+    "prestacoes_contas",
+    "parcela_historico",
+    "usuarios",
+    "notificacao"
+  ]
+}

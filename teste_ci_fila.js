@@ -4,8 +4,9 @@
 //
 // ⚠️ REESCRITO EM 25/08/2026 JUNTO COM A LIB. Até aqui a unidade era a TR, e o responsável
 // morava numa tabela `ci_responsavel`. O Controle Interno trabalha por PC, e a tabela — que
-// nunca chegou a receber uma linha — saiu. As checagens que valiam para a TR valem agora para
-// a PC, e as três que existiam só por causa da tabela sumiram com ela.
+// nunca chegou a receber uma linha — foi renomeada para `ci_responsavel_backup_20260825`,
+// nao derrubada. As checagens que valiam para a TR valem agora para a PC, e as tres que
+// existiam so por causa da tabela sairam com ela.
 //
 // ⚠️ COM DUBLÊ, E NÃO CONTRA O BANCO — armadilha 11 do CLAUDE.md. `abrir`, `devolver` e
 // `passar` gerenciam a PRÓPRIA transação: o COMMIT interno delas confirmaria a transação
@@ -409,7 +410,7 @@ console.log('\n═══ 13. TRAVAS NO server.js ═══');
   const dec = src.slice(src.indexOf("app.post('/ci/decidir'"), src.indexOf("app.post('/ci/responder'"));
   conf(/ciFila\.podeDecidir\(autor, d\.ci_tecnico_id\)/.test(dec), 'POST /ci/decidir confere quem abriu a PC');
   conf(/p\.ci_tecnico_id/.test(dec), 'lendo o tecnico das PROPRIAS PCs que vieram');
-  conf(!/ci_responsavel/.test(dec), 'e nao pela tabela por TR, que deixou de existir');
+  conf(!/ci_responsavel/.test(dec), 'e nao pela tabela por TR, que saiu do caminho do codigo');
   conf(/ciFila\.motivoNaoDecide/.test(dec), 'e a recusa diz POR QUE, com o nome de quem esta com ela');
   // A conferencia vem ANTES de `ci.decidir`, que abre a propria transacao e grava.
   conf(dec.indexOf('podeDecidir') < dec.indexOf('await ci.decidir('),

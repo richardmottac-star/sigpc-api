@@ -2152,9 +2152,10 @@ app.get('/ci/mensagens', async (req, res) => {
 // ══════════════════════════════════════
 // A regra e o porquê estão em lib/ci-fila.js.
 //
-// ⚠️ ERA POR TR ATÉ 25/08 — `GET /ci/fila_trabalho` e as três `POST /ci/tr/*` SAÍRAM, junto
-// com a tabela `ci_responsavel`. O Controle Interno trabalha por PC, e a tela por TR abria
-// uma TR de até 83 prestações para decidir sobre uma.
+// ⚠️ ERA POR TR ATÉ 25/08 — `GET /ci/fila_trabalho` e as três `POST /ci/tr/*` SAÍRAM. O
+// Controle Interno trabalha por PC, e a tela por TR abria uma TR de até 83 prestações para
+// decidir sobre uma. A tabela `ci_responsavel`, que guardava o dono da TR, foi **renomeada**
+// para `ci_responsavel_backup_20260825` — estava vazia, e mesmo assim não foi derrubada.
 //
 // ⚠️ NADA AQUI TOCA em `ci_situacao`, `baixada`, `data_baixa` nem `enviado_ci`: quem está com
 // a PC é outra pergunta, e responder a ela não pode movê-la no ciclo. Há teste que falha se

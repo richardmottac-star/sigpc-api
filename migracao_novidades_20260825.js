@@ -93,7 +93,12 @@ const CONFERENCIAS = [
    'e nasce NULA em todos — ninguém "já viu" o que ainda não existe'],
 ];
 
-const INTOCADAS = ['prestacoes_contas', 'parcela_historico', 'notificacao', 'ci_responsavel'];
+// ⚠️ `ci_responsavel` SAIU DESTA LISTA EM 25/08/2026. Ela foi renomeada para
+// `ci_responsavel_backup_20260825` quando o C.I. voltou a ser por PC, e um `COUNT(*)` sobre
+// um nome que não responde mais faria ESTE script — que já rodou e é idempotente — abortar na
+// próxima vez que alguém o executasse. Uma lista de "tabelas intocadas" que cita uma tabela
+// extinta não protege nada: só quebra.
+const INTOCADAS = ['prestacoes_contas', 'parcela_historico', 'notificacao'];
 
 (async () => {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });

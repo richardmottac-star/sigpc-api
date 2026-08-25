@@ -2,6 +2,20 @@
 //
 // O RESPONSÁVEL DO CONTROLE INTERNO POR TR.  PADRÃO = DRY-RUN. Só grava com --gravar.
 //
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⛔ NÃO RODE MAIS ESTE SCRIPT. Ele está aqui como registro do que foi feito em 24/08.
+//
+// Em 25/08/2026 o Richard trocou a unidade do C.I. de TR para PC. O responsável passou a ser
+// `prestacoes_contas.ci_tecnico_id`, e a tabela criada aqui foi RENOMEADA para
+// `ci_responsavel_backup_20260825` por `migracao_ci_por_pc_20260825.js` — nunca chegou a ter
+// uma linha.
+//
+// ⚠️ RODAR ISTO DE NOVO **RECRIARIA** a `ci_responsavel` vazia, ao lado do backup e das
+// colunas novas: passariam a existir DUAS respostas para "quem está com esta demanda", e
+// nenhuma delas daria erro. É o defeito que o `perfilEfetivo` e o `PC_LIVRE_SQL` existem para
+// não repetir.
+// ═══════════════════════════════════════════════════════════════════════════════
+//
 // ═══ POR QUE ISTO EXISTE ═══
 //
 // Os três técnicos do C.I. olham a MESMA fila. Medido em 24/08/2026: 1.145 PCs `na_fila`,

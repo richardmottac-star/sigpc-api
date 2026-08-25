@@ -7,8 +7,8 @@
 //   · A BAIXA NUNCA É TOCADA. Regra do Richard: encaminhar ao CI já conta como baixa, e a
 //     baixa não é estornada, qualquer que seja o desfecho. Há trava que lê o lib e o
 //     server e falha se um UPDATE do ciclo mencionar baixada, data_baixa ou enviado_ci.
-//   · 'de_acordo' NÃO exige texto; 'ressalva' exige — devolver sem dizer por quê deixa o
-//     analista sem o que fazer.
+//   · NENHUMA DAS DUAS DECISÕES exige texto (25/08/2026). Quem ainda exige é a RESPOSTA DO
+//     ANALISTA (`exigeTexto`), onde o texto É a manifestação.
 //   · A rodada sobe SÓ na devolução. Subir dos dois lados dobraria a contagem.
 //   · Uma notificação por PARCELA, não por PC: a parcela 1 da 2020TR000657 tem 7 PCs, e
 //     sete avisos idênticos matam o sino.
@@ -119,8 +119,12 @@ console.log('\n═══ 5. TEXTO: QUANDO EXIGE E QUANDO NAO ═══');
   // Decisao do Richard: o CI pode encerrar sem escrever nada.
   conf(C.validar({ ...base, decisao: 'de_acordo' }) === null, 'de acordo SEM texto passa');
   conf(C.validar({ ...base, decisao: 'de_acordo', texto: '' }) === null, 'texto vazio tambem');
-  conf(C.validar({ ...base, decisao: 'ressalva' }) !== null, 'RESSALVA sem texto e recusada');
-  conf(C.validar({ ...base, decisao: 'ressalva', texto: 'curto' }) !== null, 'texto curto e recusado');
+  // ⚠️ A RESSALVA DEIXOU DE EXIGIR TEXTO EM 25/08/2026, por decisão do Richard. A tela nova
+  // põe **Observação (opcional)** nas duas decisões: o rótulo do rádio já diz o que fazer
+  // — *Parecer para correção, verificar o processo no SGPe* — e ele viaja inteiro na
+  // notificação. A observação virou o complemento, não o recado.
+  conf(C.validar({ ...base, decisao: 'ressalva' }) === null, 'ressalva SEM texto passa (25/08/2026)');
+  conf(C.validar({ ...base, decisao: 'ressalva', texto: 'curto' }) === null, 'e texto curto tambem');
   conf(C.validar({ ...base, decisao: 'ressalva', texto: 'Falta o comprovante no SGPe.' }) === null, 'ressalva com texto passa');
   conf(C.validar({ ...base, exigeTexto: true }) !== null, 'a resposta do analista exige texto');
   conf(C.validar({ ...base, texto: 'x'.repeat(4001) }) !== null, 'texto acima de 4000 e recusado');

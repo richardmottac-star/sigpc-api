@@ -295,7 +295,17 @@ function db(resposta) {
     conf(/titulo: `\$\{aprovou \? 'C\.I\. aprovou' : 'C\.I\. devolveu'\} · \$\{g\.tr\}`/.test(rota),
          'e a TR entra no titulo, dos dois lados');
     conf(/Decidido por \$\{autor\.nome\}/.test(rota), 'a mensagem diz quem do C.I. decidiu');
-    conf(/O que o C\.I\. pediu:/.test(rota), 'e a devolucao rotula a manifestacao');
+    // ⚠️ A DECISÃO VIAJA POR EXTENSO desde 25/08/2026, e não só a observação. O texto do
+    // rádio É o recado: a observação virou opcional nas duas decisões, e sem esta linha a
+    // devolução chegaria como um título sem conteúdo.
+    conf(/Parecer para correção, verificar o processo no SGPe\./.test(rota),
+         'a devolucao diz por extenso o que o C.I. decidiu');
+    conf(/Parecer do analista em acordo, baixado\./.test(rota),
+         'e a aprovacao tambem');
+    // ⚠️ E O BLOCO DA OBSERVAÇÃO SÓ APARECE QUANDO HÁ OBSERVAÇÃO. Um rótulo seguido de vazio
+    // parece que algo se perdeu no caminho.
+    conf(/\.concat\(manif \? \[`Observação do C\.I\.:/.test(rota),
+         'e a observacao so entra quando existe');
 
     // ⚠️ O LINK LEVA A PARCELA. `#planilha` puro abria a tela inteira e deixava a pessoa
     // procurar entre 54 TRs qual delas voltou.

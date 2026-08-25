@@ -2130,19 +2130,12 @@ app.patch('/config_sistema', async (req, res) => {
 // A regra e o porquê estão em lib/ci.js. ⚠️ NADA aqui toca em `baixada`, `data_baixa` nem
 // `enviado_ci`: a baixa é mantida em todo o ciclo, qualquer que seja o desfecho.
 
-// GET /ci/fila?situacao=na_fila|com_analista|encerrado
-app.get('/ci/fila', async (req, res) => {
-  try {
-    const [rows, cont] = await Promise.all([
-      ci.fila(pool, req.query.situacao),
-      ci.contagens(pool),
-    ]);
-    const links = await linksDeLinhas(pool, rows, ['processo_pc', 'processo_mae']);
-    res.json({ data: rows, count: rows.length, contagens: cont, links, error: null });
-  } catch (e) {
-    res.status(500).json({ data: null, error: { message: e.message } });
-  }
-});
+// ⚠️ A ROTA GET /ci/fila?situacao= SAIU EM 25/08/2026. O mesmo caminho existe logo abaixo,
+// na seção "A FILA DO C.I., POR PC", e é a que vale. A antiga devolvia o ciclo INTEIRO de
+// uma situação — 1.737 PCs numa resposta — e a tela agrupava por parcela no navegador.
+//
+// ⚠️ DUAS ROTAS COM O MESMO CAMINHO NÃO DÃO ERRO: o Express casa na PRIMEIRA declarada, e a
+// segunda vira código morto que ninguém percebe. É a armadilha 13 pelo avesso.
 
 // GET /ci/mensagens?codigos_pc=a,b,c — a conversa
 app.get('/ci/mensagens', async (req, res) => {
@@ -2155,42 +2148,80 @@ app.get('/ci/mensagens', async (req, res) => {
 });
 
 // ══════════════════════════════════════
-//  FILA DE TRABALHO DO C.I.  (24/08/2026)
+//  A FILA DO C.I., POR PC  (25/08/2026)
 // ══════════════════════════════════════
-// A regra e o porquê estão em lib/ci-fila.js. ⚠️ NADA aqui toca em `ci_situacao`, `baixada`,
-// `data_baixa` nem `enviado_ci`: quem está com a TR é outra pergunta, e responder a ela não
-// pode mover a parcela no ciclo. Há teste que falha se um UPDATE daqui mencionar qualquer uma.
+// A regra e o porquê estão em lib/ci-fila.js.
+//
+// ⚠️ ERA POR TR ATÉ 25/08 — `GET /ci/fila_trabalho` e as três `POST /ci/tr/*` SAÍRAM, junto
+// com a tabela `ci_responsavel`. O Controle Interno trabalha por PC, e a tela por TR abria
+// uma TR de até 83 prestações para decidir sobre uma.
+//
+// ⚠️ NADA AQUI TOCA em `ci_situacao`, `baixada`, `data_baixa` nem `enviado_ci`: quem está com
+// a PC é outra pergunta, e responder a ela não pode movê-la no ciclo. Há teste que falha se
+// um UPDATE desta lib mencionar qualquer uma das quatro.
 
-// GET /ci/fila_trabalho?usuario_id=X&setorial_id=Y — a lista, os chips e a equipe
-app.get('/ci/fila_trabalho', async (req, res) => {
+// GET /ci/fila — os quatro cards, os cinco chips e a lista de PCs
+//
+// Aceita `chip`, `q`, `analista_id`, `espera` e o trio `sgpe_sigla`/`sgpe_num`/`sgpe_ano`.
+app.get('/ci/fila', async (req, res) => {
   try {
     const quem = await lerUsuario(pool, req.query.usuario_id);
     if (!ciFila.podeAgir(quem))
-      return res.status(403).json({ data: null, error: { message: 'Esta fila é do Controle Interno.' } });
+      return res.status(quem ? 403 : 401).json({ data: null, error: { message: 'Esta fila é do Controle Interno.' } });
 
-    const [fila, tecnicos] = await Promise.all([
-      pool.query(ciFila.SQL_FILA),
-      pool.query(ciFila.SQL_TECNICOS),
-    ]);
-    // Os dias de espera saem do servidor, e não da tela: `dt_envio_ci` é `timestamp` em UTC, e
-    // deixar cada navegador fazer a conta é como o "9.221 dias de atraso" nasceu (armadilha 25).
-    const hoje = new Date();
-    const linhas = fila.rows.map(l => {
-      const dias = ciFila.diasEspera(l.enviada_em, hoje);
-      return { ...l, dias_espera: dias, faixa_espera: ciFila.faixaEspera(dias) };
+    // ⚠️ OS TRÊS CAMPOS DO SGPe VALEM JUNTOS OU NÃO VALEM. `chaveSgpe` devolve null quando
+    // falta um, e aí a busca por processo simplesmente não entra no filtro — em vez de virar
+    // um "SCC//2024" que não casa com nada e devolve vazio como se o processo não existisse.
+    const sgpe = ciFila.chaveSgpe(req.query.sgpe_sigla, req.query.sgpe_num, req.query.sgpe_ano);
+    const chip = ciFila.CHIPS.includes(req.query.chip) ? req.query.chip : 'fila';
+    const { sql, params } = ciFila.montarFiltro({
+      chip, meuId: quem.id, q: req.query.q, sgpe,
+      analista_id: req.query.analista_id, espera: req.query.espera,
     });
-    // ⚠️ SEM `linksDeLinhas`: esta lista não desenha processo SGPe — ela mostra TR, entidade,
-    // volume, analista, espera e responsável. Devolver um mapa de links que ninguém usa é
-    // peso no transporte e uma consulta a mais por abertura de tela.
-    res.json({ data: linhas, count: linhas.length,
-               resumo: ciFila.resumir(linhas, tecnicos.rows, quem.id),
-               tecnicos: tecnicos.rows, error: null });
+
+    // ⚠️ O RESUMO NÃO RECEBE O FILTRO — de propósito. Ver o comentário de `SQL_RESUMO`: o
+    // card "na fila" diz quantas há na fila, não quantas sobraram da busca.
+    const [resumo, lista, tecnicos, analistas] = await Promise.all([
+      pool.query(ciFila.SQL_RESUMO, [quem.id]),
+      pool.query(ciFila.sqlLista(sql), params),
+      pool.query(ciFila.SQL_TECNICOS),
+      pool.query(ciFila.SQL_ANALISTAS),
+    ]);
+
+    // ⚠️ O CORTE É DITO, NUNCA SILENCIOSO. A consulta pede LIMITE+1 justamente para saber se
+    // sobrou — uma lista truncada sem aviso se lê como "é só isso que existe", e o técnico
+    // fecharia a tela achando que a fila acabou.
+    const linhas = lista.rows.slice(0, ciFila.LIMITE);
+    let total = linhas.length;
+    if (lista.rows.length > ciFila.LIMITE) {
+      total = (await pool.query(ciFila.sqlContar(sql), params)).rows[0].n;
+    }
+
+    // ⚠️ O MAPA DE LINKS DO SGPe É O QUE FAZ O NÚMERO VIRAR LINK. `procHtml` na tela é um
+    // `Map.get` e nada mais: sem esta consulta o processo aparece em texto puro, sem erro
+    // nenhum, e o técnico não tem como abrir o processo que precisa conferir (armadilha 20).
+    const links = await linksDeLinhas(pool, linhas, ['processo_pc', 'processo_mae']);
+
+    const r = resumo.rows[0] || {};
+    res.json({
+      data: linhas.map(l => ({ ...l, faixa_espera: ciFila.faixaEspera(l.dias_espera) })), links,
+      count: linhas.length, total, limite: ciFila.LIMITE,
+      resumo: {
+        cards: { fila: r.fila || 0, espera_media: r.espera_media || 0,
+                 com_analista: r.com_analista || 0, encerradas: r.encerradas || 0 },
+        chips: { fila: r.fila || 0, minhas: r.minhas || 0, outros: r.outros || 0,
+                 mais30: r.mais30 || 0, encerradas: r.encerradas || 0,
+                 com_analista: r.com_analista || 0 },
+      },
+      tecnicos: tecnicos.rows, analistas: analistas.rows,
+      eu: { id: quem.id, nome: quem.nome }, error: null,
+    });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
 });
 
-// POST /ci/tr/assumir  ·  /devolver  ·  /passar   body { tr, usuario_id, motivo?, destino_id? }
+// POST /ci/pc/abrir · /devolver · /passar   body { codigo_pc, usuario_id, motivo?, destino_id? }
 //
 // ⚠️ AS TRÊS LEEM QUEM PEDE DO BANCO, pelo `usuario_id`. Quatro rotas deste servidor já
 // confiaram no `perfil` do corpo, e bastava mandar `perfil: 'superadmin'` para passar.
@@ -2200,36 +2231,45 @@ async function guardaCi(req, res) {
     res.status(quem ? 403 : 401).json({ data: null, error: { message: 'Só o Controle Interno mexe nesta fila.' } });
     return null;
   }
-  const tr = String((req.body || {}).tr || '').trim();
-  if (!tr) { res.status(400).json({ data: null, error: { message: 'tr é obrigatório.' } }); return null; }
-  return { quem, tr, setorial_id: (req.body || {}).setorial_id || 'FCEE' };
+  const codigo_pc = String((req.body || {}).codigo_pc || '').trim();
+  if (!codigo_pc) { res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório.' } }); return null; }
+  return { quem, codigo_pc };
 }
 
-app.post('/ci/tr/assumir', async (req, res) => {
+// ⚠️ ABRIR É POST, E NÃO GET, porque ele ESCREVE: a abertura marca a PC como sua. Um GET que
+// muda estado é o tipo de coisa que um pre-fetch do navegador dispara sozinho — e aí a PC
+// ficaria com quem só passou o mouse por cima do link.
+app.post('/ci/pc/abrir', async (req, res) => {
   try {
     const g = await guardaCi(req, res); if (!g) return;
-    const r = await ciFila.assumir(pool, g);
-    if (!r.ok)
-      return res.status(409).json({ data: null, error: {
-        message: r.jaTem ? `${r.jaTem.tecnico_nome} assumiu esta TR primeiro — recarregue a tela.`
-                         : 'Esta TR já tem responsável.' } });
-    res.json({ data: r.linha, error: null });
+    const r = await ciFila.abrir(pool, g);
+    if (r.ok) return res.json({ data: { codigo_pc: g.codigo_pc, tecnico_id: r.tecnico_id,
+                                        tecnico_nome: r.tecnico_nome, marcou: true }, error: null });
+    if (r.inexistente)
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+    // ⚠️ NÃO É ERRO: abrir uma PC que já tem dono, ou que já saiu da fila, é LEITURA — e é o
+    // caso mais comum depois do primeiro dia. Devolver 409 aqui faria a tela mostrar um erro
+    // vermelho toda vez que alguém consultasse uma PC encerrada.
+    res.json({ data: { codigo_pc: g.codigo_pc, tecnico_id: r.ja.ci_tecnico_id,
+                       tecnico_nome: r.ja.ci_tecnico_nome, marcou: false,
+                       situacao: r.ja.ci_situacao, seu: !!r.seu }, error: null });
   } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
 });
 
-app.post('/ci/tr/devolver', async (req, res) => {
+app.post('/ci/pc/devolver', async (req, res) => {
   try {
     const g = await guardaCi(req, res); if (!g) return;
     const erro = ciFila.validarMotivo(req.body.motivo);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
     const r = await ciFila.devolver(pool, { ...g, motivo: req.body.motivo });
     if (!r.ok)
-      return res.status(409).json({ data: null, error: { message: 'Esta TR já está livre — recarregue a tela.' } });
-    res.json({ data: { devolvida: g.tr, era_de: r.antigo.tecnico_nome }, error: null });
+      return res.status(409).json({ data: null, error: {
+        message: r.inexistente ? 'PC não encontrada.' : 'Esta PC já está livre — recarregue a tela.' } });
+    res.json({ data: { codigo_pc: g.codigo_pc, era_de: r.era_de }, error: null });
   } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
 });
 
-app.post('/ci/tr/passar', async (req, res) => {
+app.post('/ci/pc/passar', async (req, res) => {
   try {
     const g = await guardaCi(req, res); if (!g) return;
     const erro = ciFila.validarMotivo(req.body.motivo);
@@ -2242,18 +2282,23 @@ app.post('/ci/tr/passar', async (req, res) => {
     if (!d || papel.perfilEfetivo(d) !== 'controle_interno' || !d.ativo)
       return res.status(400).json({ data: null, error: { message: 'O destino precisa ser um técnico ativo do Controle Interno.' } });
     if (d.id === g.quem.id)
-      return res.status(400).json({ data: null, error: { message: 'Para ficar com a TR, use Assumir.' } });
+      return res.status(400).json({ data: null, error: { message: 'Para ficar com a PC, basta abri-la.' } });
 
     const r = await ciFila.passar(pool, { ...g, destino: d, motivo: req.body.motivo });
+    if (!r.ok)
+      return res.status(409).json({ data: null, error: { message:
+        r.inexistente ? 'PC não encontrada.' : 'Esta PC não está mais na fila — recarregue a tela.' } });
+
     // O destino é avisado no sino: passar a demanda sem contar a quem recebeu é o mesmo
     // buraco do retorno do C.I. que 24/08 fechou do outro lado.
     notif.criar(pool, {
       destinatario_id: d.id, tipo: 'recado',
-      titulo: `C.I. — você recebeu a TR ${g.tr}`,
-      mensagem: `${g.quem.nome} passou a demanda para você.\n\nMotivo: ${String(req.body.motivo).trim()}`,
-      link: '#ci', ref_tipo: 'tr', ref_id: `${g.tr}|ci_passou|${d.id}|${Date.now()}`,
+      titulo: `C.I. — você recebeu a PC ${g.codigo_pc}`,
+      mensagem: `${g.quem.nome} passou a demanda para você.\n\n${r.tr} · Parcela ${r.parcial_num}` +
+                `\n\nMotivo: ${String(req.body.motivo).trim()}`,
+      link: '#ci', ref_tipo: 'pc', ref_id: `${g.codigo_pc}|ci_passou|${d.id}|${Date.now()}`,
     }).catch(() => {});
-    res.json({ data: { tr: g.tr, agora_com: d.nome, era_de: r.antigo ? r.antigo.tecnico_nome : null }, error: null });
+    res.json({ data: { codigo_pc: g.codigo_pc, agora_com: d.nome, era_de: r.era_de }, error: null });
   } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
 });
 
@@ -2272,22 +2317,23 @@ app.post('/ci/decidir', async (req, res) => {
     if (!autor || !['controle_interno', 'coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só o Controle Interno decide sobre esta fila.' } });
 
-    // ⚠️ QUEM DECIDE É QUEM ASSUMIU (25/08/2026). O técnico passou a poder ABRIR a TR sem
-    // assumir, para examinar antes — e abrir e decidir tinham virado a mesma porta. A regra
-    // vive em `ciFila.podeDecidir`; aqui ela é aplicada sobre as TRs das PCs que vieram.
+    // ⚠️ QUEM DECIDE É QUEM ABRIU (25/08/2026). Abrir a PC já a marca como sua; quem não a
+    // abriu não decide sobre ela. A regra vive em `ciFila.podeDecidir`, e aqui ela é aplicada
+    // PC a PC — era por TR até 25/08, e uma TR de 83 prestações não é a unidade de trabalho
+    // do Controle Interno.
     //
     // ⚠️ NÃO BASTA O BOTÃO CINZA NA TELA: desabilitar avisa, recusar impede. A diferença
-    // aparece no dia em que alguém tiver duas abas abertas e a segunda ainda mostrar a TR
+    // aparece no dia em que alguém tiver duas abas abertas e a segunda ainda mostrar a PC
     // como sua — a tela estaria desatualizada, o servidor não.
     const donos = await pool.query(
-      `SELECT DISTINCT p.tr, r.tecnico_id, r.tecnico_nome
+      `SELECT p.codigo_pc, p.ci_tecnico_id, u.nome AS ci_tecnico_nome
          FROM prestacoes_contas p
-         LEFT JOIN ci_responsavel r ON r.tr = p.tr AND r.setorial_id = p.setorial_id
+         LEFT JOIN usuarios u ON u.id = p.ci_tecnico_id
         WHERE p.codigo_pc = ANY($1)`, [b.codigos_pc]);
-    const semDireito = donos.rows.find(d => !ciFila.podeDecidir(autor, d.tecnico_id));
+    const semDireito = donos.rows.find(d => !ciFila.podeDecidir(autor, d.ci_tecnico_id));
     if (semDireito)
       return res.status(403).json({ data: null, error: {
-        message: `${semDireito.tr}: ${ciFila.motivoNaoDecide(semDireito.tecnico_nome)}` } });
+        message: `${semDireito.codigo_pc}: ${ciFila.motivoNaoDecide(semDireito.ci_tecnico_nome)}` } });
 
     const { pcs, jaDecidido } = await ci.decidir(pool, {
       codigos_pc: b.codigos_pc, decisao: b.decisao, texto: b.texto, autor,
@@ -2310,12 +2356,20 @@ app.post('/ci/decidir', async (req, res) => {
       const onde = `Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
                    `${g.entidade ? ` (${g.entidade})` : ''}.`;
       const quem = `Decidido por ${autor.nome}.`;
-      // ⚠️ A manifestação da devolução leva rótulo, a da aprovação não. Na devolução ela é o
-      // que diz o que corrigir — sem o rótulo, o texto se confunde com o resto do recado. E
-      // ela é obrigatória ali (`ci.validar`); no de acordo pode não existir.
-      const corpo = aprovou
-        ? [onde, quem].concat(manif ? [manif] : []).join('\n\n')
-        : [onde, quem, 'O que o C.I. pediu:\n' + manif].join('\n\n');
+      // ⚠️ A DECISÃO VIAJA POR EXTENSO, e não só a observação (25/08/2026). O texto do rádio
+      // é o recado: *"Parecer para correção, verificar o processo no SGPe"* já diz o que
+      // fazer. Antes o corpo trazia só a manifestação, que era obrigatória; ela virou
+      // opcional na tela nova, e sem esta linha a devolução chegaria como um aviso sem
+      // conteúdo — "C.I. devolveu · 2020TR000657", e nada mais.
+      //
+      // ⚠️ E O BLOCO DA OBSERVAÇÃO SÓ APARECE QUANDO HÁ OBSERVAÇÃO. Um rótulo
+      // "Observação do C.I.:" seguido de vazio é pior que a ausência dele: parece que algo se
+      // perdeu no caminho.
+      const decisaoTxt = aprovou
+        ? 'Parecer do analista em acordo, baixado.'
+        : 'Parecer para correção, verificar o processo no SGPe.';
+      const corpo = [onde, decisaoTxt, quem]
+        .concat(manif ? [`Observação do C.I.:\n${manif}`] : []).join('\n\n');
 
       await notif.criar(pool, {
         destinatario_id: g.analista_id,

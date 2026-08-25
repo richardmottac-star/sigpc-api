@@ -75,3 +75,32 @@ CI_PENDENTE_POR_ANALISTA/
 reverter_87livres_*.json
 
 reverter_soltas_*.json
+
+# ── Os relatorios de 25/08/2026 — dado operacional, nunca versionar ──────────
+# Planilhas e PDFs com ENTIDADE, CNPJ, VALOR e NOME DE ANALISTA, PC a PC.
+# Sao 5 arquivos e somam 5,4 MB. O que os EXPLICA pode ser versionado (um .md);
+# os dados, nao.
+#
+# ⚠️ PADROES NOMEADOS, e nao `*.xlsx` — a decisao de 16/08/2026 continua valendo, e o
+# aviso dela tambem: planilha NOVA com outro nome NAO e ignorada sozinha. Antes de
+# `git add -A`, conferir `git status`.
+#
+# ⚠️ E A EXTENSAO E EXPLICITA, e nao `NOME.*`: assim um `DIAGNOSTICO_DIFERENCA_CGE.md`
+# que explique o diagnostico continua podendo ser versionado, que e o padrao desta pasta
+# (o AUDITORIA_SIGPC_2026-08-16.md esta no git; os CSVs dele, nao).
+
+# Conferencia da migracao do C.I. — 2.144 PCs da planilha dos tecnicos
+CONFERENCIA_MIGRACAO_CI_*.xlsx
+
+# Diagnostico da diferenca apontada pela CGE — 390 parcelas do G2, PC a PC
+DIAGNOSTICO_DIFERENCA_CGE.xlsx
+DIAGNOSTICO_DIFERENCA_CGE.pdf
+
+# Apuracao para a CGE — 3.618 PCs com valor, entidade, processo e NL
+PCS_BAIXADAS_ATE_*_CGE.xlsx
+PCS_BAIXADAS_ATE_*_CGE.pdf
+
+# ⚠️ Os arquivos de LOCK do Excel — nascem quando alguem abre a planilha e somem ao fechar.
+# Um deles apareceu em 25/08 no `git status` justamente enquanto o relatorio era conferido.
+# Nao sao dado nem codigo: sao lixo temporario, e entram no repositorio sem ninguem notar.
+~$*

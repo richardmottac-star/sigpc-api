@@ -236,6 +236,31 @@ console.log('\n═══ 9. OS ROTULOS DO HISTORICO ═══');
   conf(CF.ROTULO_EVENTO.ci_passou === 'passou a demanda', 'passou a demanda');
 }
 
+console.log('\n═══ 9-B. ABRIR E SO LEITURA — QUEM DECIDE E QUEM ASSUMIU (25/08/2026) ═══');
+{
+  // ⚠️ O TECNICO PASSOU A PODER ABRIR SEM ASSUMIR, para examinar as parcelas, o parecer da
+  // analista e o processo SGPe antes de escolher se pega a TR. Antes disso a unica porta para
+  // a TR era assumi-la — e "abrir" e "decidir" eram a mesma coisa.
+  conf(CF.podeDecidir(MARCIA, null) === false, 'TR LIVRE: ninguem decide, nem quem e do C.I.');
+  conf(CF.podeDecidir(MARCIA, 62) === true, 'TR ASSUMIDA por mim: decido');
+  conf(CF.podeDecidir(MARCIA, 63) === false, 'TR de OUTRO: abro e vejo, nao decido');
+  // ⚠️ O superadmin decide sem restricao — e ele quem destrava o que travou.
+  conf(CF.podeDecidir(RICHARD, 63) === true, 'o superadmin decide a TR de qualquer um');
+  conf(CF.podeDecidir(RICHARD, null) === true, 'inclusive a livre');
+  // ⚠️ Mas no papel analista ele NAO e superadmin — a regra unica de 14/08.
+  conf(CF.podeDecidir({ ...RICHARD, papel_ativo: 'analista' }, 63) === false,
+       'no papel analista, nem ele');
+  conf(CF.podeDecidir(null, 62) === false, 'ninguem logado nao decide nada');
+  // ⚠️ Id como TEXTO tambem casa: o `tecnico_id` vem do banco como number, mas o `U.id` da
+  // tela pode chegar como string, e uma comparacao estrita faria a TR propria parecer alheia.
+  conf(CF.podeDecidir({ ...MARCIA, id: '62' }, 62) === true, 'id como texto nao quebra a posse');
+
+  // O motivo, para o botao cinza poder dizer POR QUE em vez de so ficar apagado.
+  conf(/Assuma a demanda/.test(CF.motivoNaoDecide(null)), 'TR livre: "Assuma a demanda"');
+  conf(/Sirene/.test(CF.motivoNaoDecide('Sirene')) && /passe a demanda/.test(CF.motivoNaoDecide('Sirene')),
+       'TR de outro: diz com quem esta e o que fazer');
+}
+
 console.log('\n═══ 10. TRAVAS NO server.js ═══');
 {
   const src = fs.readFileSync('./server.js', 'utf8');
@@ -259,6 +284,18 @@ console.log('\n═══ 10. TRAVAS NO server.js ═══');
   // ⚠️ NENHUMA DAS TRES MEXE NO CICLO NEM NA BAIXA.
   const bloco = src.slice(src.indexOf("app.get('/ci/fila_trabalho'"), src.indexOf("app.post('/ci/decidir'"));
   conf(!/UPDATE prestacoes_contas/.test(bloco), 'nenhuma das rotas da fila escreve em prestacoes_contas');
+
+  // ⚠️ A TRAVA DE DECIDIR VIVE NO SERVIDOR, e nao so no botao cinza. Desabilitar avisa;
+  // recusar impede — e a diferenca aparece no dia em que alguem tiver duas abas abertas e a
+  // segunda ainda mostrar a TR como sua.
+  const dec = src.slice(src.indexOf("app.post('/ci/decidir'"), src.indexOf("app.post('/ci/responder'"));
+  conf(/ciFila\.podeDecidir\(autor, d\.tecnico_id\)/.test(dec),
+       'POST /ci/decidir confere quem assumiu a TR');
+  conf(/LEFT JOIN ci_responsavel/.test(dec), 'lendo o responsavel das TRs das PCs que vieram');
+  conf(/ciFila\.motivoNaoDecide/.test(dec), 'e a recusa diz POR QUE, com o nome de quem esta com ela');
+  // A conferencia vem ANTES de `ci.decidir`, que abre a propria transacao e grava.
+  conf(dec.indexOf('podeDecidir') < dec.indexOf('await ci.decidir('),
+       'e a conferencia vem ANTES de a decisao ser gravada');
   conf(!/data_baixa|enviado_ci = /.test(bloco), 'e nao mencionam data_baixa nem escrevem enviado_ci');
 }
 

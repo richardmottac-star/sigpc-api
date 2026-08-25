@@ -2272,6 +2272,23 @@ app.post('/ci/decidir', async (req, res) => {
     if (!autor || !['controle_interno', 'coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só o Controle Interno decide sobre esta fila.' } });
 
+    // ⚠️ QUEM DECIDE É QUEM ASSUMIU (25/08/2026). O técnico passou a poder ABRIR a TR sem
+    // assumir, para examinar antes — e abrir e decidir tinham virado a mesma porta. A regra
+    // vive em `ciFila.podeDecidir`; aqui ela é aplicada sobre as TRs das PCs que vieram.
+    //
+    // ⚠️ NÃO BASTA O BOTÃO CINZA NA TELA: desabilitar avisa, recusar impede. A diferença
+    // aparece no dia em que alguém tiver duas abas abertas e a segunda ainda mostrar a TR
+    // como sua — a tela estaria desatualizada, o servidor não.
+    const donos = await pool.query(
+      `SELECT DISTINCT p.tr, r.tecnico_id, r.tecnico_nome
+         FROM prestacoes_contas p
+         LEFT JOIN ci_responsavel r ON r.tr = p.tr AND r.setorial_id = p.setorial_id
+        WHERE p.codigo_pc = ANY($1)`, [b.codigos_pc]);
+    const semDireito = donos.rows.find(d => !ciFila.podeDecidir(autor, d.tecnico_id));
+    if (semDireito)
+      return res.status(403).json({ data: null, error: {
+        message: `${semDireito.tr}: ${ciFila.motivoNaoDecide(semDireito.tecnico_nome)}` } });
+
     const { pcs, jaDecidido } = await ci.decidir(pool, {
       codigos_pc: b.codigos_pc, decisao: b.decisao, texto: b.texto, autor,
     });

@@ -284,18 +284,29 @@ setTimeout(async () => {
       const velha = await pedir('/ci/fila_trabalho?usuario_id=57');
       conf(velha.status === 404, 'GET /ci/fila_trabalho SAIU', `status ${velha.status}`);
 
-      // ⚠️ POST /ci/pc/abrir SAIU EM 26/08/2026. Ela marcava a PC como do tecnico no instante
-      // em que ele a EXPANDIA — olhar virava tomar, e no primeiro dia o nome do superadmin
-      // apareceu numa PC que ele nao analisa. Abrir voltou a ser so abrir; quem carimba o
-      // tecnico e `ci.decidir`, no mesmo UPDATE do parecer.
-      const abrir = await pedir('/ci/pc/abrir', { method: 'POST', body: JSON.stringify({ codigo_pc: 'X', usuario_id: 57 }) });
-      conf(abrir.status === 404, 'POST /ci/pc/abrir SAIU', `status ${abrir.status}`);
-
-      for (const acao of ['devolver', 'passar']) {
+      // ⚠️ AS TRES ROTAS DE ESCRITA DA FILA SAIRAM — abrir (25/08), devolver e passar (26/08).
+      // Elas gravavam `ci_tecnico_id` fora da confirmacao do parecer: `abrir` ao EXPANDIR a
+      // linha, `passar` ao entregar a outro tecnico, `devolver` zerando. O unico caminho de
+      // escrita da coluna e `POST /ci/decidir`, no mesmo UPDATE do parecer.
+      //
+      // ⚠️ 404 AQUI E O RESULTADO CERTO, e por isso e conferido: uma rota removida do codigo e
+      // deixada de pe por engano num `app.use` continuaria respondendo, e ninguem notaria.
+      for (const acao of ['abrir', 'devolver', 'passar']) {
         const r = await pedir(`/ci/pc/${acao}`, { method: 'POST', body: JSON.stringify({ codigo_pc: '2020PC000448', usuario_id: 57 }) });
-        conf(r.status === 403, `POST /ci/pc/${acao} existe e e guardada`, `status ${r.status}`);
-        conf(!/Cannot POST/.test(r.texto), 'e nao caiu no 404 do Express');
+        conf(r.status === 404, `POST /ci/pc/${acao} SAIU`, `status ${r.status}`);
       }
+
+      // ⚠️ E A TRAVA DO PARECER E POR PERFIL, conferida contra o servidor de verdade. O duble
+      // nao pega isto: duble nao roteia, e a leitura do autor vem do BANCO.
+      //   57 e analista · a rota le o perfil pelo id e recusa qualquer um que nao seja do C.I.
+      const naoCi = await pedir('/ci/decidir', { method: 'POST',
+        body: JSON.stringify({ codigos_pc: ['__x__'], decisao: 'de_acordo', autor_id: 57 }) });
+      conf(naoCi.status === 403, 'POST /ci/decidir recusa quem nao e do C.I.', `status ${naoCi.status}`);
+      conf(/técnico do C\.I\./.test(naoCi.texto), 'e diz POR QUE: o nome de quem decide fica na PC');
+      // ⚠️ E MANDAR O PERFIL NO CORPO NAO AJUDA — quem decide e o perfil lido do banco.
+      const mentiu = await pedir('/ci/decidir', { method: 'POST',
+        body: JSON.stringify({ codigos_pc: ['__x__'], decisao: 'de_acordo', autor_id: 57, perfil: 'controle_interno' }) });
+      conf(mentiu.status === 403, 'e mandar perfil no corpo nao ajuda ninguem a passar', `status ${mentiu.status}`);
 
       // ⚠️ `/ci/pc/...` NAO PODE SER ENGOLIDA por `/ci/fila` nem por `/ci/decidir`: nenhuma
       // delas tem parametro de rota, mas se um dia alguem declarar `/ci/:algo` antes, estas

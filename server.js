@@ -2222,79 +2222,25 @@ app.get('/ci/fila', async (req, res) => {
   }
 });
 
-// POST /ci/pc/abrir · /devolver · /passar   body { codigo_pc, usuario_id, motivo?, destino_id? }
+// ⚠️ AS ROTAS POST /ci/pc/abrir, /devolver E /passar SAÍRAM — as três, em 25–26/08/2026.
+// Com elas saiu a guarda `guardaCi`, que não guardava mais nada.
 //
-// ⚠️ AS TRÊS LEEM QUEM PEDE DO BANCO, pelo `usuario_id`. Quatro rotas deste servidor já
-// confiaram no `perfil` do corpo, e bastava mandar `perfil: 'superadmin'` para passar.
-async function guardaCi(req, res) {
-  const quem = await lerUsuario(pool, (req.body || {}).usuario_id);
-  if (!ciFila.podeAgir(quem)) {
-    res.status(quem ? 403 : 401).json({ data: null, error: { message: 'Só o Controle Interno mexe nesta fila.' } });
-    return null;
-  }
-  const codigo_pc = String((req.body || {}).codigo_pc || '').trim();
-  if (!codigo_pc) { res.status(400).json({ data: null, error: { message: 'codigo_pc é obrigatório.' } }); return null; }
-  return { quem, codigo_pc };
-}
-
-// ⚠️ A ROTA POST /ci/pc/abrir SAIU EM 26/08/2026.
+// ⚠️ `ci_tecnico_id` E `ci_tecnico_em` TÊM UM ÚNICO CAMINHO DE ESCRITA EM TODO O SERVIDOR:
+// `ci.decidir`, no MESMO UPDATE que grava o parecer. Não é economia de rota — é a resposta a
+// "quem é o técnico desta PC" não depender de por onde se passou.
 //
-// Ela marcava a PC como do técnico no instante em que ele a EXPANDIA na tela — e por isso
-// **olhar virava tomar**. Não havia como examinar um valor, um processo SGPe ou o parecer da
-// analista sem se declarar responsável. No primeiro dia isso pôs o nome do superadmin numa PC
-// que ele não analisa.
+//   · `abrir`    marcava a PC ao EXPANDIR a linha: olhar virava tomar, e num dia isso pôs o
+//                nome do superadmin numa PC que ele não analisa. Abrir voltou a ser só abrir.
+//   · `devolver` zerava a coluna. Com a atribuição vindo do parecer, `ci_tecnico_id` deixou
+//                de ser "quem pegou" e passou a ser **quem já deu parecer** — zerá-lo apagaria
+//                o registro de quem decidiu, não devolveria nada para lugar nenhum.
+//   · `passar`   atribuía a outro técnico. Existia porque pegar vinha antes de decidir, e quem
+//                pegava podia não poder terminar. Agora ninguém pega: os três olham a mesma
+//                fila e qualquer um dá o parecer de qualquer PC. Não há demanda presa.
 //
-// Abrir voltou a ser só abrir: a tela expande o cartão sem chamar rota nenhuma. Quem carimba
-// `ci_tecnico_id` é `ci.decidir`, no mesmo UPDATE do parecer.
-//
-// ⚠️ E NÃO ENTROU UM "ASSUMIR" NO LUGAR. Um botão de assumir traria de volta o mesmo par de
-// estados com um clique a mais; o que a fila precisa saber é quem JÁ decidiu.
-
-app.post('/ci/pc/devolver', async (req, res) => {
-  try {
-    const g = await guardaCi(req, res); if (!g) return;
-    const erro = ciFila.validarMotivo(req.body.motivo);
-    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
-    const r = await ciFila.devolver(pool, { ...g, motivo: req.body.motivo });
-    if (!r.ok)
-      return res.status(409).json({ data: null, error: {
-        message: r.inexistente ? 'PC não encontrada.' : 'Esta PC já está livre — recarregue a tela.' } });
-    res.json({ data: { codigo_pc: g.codigo_pc, era_de: r.era_de }, error: null });
-  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
-});
-
-app.post('/ci/pc/passar', async (req, res) => {
-  try {
-    const g = await guardaCi(req, res); if (!g) return;
-    const erro = ciFila.validarMotivo(req.body.motivo);
-    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
-
-    // ⚠️ O DESTINO É CONFERIDO CONTRA O BANCO, pela MESMA fonte de "quem é do C.I.". Sem isto
-    // daria para passar a demanda para um analista qualquer, e ela sumiria da fila do C.I.
-    // sem sair do ciclo — órfã, que é o estado que esta tela existe para acabar.
-    const d = await lerUsuario(pool, req.body.destino_id);
-    if (!d || papel.perfilEfetivo(d) !== 'controle_interno' || !d.ativo)
-      return res.status(400).json({ data: null, error: { message: 'O destino precisa ser um técnico ativo do Controle Interno.' } });
-    if (d.id === g.quem.id)
-      return res.status(400).json({ data: null, error: { message: 'Para ficar com a PC, basta abri-la.' } });
-
-    const r = await ciFila.passar(pool, { ...g, destino: d, motivo: req.body.motivo });
-    if (!r.ok)
-      return res.status(409).json({ data: null, error: { message:
-        r.inexistente ? 'PC não encontrada.' : 'Esta PC não está mais na fila — recarregue a tela.' } });
-
-    // O destino é avisado no sino: passar a demanda sem contar a quem recebeu é o mesmo
-    // buraco do retorno do C.I. que 24/08 fechou do outro lado.
-    notif.criar(pool, {
-      destinatario_id: d.id, tipo: 'recado',
-      titulo: `C.I. — você recebeu a PC ${g.codigo_pc}`,
-      mensagem: `${g.quem.nome} passou a demanda para você.\n\n${r.tr} · Parcela ${r.parcial_num}` +
-                `\n\nMotivo: ${String(req.body.motivo).trim()}`,
-      link: '#ci', ref_tipo: 'pc', ref_id: `${g.codigo_pc}|ci_passou|${d.id}|${Date.now()}`,
-    }).catch(() => {});
-    res.json({ data: { codigo_pc: g.codigo_pc, agora_com: d.nome, era_de: r.era_de }, error: null });
-  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
-});
+// ⚠️ E QUEM DÁ O PARECER É CONFERIDO POR PERFIL, não por id — ver `POST /ci/decidir` abaixo e
+// `ciFila.podeDecidir`. Uma exceção por usuário seria a lista paralela que o CLAUDE.md manda
+// não criar: um dia ela divergiria do cadastro, sem erro nenhum.
 
 // POST /ci/decidir  body { codigos_pc[], decisao: 'de_acordo'|'ressalva', texto?, autor_id }
 app.post('/ci/decidir', async (req, res) => {
@@ -2324,7 +2270,7 @@ app.post('/ci/decidir', async (req, res) => {
     // aceitando coordenador e superadmin: ler a fila e decidir sobre ela são coisas diferentes.
     if (!autor)
       return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
-    if (!ciFila.podeDecidir(autor, null))
+    if (!ciFila.podeDecidir(autor))
       return res.status(403).json({ data: null, error: { message: ciFila.motivoNaoDecide() } });
 
     // ⚠️ A CONFERÊNCIA É DA PESSOA, e não mais da posse de cada PC. Até 25/08 valia "você

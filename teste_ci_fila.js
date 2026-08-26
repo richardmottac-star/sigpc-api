@@ -214,39 +214,31 @@ console.log('\n═══ 6. O FILTRO NAO CONCATENA TEXTO DE USUARIO ═══');
   conf(h.params.length === 0, 'faixa desconhecida nao vira filtro', 'params: ' + h.params.length);
 }
 
-console.log('\n═══ 7. O MOTIVO ═══');
+console.log('\n═══ 7. NADA NESTA LIB ESCREVE ═══');
 {
-  conf(CF.validarMotivo('') !== null, 'vazio e recusado');
-  conf(CF.validarMotivo('   ') !== null, 'so espaco tambem');
-  conf(CF.validarMotivo('curto') !== null, 'menos de 10 caracteres e recusado');
-  conf(CF.validarMotivo('a'.repeat(10)) === null, 'exatamente 10 passa');
-  conf(CF.validarMotivo('a'.repeat(501)) !== null, 'acima de 500 e recusado');
-}
+  // ⚠️ `devolver`, `passar` e `validarMotivo` SAIRAM EM 26/08/2026, junto com `SQL_HIST`.
+  //
+  // As duas primeiras escreviam `ci_tecnico_id` fora da confirmacao do parecer — uma zerando,
+  // a outra atribuindo. Duas portas para a mesma coluna fazem a resposta de "quem e o tecnico
+  // desta PC" depender de por onde se passou, e nao do que aconteceu.
+  //
+  // E as duas perderam o sentido junto com o modelo: com a atribuicao vindo do parecer, o
+  // tecnico gravado e **quem ja deu parecer**. Devolver apagaria esse registro, que e trilha;
+  // passar entregaria uma demanda que ninguem esta segurando.
+  for (const f of ['abrir', 'devolver', 'passar', 'validarMotivo'])
+    conf(CF[f] === undefined, `a lib nao exporta mais ${f}`);
+  conf(CF.MOTIVO_MIN === undefined && CF.MOTIVO_MAX === undefined,
+       'nem os limites do motivo, que so serviam a elas');
+  conf(CF.SQL_HIST === undefined, 'nem o INSERT de historico — a lib nao grava historico nenhum');
 
-console.log('\n═══ 8. ABRIR NAO ESCREVE NADA ═══');
-{
-  // ⚠️ HAVIA UMA `abrir(db, {codigo_pc, quem})` AQUI, e ela foi removida em 26/08/2026.
-  //
-  // Ela marcava a PC como do tecnico no instante em que ele a EXPANDIA na tela. A ideia era
-  // coordenar os tres — quem abriu, ficou —, e o efeito foi que **olhar virou tomar**: nao
-  // havia como examinar um valor, um processo SGPe ou o parecer da analista sem se declarar
-  // responsavel. No primeiro dia isso pos o nome do superadmin numa PC que ele nao analisa.
-  //
-  // A posse virou CONSEQUENCIA do parecer. Este teste protege a ausencia: se alguem
-  // reintroduzir uma funcao de "abrir" que escreve, ele quebra.
-  conf(CF.abrir === undefined, 'a lib nao exporta mais uma funcao de abrir');
+  // ⚠️ A LIB INTEIRA NAO TEM UM UNICO COMANDO DE ESCRITA. Ela monta consultas de LEITURA e
+  // responde quem pode o que. Esta e a checagem que pega o dia em que alguem acrescentar "so
+  // um UPDATEzinho" aqui.
   const fonte = fs.readFileSync('./lib/ci-fila.js', 'utf8');
   const codigo = fonte.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-  // ⚠️ A UNICA funcao desta lib que ATRIBUI um tecnico e o `passar`, que move a demanda de um
-  // tecnico do C.I. para outro. `devolver` so apaga. Se aparecer um segundo lugar gravando um
-  // id aqui, e porque o "abrir que assume" voltou com outro nome.
-  // ⚠️ COM O `SET`, e nao so o nome da coluna: o `SQL_RESUMO` compara `ci_tecnico_id = $1::int`
-  // para contar o chip "Comigo", e uma busca pelo nome cru contaria essa LEITURA como escrita.
-  // Foi o que aconteceu na primeira versao desta linha — 2 lugares, e um deles era um COUNT.
-  const atribui = (codigo.match(/SET ci_tecnico_id = \$\d+::int/g) || []).length;
-  conf(atribui === 1, 'so UMA funcao da lib atribui tecnico (o passar)', atribui + ' lugares');
-  conf(/async function passar[\s\S]*?ci_tecnico_id = \$2::int/.test(codigo),
-       'e e o passar — devolver so apaga');
+  for (const cmd of ['UPDATE ', 'INSERT ', 'DELETE ', 'BEGIN', 'COMMIT'])
+    conf(!codigo.includes(cmd), `sem ${cmd.trim()} em lugar nenhum da lib`);
+  conf(!/db\.connect|\.query\(/.test(codigo), 'e ela nao toca no banco — quem consulta e a rota');
 
   // ⚠️ QUEM CARIMBA E `ci.decidir`, no MESMO UPDATE do parecer. Um UPDATE separado deixaria a
   // janela em que a decisao existe e o autor dela nao.
@@ -258,73 +250,19 @@ console.log('\n═══ 8. ABRIR NAO ESCREVE NADA ═══');
        'nos DOIS caminhos — de acordo e devolucao', 'a devolvida tambem precisa dizer quem a devolveu');
   conf(!/UPDATE prestacoes_contas\s+SET ci_tecnico_id[\s\S]{0,200}WHERE/.test(dec),
        'e nunca num UPDATE separado da decisao');
-}
 
-console.log('\n═══ 9. DEVOLVER — a PC volta a ficar sem dono ═══');
-{
-  const d = db([{ rows: [] },
-                { rows: [{ tr:'A', parcial_num:'2', setorial_id:'FCEE', ci_tecnico_id: 62, ci_tecnico_nome:'Marcia' }] },
-                { rows: [] }, { rows: [] }, { rows: [] }]);
-  const r = await CF.devolver(d, { codigo_pc:'A-PC1', quem: MARCIA, motivo:'vou entrar de ferias amanha' });
-  const sql = sqlDe(d.ch);
-  conf(r.ok === true, 'devolveu');
-  // ⚠️ O DONO E LIDO ANTES DE APAGAR. `UPDATE ... RETURNING` devolveria o valor NOVO, que aqui
-  // e o proprio NULL — a trilha ficaria com "devolveu: (vazio)".
-  conf(/FOR UPDATE/.test(sql), 'a linha e lida e trancada antes');
-  conf(sql.indexOf('FOR UPDATE') < sql.indexOf('SET ci_tecnico_id = NULL'), 'e a leitura vem antes do UPDATE');
-  const p = hist(d.ch);
-  conf(p[H_EVENTO] === 'ci_devolveu', 'o evento e ci_devolveu');
-  conf(p[H_ANT] === 'Marcia' && p[H_NOVO] === null, 'de quem era, e para ninguem');
-  // ⚠️ AUTORIA DUPLA: o DONO e quem estava com a PC; o EXECUTOR some quando sao o mesmo.
-  conf(p[H_DONO] === 62, 'o dono da linha e quem estava com a PC');
-  conf(p[H_EXEC] === null, 'e o executor fica NULO quando foi ele mesmo');
-  conf(/vou entrar de ferias amanha/.test(p[H_OBS]), 'o motivo vai para o historico');
-
-  // Outro tecnico devolvendo a PC de alguem: os dois papeis passam a diferir.
-  const d2 = db([{ rows: [] },
-                 { rows: [{ tr:'A', parcial_num:'2', setorial_id:'FCEE', ci_tecnico_id: 62, ci_tecnico_nome:'Marcia' }] },
-                 { rows: [] }, { rows: [] }]);
-  await CF.devolver(d2, { codigo_pc:'A-PC1', quem: ATEM, motivo:'a Marcia esta afastada' });
-  const p2 = hist(d2.ch);
-  conf(p2[H_DONO] === 62 && p2[H_EXEC] === 63, 'devolvida por outro: dono 62, executor 63');
-  conf(/por Atemilson/.test(p2[H_OBS]), 'e o texto diz quem executou');
-
-  // PC que ja estava sem dono.
-  const d3 = db([{ rows: [] }, { rows: [{ tr:'B', parcial_num:'1', ci_tecnico_id: null }] }]);
-  const r3 = await CF.devolver(d3, { codigo_pc:'B-PC1', quem: MARCIA, motivo:'qualquer motivo aqui' });
-  conf(r3.ok === false && r3.semDono === true, 'PC sem dono nao e "devolvida" duas vezes');
-  conf(/ROLLBACK/.test(sqlDe(d3.ch)), 'e desfaz');
-
-  conf(!/ci_situacao|baixada|data_baixa|enviado_ci/.test(sql),
-       'devolver nao menciona ci_situacao, baixada, data_baixa nem enviado_ci');
-}
-
-console.log('\n═══ 10. PASSAR — a PC nunca fica orfa no meio ═══');
-{
-  const d = db([{ rows: [] },
-                { rows: [{ tr:'A', parcial_num:'3', setorial_id:'FCEE', ci_situacao:'na_fila',
-                           ci_tecnico_id: 62, ci_tecnico_nome:'Marcia' }] },
-                { rows: [] }, { rows: [] }, { rows: [] }]);
-  const r = await CF.passar(d, { codigo_pc:'A-PC1', quem: MARCIA, destino: ATEM, motivo:'ela conhece esta entidade' });
-  const sql = sqlDe(d.ch);
-  conf(r.ok === true, 'passou');
-  // ⚠️ UM UPDATE DIRETO, e nao solta-e-pega. Entre um e outro, mesmo na mesma transacao, uma
-  // falha deixaria a demanda ORFA — o estado que esta tela existe para acabar.
-  conf(/SET ci_tecnico_id = \$2::int/.test(sql), 'e um UPDATE por cima');
-  conf(!/ci_tecnico_id = NULL/.test(sql), 'a PC nunca passa por "sem dono" no caminho');
-  conf(/FOR UPDATE/.test(sql), 'a linha e travada antes de trocar de dono');
-  const p = hist(d.ch);
-  conf(p[H_EVENTO] === 'ci_passou', 'o evento e ci_passou');
-  conf(p[H_ANT] === 'Marcia' && p[H_NOVO] === 'Atemilson Bispo dos Santos', 'de quem para quem fica gravado');
-  conf(p[H_DONO] === 63, 'o DONO passa a ser o destino');
-  conf(p[H_EXEC] === 62, 'e o executor e quem clicou');
-  conf(/ela conhece esta entidade/.test(p[H_OBS]), 'com o motivo');
-
-  // ⚠️ SO SE PASSA O QUE ESTA NA FILA. Uma encerrada nao volta para o colo de ninguem.
-  const d2 = db([{ rows: [] }, { rows: [{ tr:'A', parcial_num:'1', ci_situacao:'encerrado' }] }]);
-  const r2 = await CF.passar(d2, { codigo_pc:'A-PC9', quem: MARCIA, destino: ATEM, motivo:'motivo qualquer aqui' });
-  conf(r2.ok === false && r2.foraDaFila === true, 'PC encerrada nao e passada a ninguem');
-  conf(/ROLLBACK/.test(sqlDe(d2.ch)), 'e desfaz');
+  // ⚠️ E ESSE E O UNICO LUGAR DO SERVIDOR INTEIRO. Uma segunda porta nao daria erro nenhum —
+  // so faria o nome na PC depender do caminho.
+  const srv = fs.readFileSync('./server.js', 'utf8');
+  const srvCodigo = srv.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const escritas = (srvCodigo.match(/ci_tecnico_id\s*=\s*[^ ]/g) || [])
+    .filter(m => !/ci_tecnico_id\s*=\s*p\./.test(m));
+  conf(escritas.length === 0, 'e o server.js nao escreve ci_tecnico_id em lugar nenhum',
+       escritas.join(' / '));
+  const todos = [libCi, fs.readFileSync('./lib/ci-fila.js', 'utf8'), srv]
+    .join('\n').split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  conf((todos.match(/SET ci_tecnico_id/g) || []).length === 0,
+       'nenhum "SET ci_tecnico_id" solto — o unico esta dentro do template `carimbo`');
 }
 
 console.log('\n═══ 11. O PARECER E DO C.I. — SUPERADMIN INCLUIDO NA RECUSA ═══');
@@ -333,27 +271,31 @@ console.log('\n═══ 11. O PARECER E DO C.I. — SUPERADMIN INCLUIDO NA RECU
   // o deu** em `ci_tecnico_id`. O nome que fica ali tem de ser o de um tecnico do Controle
   // Interno. Um superadmin decidindo poria o nome dele numa PC que ele nao analisa — que foi
   // exatamente o que aconteceu no primeiro dia da tela.
-  conf(CF.podeDecidir(MARCIA, null) === true, 'tecnico do C.I. decide, e a PC nem precisa ter dono');
-  conf(CF.podeDecidir(MARCIA, 62) === true, 'PC que ja e dele: decide');
-  // ⚠️ SAO TRES PESSOAS NA MESMA FILA. Travar por dono criaria demanda parada toda vez que
-  // alguem faltasse, e a PC so tem dono depois de UMA rodada — o caso e raro e o custo, alto.
-  conf(CF.podeDecidir(MARCIA, 63) === true, 'PC de outro TECNICO do C.I.: tambem decide');
+  conf(CF.podeDecidir(MARCIA) === true, 'tecnico do C.I. decide');
+  conf(CF.podeDecidir(ATEM) === true, 'qualquer um dos tres');
+  // ⚠️ E A FUNCAO RECEBE UM ARGUMENTO SO. Ela recebia tambem o `tecnicoId` da PC, de quando
+  // valia "voce decide a PC que e sua"; com a posse virando consequencia do parecer, o
+  // argumento passou a ser ignorado — e parametro que ninguem le engana quem chama.
+  conf(CF.podeDecidir.length === 1, 'e recebe UM argumento so — a pessoa, nunca a PC');
 
   // ⚠️ A UNICA REGRA DO SISTEMA EM QUE O SUPERADMIN NAO PASSA. Em todo o resto ele e isento —
   // modo manutencao, limite de TRs, decidir o proprio pedido de devolucao. As outras isencoes
   // o deixam AGIR; esta o faria APARECER como se fosse outra pessoa, num registro que a CGE le.
-  conf(CF.podeDecidir(RICHARD, 63) === false, 'o SUPERADMIN nao decide — nem no papel tecnico');
-  conf(CF.podeDecidir(RICHARD, null) === false, 'nem numa PC sem dono');
-  conf(CF.podeDecidir({ ...RICHARD, papel_ativo: 'analista' }, null) === false, 'nem no papel analista');
-  conf(CF.podeDecidir(COORD, null) === false, 'o coordenador tambem nao');
-  conf(CF.podeDecidir(ANALISTA, null) === false, 'e o analista muito menos');
-  conf(CF.podeDecidir(null, 62) === false, 'ninguem logado nao decide nada');
+  conf(CF.podeDecidir(RICHARD) === false, 'o SUPERADMIN nao decide — nem no papel tecnico');
+  conf(CF.podeDecidir({ ...RICHARD, papel_ativo: 'analista' }) === false, 'nem no papel analista');
+  conf(CF.podeDecidir(COORD) === false, 'o coordenador tambem nao');
+  conf(CF.podeDecidir(ANALISTA) === false, 'e o analista muito menos');
+  conf(CF.podeDecidir(null) === false, 'ninguem logado nao decide nada');
+  // ⚠️ A TRAVA E POR PERFIL, E NAO POR ID. Uma excecao por usuario seria a lista paralela que
+  // o CLAUDE.md manda nao criar: um dia ela divergiria do cadastro, sem erro nenhum.
+  conf(CF.podeDecidir({ id: 4, perfil: 'superadmin', papel_ativo: 'tecnico' }) === false,
+       'e nenhum id tem passe livre');
 
   // ⚠️ MAS VER CONTINUA LIBERADO. Ler a fila e decidir sobre ela sao coisas diferentes, e o
   // item de menu do coordenador depende disso — ver a secao 1.
-  conf(CF.podeAgir(COORD) === true && CF.podeDecidir(COORD, null) === false,
+  conf(CF.podeAgir(COORD) === true && CF.podeDecidir(COORD) === false,
        'coordenador VE a fila e nao decide — as duas guardas sao separadas');
-  conf(CF.podeAgir(RICHARD) === true && CF.podeDecidir(RICHARD, null) === false,
+  conf(CF.podeAgir(RICHARD) === true && CF.podeDecidir(RICHARD) === false,
        'e o superadmin tambem');
 
   // O motivo, para o botao cinza poder dizer POR QUE em vez de so ficar apagado.
@@ -365,10 +307,12 @@ console.log('\n═══ 11. O PARECER E DO C.I. — SUPERADMIN INCLUIDO NA RECU
 
 console.log('\n═══ 12. OS ROTULOS DO HISTORICO ═══');
 {
-  conf(CF.ROTULO_EVENTO.ci_abriu === 'abriu no Controle Interno', 'abriu no Controle Interno');
-  conf(CF.ROTULO_EVENTO.ci_devolveu === 'devolveu à fila do C.I.', 'devolveu a fila');
-  conf(CF.ROTULO_EVENTO.ci_passou === 'passou a demanda do C.I.', 'passou a demanda');
-  conf(CF.ROTULO_EVENTO.ci_decidiu === 'decidiu no Controle Interno', 'decidiu no C.I.');
+  // ⚠️ UM ROTULO SO: `ci_decidiu` e o unico evento que esta parte do sistema gera. Os outros
+  // tres — ci_abriu, ci_devolveu, ci_passou — sairam com as funcoes que os produziam. Um
+  // rotulo para um evento que nao acontece e uma promessa de que ele pode acontecer.
+  conf(Object.keys(CF.ROTULO_EVENTO).length === 1, 'um rotulo de evento so',
+       Object.keys(CF.ROTULO_EVENTO).join(', '));
+  conf(CF.ROTULO_EVENTO.ci_decidiu === 'decidiu no Controle Interno', 'e e o ci_decidiu');
   // O texto das duas decisoes mora num lugar so — ele vai para o radio, para a notificacao e
   // para a trilha. Escrever a mesma frase em tres lugares garante que um fique para tras.
   conf(CF.ROTULO_DECISAO.de_acordo === 'Parecer do analista em acordo, baixado', 'o rotulo do de acordo');
@@ -383,27 +327,18 @@ console.log('\n═══ 13. TRAVAS NO server.js ═══');
   // segunda vira codigo morto. A rota antiga por `situacao` ocupava este caminho ate 25/08.
   conf((src.match(/app\.get\('\/ci\/fila'/g) || []).length === 1, 'e e a UNICA com esse caminho');
   conf(!/app\.get\('\/ci\/fila_trabalho'/.test(src), 'a rota por TR saiu');
-  // ⚠️ POST /ci/pc/abrir SAIU EM 26/08/2026, junto com a regra que a justificava. Enquanto ela
-  // existisse, haveria duas portas para o mesmo estado — uma que atribui ao abrir e outra que
-  // atribui ao decidir — e um dia alguem chamaria a errada.
-  conf(!/app\.post\('\/ci\/pc\/abrir'/.test(src), 'POST /ci/pc/abrir SAIU');
-  conf(!/app\.get\('\/ci\/pc\/abrir'/.test(src), 'e nao virou um GET');
-  ['devolver', 'passar'].forEach(a =>
-    conf(new RegExp(`app\\.post\\('/ci/pc/${a}'`).test(src), `POST /ci/pc/${a} existe`));
-  conf(!/app\.post\('\/ci\/tr\//.test(src), 'e as tres rotas por TR sairam');
-
-  // ⚠️ QUEM PEDE E LIDO DO BANCO. Quatro rotas ja confiaram no `perfil` do corpo, e bastava
-  // mandar `perfil: 'superadmin'` para passar.
-  const g = src.slice(src.indexOf('async function guardaCi'), src.indexOf('async function guardaCi') + 700);
-  conf(/lerUsuario\(pool, \(req\.body \|\| \{\}\)\.usuario_id\)/.test(g), 'a guarda le o usuario do BANCO');
-  conf(/ciFila\.podeAgir\(quem\)/.test(g), 'e usa a regra unica da lib');
-
-  // ⚠️ O DESTINO TAMBEM E CONFERIDO CONTRA O BANCO. Sem isto, passar a demanda para um
-  // analista qualquer a tiraria da fila do C.I. sem sair do ciclo — orfa.
-  const p = src.slice(src.indexOf("app.post('/ci/pc/passar'"), src.indexOf("app.post('/ci/pc/passar'") + 2000);
-  conf(/lerUsuario\(pool, req\.body\.destino_id\)/.test(p), 'o destino e lido do banco');
-  conf(/perfilEfetivo\(d\) !== 'controle_interno'/.test(p), 'e precisa ser tecnico do C.I.');
-  conf(/d\.id === g\.quem\.id/.test(p), 'passar para si mesmo e recusado — para isso basta abrir');
+  // ⚠️ AS TRES ROTAS DE ESCRITA DA FILA SAIRAM — abrir, devolver e passar. Enquanto uma delas
+  // existisse, haveria uma segunda porta para `ci_tecnico_id`, e a resposta de "quem e o
+  // tecnico desta PC" passaria a depender de por onde se entrou.
+  for (const a of ['abrir', 'devolver', 'passar'])
+    conf(!new RegExp(`app\\.(post|get|patch)\\('/ci/pc/${a}'`).test(src), `POST /ci/pc/${a} SAIU`);
+  conf(!/app\.post\('\/ci\/tr\//.test(src), 'e as tres rotas por TR sairam antes');
+  // ⚠️ A GUARDA `guardaCi` SAIU JUNTO: ela existia so para essas tres rotas, e um guarda sem
+  // porta e codigo que ninguem chama — e que ninguem revisa.
+  conf(!/async function guardaCi/.test(src), 'e a guarda guardaCi, que nao guardava mais nada');
+  // ⚠️ SOBROU UMA ROTA SO EM /ci/pc/*: nenhuma. A fila e LEITURA; a unica escrita do C.I. e o
+  // parecer, em `/ci/decidir`.
+  conf((src.match(/app\.\w+\('\/ci\/pc\//g) || []).length === 0, 'nao ha mais nenhuma rota /ci/pc/*');
 
   // ⚠️ O MAPA DE LINKS DO SGPe E O QUE FAZ O NUMERO VIRAR LINK. Sem ele o processo sai em
   // texto puro, sem erro nenhum, e o tecnico nao abre o processo que precisa conferir.
@@ -418,7 +353,7 @@ console.log('\n═══ 13. TRAVAS NO server.js ═══');
   // ⚠️ A TRAVA DE DECIDIR VIVE NO SERVIDOR, e nao so no botao cinza. Desabilitar avisa;
   // recusar impede.
   const dec = src.slice(src.indexOf("app.post('/ci/decidir'"), src.indexOf("app.post('/ci/responder'"));
-  conf(/ciFila\.podeDecidir\(autor, null\)/.test(dec),
+  conf(/ciFila\.podeDecidir\(autor\)/.test(dec),
        'POST /ci/decidir confere que quem pede e do C.I.');
   // ⚠️ E CONFERE A PESSOA, nao a posse de cada PC. A posse virou CONSEQUENCIA do parecer:
   // exigi-la antes travaria a fila inteira, porque nenhuma PC tem dono ate o primeiro parecer.

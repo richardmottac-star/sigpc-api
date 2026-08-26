@@ -19,6 +19,7 @@ const prep = require('./lib/preparacao');
 const manut = require('./lib/manutencao');
 const ci = require('./lib/ci');
 const ciFila = require('./lib/ci-fila');
+const acomp = require('./lib/acompanhamento');
 const nov = require('./lib/novidades');
 const devol = require('./lib/devolucao');
 // ⚠️ NÃO É A MESMA COISA que `devol`: aquela é a devolução do superadmin, que executa na
@@ -2508,6 +2509,70 @@ app.post('/ci/reabrir', async (req, res) => {
       });
     }
     res.json({ data: { afetadas: pcs.length }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// ══════════════════════════════════════
+//  ACOMPANHAMENTO — a linha do tempo do sistema   (27/08/2026)
+// ══════════════════════════════════════
+//
+// GET /acompanhamento?de&ate&pessoa_id&perfil&evento|familia&tr&q&pagina&tamanho
+//
+// ⚠️ SÓ LEITURA, E SÓ SUPERADMIN. A regra mora em `acomp.podeVer`, e o perfil é lido do
+// BANCO pelo `usuario_id` — nunca do corpo nem da query. Foram QUATRO rotas que confiaram no
+// `perfil` do corpo até 14/08, e bastava mandar `perfil: 'superadmin'` para passar.
+//
+// ⚠️ E NÃO É SIGILO: é que a tela mostra o que TODA a equipe fez. Um coordenador vendo a
+// trilha do grupo vizinho é decisão de gestão que ninguém tomou.
+app.get('/acompanhamento', async (req, res) => {
+  try {
+    const quem = await lerUsuario(pool, req.query.usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    if (!acomp.podeVer(quem))
+      return res.status(403).json({ data: null, error: { message: acomp.motivoNaoVe() } });
+
+    const { sql, params } = acomp.montarFiltro(req.query);
+    const pag = acomp.paginacao(req.query);
+
+    const [lista, contagem, pessoas, eventos] = await Promise.all([
+      pool.query(acomp.sqlLista(sql, pag), params),
+      pool.query(acomp.sqlContar(sql), params),
+      pool.query(acomp.SQL_PESSOAS),
+      pool.query(acomp.SQL_EVENTOS),
+    ]);
+    const total = contagem.rows[0].n;
+
+    // ⚠️ O MAPA DE LINKS DO SGPe, como em toda tela que mostra processo. `procHtml` é um
+    // `Map.get` e nada mais — sem isto o número aparece em texto puro (armadilha 20).
+    const links = await linksDeLinhas(pool, lista.rows, ['processo_pc']);
+
+    res.json({
+      data: lista.rows.map(l => ({
+        ...l,
+        evento_rotulo: acomp.rotuloEvento(l.evento),
+        familia: acomp.familiaEvento(l.evento),
+        alertas: acomp.alertasDaLinha(l),
+      })),
+      links, count: lista.rows.length, total,
+      pagina: pag.pagina, tamanho: pag.tamanho, tamanhos: acomp.TAMANHOS,
+      paginas: Math.max(1, Math.ceil(total / pag.tamanho)),
+      // O filtro só oferece o que EXISTE: pessoas que aparecem na trilha e eventos gravados.
+      // Um `<select>` com opção que devolve zero linhas ensina que a busca está quebrada.
+      pessoas: pessoas.rows,
+      eventos: eventos.rows.map(e => ({ ...e, rotulo: acomp.rotuloEvento(e.evento),
+                                        familia: acomp.familiaEvento(e.evento) })),
+      familias: acomp.FAMILIAS, rotulos_alerta: acomp.ROTULO_ALERTA,
+      // ⚠️ O RECORTE VAI DITO NA RESPOSTA, e a tela o mostra. Duas coisas que esta trilha NÃO
+      // cobre, e que não é omissão de quem consulta descobrir sozinho: erro devolvido por
+      // rota e recusa de ação não deixam registro nenhum no banco.
+      nao_cobre: [
+        'Erros devolvidos pelas rotas (403/409/500) — não há tabela de log no sistema.',
+        'Ações RECUSADAS — a recusa acontece antes da escrita e não deixa rastro.',
+      ],
+      error: null,
+    });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }

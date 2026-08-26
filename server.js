@@ -2237,25 +2237,18 @@ async function guardaCi(req, res) {
   return { quem, codigo_pc };
 }
 
-// ⚠️ ABRIR É POST, E NÃO GET, porque ele ESCREVE: a abertura marca a PC como sua. Um GET que
-// muda estado é o tipo de coisa que um pre-fetch do navegador dispara sozinho — e aí a PC
-// ficaria com quem só passou o mouse por cima do link.
-app.post('/ci/pc/abrir', async (req, res) => {
-  try {
-    const g = await guardaCi(req, res); if (!g) return;
-    const r = await ciFila.abrir(pool, g);
-    if (r.ok) return res.json({ data: { codigo_pc: g.codigo_pc, tecnico_id: r.tecnico_id,
-                                        tecnico_nome: r.tecnico_nome, marcou: true }, error: null });
-    if (r.inexistente)
-      return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
-    // ⚠️ NÃO É ERRO: abrir uma PC que já tem dono, ou que já saiu da fila, é LEITURA — e é o
-    // caso mais comum depois do primeiro dia. Devolver 409 aqui faria a tela mostrar um erro
-    // vermelho toda vez que alguém consultasse uma PC encerrada.
-    res.json({ data: { codigo_pc: g.codigo_pc, tecnico_id: r.ja.ci_tecnico_id,
-                       tecnico_nome: r.ja.ci_tecnico_nome, marcou: false,
-                       situacao: r.ja.ci_situacao, seu: !!r.seu }, error: null });
-  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
-});
+// ⚠️ A ROTA POST /ci/pc/abrir SAIU EM 26/08/2026.
+//
+// Ela marcava a PC como do técnico no instante em que ele a EXPANDIA na tela — e por isso
+// **olhar virava tomar**. Não havia como examinar um valor, um processo SGPe ou o parecer da
+// analista sem se declarar responsável. No primeiro dia isso pôs o nome do superadmin numa PC
+// que ele não analisa.
+//
+// Abrir voltou a ser só abrir: a tela expande o cartão sem chamar rota nenhuma. Quem carimba
+// `ci_tecnico_id` é `ci.decidir`, no mesmo UPDATE do parecer.
+//
+// ⚠️ E NÃO ENTROU UM "ASSUMIR" NO LUGAR. Um botão de assumir traria de volta o mesmo par de
+// estados com um clique a mais; o que a fila precisa saber é quem JÁ decidiu.
 
 app.post('/ci/pc/devolver', async (req, res) => {
   try {
@@ -2315,26 +2308,31 @@ app.post('/ci/decidir', async (req, res) => {
     // Quem decide é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
     const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
     const autor = q.rows[0];
-    if (!autor || !['controle_interno', 'coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
-      return res.status(403).json({ data: null, error: { message: 'Só o Controle Interno decide sobre esta fila.' } });
 
-    // ⚠️ QUEM DECIDE É QUEM ABRIU (25/08/2026). Abrir a PC já a marca como sua; quem não a
-    // abriu não decide sobre ela. A regra vive em `ciFila.podeDecidir`, e aqui ela é aplicada
-    // PC a PC — era por TR até 25/08, e uma TR de 83 prestações não é a unidade de trabalho
-    // do Controle Interno.
+    // ⚠️ SÓ O CONTROLE INTERNO DÁ PARECER — SUPERADMIN INCLUÍDO NA RECUSA. (26/08/2026)
     //
-    // ⚠️ NÃO BASTA O BOTÃO CINZA NA TELA: desabilitar avisa, recusar impede. A diferença
-    // aparece no dia em que alguém tiver duas abas abertas e a segunda ainda mostrar a PC
-    // como sua — a tela estaria desatualizada, o servidor não.
-    const donos = await pool.query(
-      `SELECT p.codigo_pc, p.ci_tecnico_id, u.nome AS ci_tecnico_nome
-         FROM prestacoes_contas p
-         LEFT JOIN usuarios u ON u.id = p.ci_tecnico_id
-        WHERE p.codigo_pc = ANY($1)`, [b.codigos_pc]);
-    const semDireito = donos.rows.find(d => !ciFila.podeDecidir(autor, d.ci_tecnico_id));
-    if (semDireito)
-      return res.status(403).json({ data: null, error: {
-        message: `${semDireito.codigo_pc}: ${ciFila.motivoNaoDecide(semDireito.ci_tecnico_nome)}` } });
+    // Coordenador e superadmin passavam aqui até 25/08. Não passam mais, e o motivo não é
+    // hierarquia: **o parecer carimba o nome de quem o deu** em `ci_tecnico_id`, e o nome que
+    // fica ali tem de ser o de um técnico do C.I. Um superadmin decidindo poria o nome dele
+    // numa PC que ele não analisa — que foi exatamente o que aconteceu em 25/08.
+    //
+    // ⚠️ É A ÚNICA ROTA DO SISTEMA EM QUE O SUPERADMIN NÃO É ISENTO. Em todas as outras a
+    // isenção o deixa AGIR; esta o faria APARECER como se fosse outra pessoa, e num registro
+    // que a CGE lê. Ver `ciFila.podeDecidir`, que é onde a regra mora.
+    //
+    // ⚠️ VER CONTINUA LIBERADO. `ciFila.podeAgir` — a guarda do `GET /ci/fila` — segue
+    // aceitando coordenador e superadmin: ler a fila e decidir sobre ela são coisas diferentes.
+    if (!autor)
+      return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    if (!ciFila.podeDecidir(autor, null))
+      return res.status(403).json({ data: null, error: { message: ciFila.motivoNaoDecide() } });
+
+    // ⚠️ A CONFERÊNCIA É DA PESSOA, e não mais da posse de cada PC. Até 25/08 valia "você
+    // decide a PC que é sua", porque abrir a PC já a marcava como sua. Agora a posse é
+    // CONSEQUÊNCIA do parecer: exigir posse antes travaria a fila inteira, porque nenhuma PC
+    // tem dono até alguém dar o primeiro parecer. A consulta `donos`, que lia o técnico PC a
+    // PC para essa conferência, saiu junto — era uma ida ao banco por decisão para responder
+    // uma pergunta que já não se faz.
 
     const { pcs, jaDecidido } = await ci.decidir(pool, {
       codigos_pc: b.codigos_pc, decisao: b.decisao, texto: b.texto, autor,

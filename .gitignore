@@ -104,3 +104,6 @@ PCS_BAIXADAS_ATE_*_CGE.pdf
 # Um deles apareceu em 25/08 no `git status` justamente enquanto o relatorio era conferido.
 # Nao sao dado nem codigo: sao lixo temporario, e entram no repositorio sem ninguem notar.
 ~$*
+
+# O diagnostico dos 16 processos do C.I. — traz entidade e nome de analista
+DIAGNOSTICO_CI_16_PROCESSOS_*.md

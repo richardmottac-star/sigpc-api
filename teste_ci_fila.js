@@ -8,15 +8,15 @@
 // nao derrubada. As checagens que valiam para a TR valem agora para a PC, e as tres que
 // existiam so por causa da tabela sairam com ela.
 //
-// ⚠️ COM DUBLÊ, E NÃO CONTRA O BANCO — armadilha 11 do CLAUDE.md. `abrir`, `devolver` e
-// `passar` gerenciam a PRÓPRIA transação: o COMMIT interno delas confirmaria a transação
-// externa de um teste, e o ROLLBACK do teste não teria mais o que desfazer. Em 12/08 isso
-// gravou 7 PCs e 14 mensagens em produção, num teste que parecia isolado.
+// ⚠️ COM DUBLÊ, E NÃO CONTRA O BANCO — armadilha 11 do CLAUDE.md. `devolver` e `passar`
+// gerenciam a PRÓPRIA transação: o COMMIT interno delas confirmaria a transação externa de
+// um teste, e o ROLLBACK do teste não teria mais o que desfazer. Em 12/08 isso gravou 7 PCs
+// e 14 mensagens em produção, num teste que parecia isolado.
 //
 // O que protege, em uma frase cada:
 //   · quem é técnico do C.I. tem UMA fonte — o perfil, nunca uma lista paralela;
-//   · a trava de "abrir duas vezes" vive DENTRO do UPDATE, não numa leitura antes;
-//   · abrir NÃO toma a PC de quem já está com ela;
+//   · abrir NÃO escreve nada — a PC só ganha técnico quando o parecer é confirmado;
+//   · o parecer do C.I. é dado por um técnico do C.I., superadmin incluído na recusa;
 //   · passar é UPDATE direto, nunca solta-e-pega: a PC não pode ficar órfã no meio;
 //   · o motivo é obrigatório nas duas ações que tiram a PC de alguém;
 //   · a busca por SGPe normaliza os DOIS lados, e exige os três campos;
@@ -223,42 +223,41 @@ console.log('\n═══ 7. O MOTIVO ═══');
   conf(CF.validarMotivo('a'.repeat(501)) !== null, 'acima de 500 e recusado');
 }
 
-console.log('\n═══ 8. ABRIR — a trava vive DENTRO do UPDATE ═══');
+console.log('\n═══ 8. ABRIR NAO ESCREVE NADA ═══');
 {
-  const d = db([{ rows: [] }, { rows: [{ tr:'2020TR000657', parcial_num:'1', setorial_id:'FCEE' }] }, { rows: [] }, { rows: [] }]);
-  const r = await CF.abrir(d, { codigo_pc: '2020PC000448', quem: MARCIA });
-  const sql = sqlDe(d.ch);
-  conf(/BEGIN/.test(sql), 'abre transacao');
-  // ⚠️ SEM ISTO, dois cliques simultaneos passariam os dois por uma conferencia feita FORA do
-  // comando. Com o `ci_tecnico_id IS NULL` dentro do UPDATE, o segundo nao acha linha.
-  conf(/UPDATE prestacoes_contas[\s\S]*ci_tecnico_id IS NULL/.test(sql),
-       'o UPDATE carrega a propria trava (ci_tecnico_id IS NULL)');
-  conf(r.ok === true, 'abriu e ficou com ela');
-  conf(/INSERT INTO parcela_historico/.test(sql), 'e gravou no historico');
-  const p = hist(d.ch);
-  conf(p[H_EVENTO] === 'ci_abriu', 'com o evento ci_abriu', String(p[H_EVENTO]));
-  conf(p[0] === '2020TR000657' && p[1] === '1', 'na TR e na parcela da PC');
-  conf(p[H_DONO] === 62 && p[H_EXEC] === null, 'dono 62, executor nulo — foi ele mesmo');
-  conf(/2020PC000448/.test(p[H_OBS]), 'e o codigo da PC vai no texto');
-  conf(/COMMIT/.test(sql), 'e confirmou');
+  // ⚠️ HAVIA UMA `abrir(db, {codigo_pc, quem})` AQUI, e ela foi removida em 26/08/2026.
+  //
+  // Ela marcava a PC como do tecnico no instante em que ele a EXPANDIA na tela. A ideia era
+  // coordenar os tres — quem abriu, ficou —, e o efeito foi que **olhar virou tomar**: nao
+  // havia como examinar um valor, um processo SGPe ou o parecer da analista sem se declarar
+  // responsavel. No primeiro dia isso pos o nome do superadmin numa PC que ele nao analisa.
+  //
+  // A posse virou CONSEQUENCIA do parecer. Este teste protege a ausencia: se alguem
+  // reintroduzir uma funcao de "abrir" que escreve, ele quebra.
+  conf(CF.abrir === undefined, 'a lib nao exporta mais uma funcao de abrir');
+  const fonte = fs.readFileSync('./lib/ci-fila.js', 'utf8');
+  const codigo = fonte.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  // ⚠️ A UNICA funcao desta lib que ATRIBUI um tecnico e o `passar`, que move a demanda de um
+  // tecnico do C.I. para outro. `devolver` so apaga. Se aparecer um segundo lugar gravando um
+  // id aqui, e porque o "abrir que assume" voltou com outro nome.
+  // ⚠️ COM O `SET`, e nao so o nome da coluna: o `SQL_RESUMO` compara `ci_tecnico_id = $1::int`
+  // para contar o chip "Comigo", e uma busca pelo nome cru contaria essa LEITURA como escrita.
+  // Foi o que aconteceu na primeira versao desta linha — 2 lugares, e um deles era um COUNT.
+  const atribui = (codigo.match(/SET ci_tecnico_id = \$\d+::int/g) || []).length;
+  conf(atribui === 1, 'so UMA funcao da lib atribui tecnico (o passar)', atribui + ' lugares');
+  conf(/async function passar[\s\S]*?ci_tecnico_id = \$2::int/.test(codigo),
+       'e e o passar — devolver so apaga');
 
-  // ⚠️ ABRIR NAO TOMA A PC DE QUEM JA ESTA COM ELA. A marca existe para coordenar, e uma marca
-  // que troca de dono a cada clique nao coordena nada.
-  const d2 = db([{ rows: [] }, { rows: [] }, { rows: [] },
-                 { rows: [{ ci_situacao:'na_fila', ci_tecnico_id: 63, ci_tecnico_nome:'Atemilson' }] }]);
-  const r2 = await CF.abrir(d2, { codigo_pc: 'X', quem: MARCIA });
-  conf(r2.ok === false, 'a PC de outro NAO muda de dono ao ser aberta');
-  conf(r2.ja && r2.ja.ci_tecnico_nome === 'Atemilson', 'e a rota sabe dizer com quem ela esta');
-  conf(r2.seu === false, 'e que nao e minha');
-  conf(/ROLLBACK/.test(sqlDe(d2.ch)), 'e desfaz');
-  conf(!/parcela_historico/.test(sqlDe(d2.ch)), 'sem linha de historico: nao mudou nada');
-
-  // ⚠️ E SO MARCA O QUE ESTA NA FILA. Abrir uma encerrada para consultar nao a traz de volta.
-  conf(/ci_situacao = 'na_fila'/.test(sql), 'o UPDATE so alcanca a fila');
-
-  // ⚠️ NADA DISTO TOCA NO CICLO NEM NA BAIXA. Quem esta com a PC e outra pergunta.
-  conf(!/ci_situacao = 'encerrado'|baixada|data_baixa|enviado_ci/.test(sql),
-       'abrir nao menciona baixada, data_baixa nem enviado_ci');
+  // ⚠️ QUEM CARIMBA E `ci.decidir`, no MESMO UPDATE do parecer. Um UPDATE separado deixaria a
+  // janela em que a decisao existe e o autor dela nao.
+  const libCi = fs.readFileSync('./lib/ci.js', 'utf8');
+  const dec = libCi.slice(libCi.indexOf('async function decidir'), libCi.indexOf('async function responder'));
+  conf(/const carimbo = `ci_tecnico_id = \$2::int, ci_tecnico_em = NOW\(\)`/.test(dec),
+       'ci.decidir carimba o tecnico');
+  conf((dec.match(/\$\{carimbo\}/g) || []).length === 2,
+       'nos DOIS caminhos — de acordo e devolucao', 'a devolvida tambem precisa dizer quem a devolveu');
+  conf(!/UPDATE prestacoes_contas\s+SET ci_tecnico_id[\s\S]{0,200}WHERE/.test(dec),
+       'e nunca num UPDATE separado da decisao');
 }
 
 console.log('\n═══ 9. DEVOLVER — a PC volta a ficar sem dono ═══');
@@ -328,27 +327,40 @@ console.log('\n═══ 10. PASSAR — a PC nunca fica orfa no meio ═══')
   conf(/ROLLBACK/.test(sqlDe(d2.ch)), 'e desfaz');
 }
 
-console.log('\n═══ 11. QUEM DECIDE E QUEM ABRIU ═══');
+console.log('\n═══ 11. O PARECER E DO C.I. — SUPERADMIN INCLUIDO NA RECUSA ═══');
 {
-  // ⚠️ Abrir uma PC LIVRE ja a marca como sua — entao o unico jeito de nao poder decidir uma
-  // PC da fila e ela ser de outro. O caso `null` continua valendo para a tela desatualizada.
-  conf(CF.podeDecidir(MARCIA, null) === false, 'PC sem tecnico: ninguem decide, nem quem e do C.I.');
-  conf(CF.podeDecidir(MARCIA, 62) === true, 'PC minha: decido');
-  conf(CF.podeDecidir(MARCIA, 63) === false, 'PC de OUTRO: abro e vejo, nao decido');
-  // ⚠️ O superadmin decide sem restricao — e ele quem destrava o que travou.
-  conf(CF.podeDecidir(RICHARD, 63) === true, 'o superadmin decide a PC de qualquer um');
-  conf(CF.podeDecidir(RICHARD, null) === true, 'inclusive a sem dono');
-  // ⚠️ Mas no papel analista ele NAO e superadmin — a regra unica de 14/08.
-  conf(CF.podeDecidir({ ...RICHARD, papel_ativo: 'analista' }, 63) === false, 'no papel analista, nem ele');
+  // ⚠️ MUDOU EM 26/08/2026, e nao e endurecimento gratuito: o parecer **carimba o nome de quem
+  // o deu** em `ci_tecnico_id`. O nome que fica ali tem de ser o de um tecnico do Controle
+  // Interno. Um superadmin decidindo poria o nome dele numa PC que ele nao analisa — que foi
+  // exatamente o que aconteceu no primeiro dia da tela.
+  conf(CF.podeDecidir(MARCIA, null) === true, 'tecnico do C.I. decide, e a PC nem precisa ter dono');
+  conf(CF.podeDecidir(MARCIA, 62) === true, 'PC que ja e dele: decide');
+  // ⚠️ SAO TRES PESSOAS NA MESMA FILA. Travar por dono criaria demanda parada toda vez que
+  // alguem faltasse, e a PC so tem dono depois de UMA rodada — o caso e raro e o custo, alto.
+  conf(CF.podeDecidir(MARCIA, 63) === true, 'PC de outro TECNICO do C.I.: tambem decide');
+
+  // ⚠️ A UNICA REGRA DO SISTEMA EM QUE O SUPERADMIN NAO PASSA. Em todo o resto ele e isento —
+  // modo manutencao, limite de TRs, decidir o proprio pedido de devolucao. As outras isencoes
+  // o deixam AGIR; esta o faria APARECER como se fosse outra pessoa, num registro que a CGE le.
+  conf(CF.podeDecidir(RICHARD, 63) === false, 'o SUPERADMIN nao decide — nem no papel tecnico');
+  conf(CF.podeDecidir(RICHARD, null) === false, 'nem numa PC sem dono');
+  conf(CF.podeDecidir({ ...RICHARD, papel_ativo: 'analista' }, null) === false, 'nem no papel analista');
+  conf(CF.podeDecidir(COORD, null) === false, 'o coordenador tambem nao');
+  conf(CF.podeDecidir(ANALISTA, null) === false, 'e o analista muito menos');
   conf(CF.podeDecidir(null, 62) === false, 'ninguem logado nao decide nada');
-  // ⚠️ Id como TEXTO tambem casa: o `ci_tecnico_id` vem do banco como number, mas o `U.id` da
-  // tela pode chegar como string, e uma comparacao estrita faria a PC propria parecer alheia.
-  conf(CF.podeDecidir({ ...MARCIA, id: '62' }, 62) === true, 'id como texto nao quebra a posse');
+
+  // ⚠️ MAS VER CONTINUA LIBERADO. Ler a fila e decidir sobre ela sao coisas diferentes, e o
+  // item de menu do coordenador depende disso — ver a secao 1.
+  conf(CF.podeAgir(COORD) === true && CF.podeDecidir(COORD, null) === false,
+       'coordenador VE a fila e nao decide — as duas guardas sao separadas');
+  conf(CF.podeAgir(RICHARD) === true && CF.podeDecidir(RICHARD, null) === false,
+       'e o superadmin tambem');
 
   // O motivo, para o botao cinza poder dizer POR QUE em vez de so ficar apagado.
-  conf(/Abra a PC/.test(CF.motivoNaoDecide(null)), 'PC sem dono: "Abra a PC"');
-  conf(/Sirene/.test(CF.motivoNaoDecide('Sirene')) && /passe a demanda/.test(CF.motivoNaoDecide('Sirene')),
-       'PC de outro: diz com quem esta e o que fazer');
+  conf(/tecnico do C\.I\.|técnico do C\.I\./.test(CF.motivoNaoDecide()),
+       'o motivo diz que o parecer e do C.I.');
+  conf(/seu nome ficaria registrado/.test(CF.motivoNaoDecide()),
+       'e diz POR QUE: o nome de quem decide fica na PC');
 }
 
 console.log('\n═══ 12. OS ROTULOS DO HISTORICO ═══');
@@ -371,13 +383,14 @@ console.log('\n═══ 13. TRAVAS NO server.js ═══');
   // segunda vira codigo morto. A rota antiga por `situacao` ocupava este caminho ate 25/08.
   conf((src.match(/app\.get\('\/ci\/fila'/g) || []).length === 1, 'e e a UNICA com esse caminho');
   conf(!/app\.get\('\/ci\/fila_trabalho'/.test(src), 'a rota por TR saiu');
-  ['abrir', 'devolver', 'passar'].forEach(a =>
+  // ⚠️ POST /ci/pc/abrir SAIU EM 26/08/2026, junto com a regra que a justificava. Enquanto ela
+  // existisse, haveria duas portas para o mesmo estado — uma que atribui ao abrir e outra que
+  // atribui ao decidir — e um dia alguem chamaria a errada.
+  conf(!/app\.post\('\/ci\/pc\/abrir'/.test(src), 'POST /ci/pc/abrir SAIU');
+  conf(!/app\.get\('\/ci\/pc\/abrir'/.test(src), 'e nao virou um GET');
+  ['devolver', 'passar'].forEach(a =>
     conf(new RegExp(`app\\.post\\('/ci/pc/${a}'`).test(src), `POST /ci/pc/${a} existe`));
   conf(!/app\.post\('\/ci\/tr\//.test(src), 'e as tres rotas por TR sairam');
-
-  // ⚠️ ABRIR E POST, E NAO GET, porque ele ESCREVE. Um GET que muda estado e o tipo de coisa
-  // que um pre-fetch do navegador dispara sozinho.
-  conf(!/app\.get\('\/ci\/pc\/abrir'/.test(src), 'abrir nao e GET');
 
   // ⚠️ QUEM PEDE E LIDO DO BANCO. Quatro rotas ja confiaram no `perfil` do corpo, e bastava
   // mandar `perfil: 'superadmin'` para passar.
@@ -402,16 +415,17 @@ console.log('\n═══ 13. TRAVAS NO server.js ═══');
   // ⚠️ NENHUMA DAS ROTAS DA FILA MEXE NO CICLO NEM NA BAIXA.
   const bloco = src.slice(src.indexOf("app.get('/ci/fila'"), src.indexOf("app.post('/ci/decidir'"));
   conf(!/UPDATE prestacoes_contas/.test(bloco), 'nenhuma rota da fila escreve direto em prestacoes_contas');
-  conf(!/data_baixa|enviado_ci = /.test(bloco), 'e nao mencionam data_baixa nem escrevem enviado_ci');
-
   // ⚠️ A TRAVA DE DECIDIR VIVE NO SERVIDOR, e nao so no botao cinza. Desabilitar avisa;
-  // recusar impede — e a diferenca aparece no dia em que alguem tiver duas abas abertas e a
-  // segunda ainda mostrar a PC como sua.
+  // recusar impede.
   const dec = src.slice(src.indexOf("app.post('/ci/decidir'"), src.indexOf("app.post('/ci/responder'"));
-  conf(/ciFila\.podeDecidir\(autor, d\.ci_tecnico_id\)/.test(dec), 'POST /ci/decidir confere quem abriu a PC');
-  conf(/p\.ci_tecnico_id/.test(dec), 'lendo o tecnico das PROPRIAS PCs que vieram');
-  conf(!/ci_responsavel/.test(dec), 'e nao pela tabela por TR, que saiu do caminho do codigo');
-  conf(/ciFila\.motivoNaoDecide/.test(dec), 'e a recusa diz POR QUE, com o nome de quem esta com ela');
+  conf(/ciFila\.podeDecidir\(autor, null\)/.test(dec),
+       'POST /ci/decidir confere que quem pede e do C.I.');
+  // ⚠️ E CONFERE A PESSOA, nao a posse de cada PC. A posse virou CONSEQUENCIA do parecer:
+  // exigi-la antes travaria a fila inteira, porque nenhuma PC tem dono ate o primeiro parecer.
+  conf(!/const donos = await pool\.query/.test(dec),
+       'e a consulta `donos`, que lia o tecnico PC a PC, saiu junto');
+  conf(!/ci_responsavel/.test(dec), 'nem le a tabela por TR, que saiu do caminho do codigo');
+  conf(/ciFila\.motivoNaoDecide\(\)/.test(dec), 'e a recusa diz POR QUE o parecer e do C.I.');
   // A conferencia vem ANTES de `ci.decidir`, que abre a propria transacao e grava.
   conf(dec.indexOf('podeDecidir') < dec.indexOf('await ci.decidir('),
        'e a conferencia vem ANTES de a decisao ser gravada');

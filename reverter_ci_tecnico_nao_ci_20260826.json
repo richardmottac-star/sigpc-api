@@ -1,0 +1,31 @@
+{
+  "o_que": "zerou ci_tecnico_id/ci_tecnico_em de quem nao e do Controle Interno",
+  "quando": "2026-08-26T11:41:56.131Z",
+  "motivo": "a tela de 25/08 atribuia a PC a quem a EXPANDIA; abrir para ler virava posse",
+  "pcs": [
+    {
+      "codigo_pc": "2020PC000448",
+      "tr": "2020TR000657",
+      "parcial_num": "1",
+      "processo_pc": "SCC9692/2020",
+      "ci_situacao": "na_fila",
+      "ci_tecnico_id_antes": 4,
+      "ci_tecnico_em_antes": "2026-08-25T18:29:43.297Z",
+      "tecnico_nome_antes": "Richard Motta Coelho",
+      "tecnico_perfil_antes": "superadmin"
+    }
+  ],
+  "reverter_com": [
+    "UPDATE prestacoes_contas SET ci_tecnico_id = 4, ci_tecnico_em = '2026-08-25T18:29:43.297Z' WHERE codigo_pc = '2020PC000448';"
+  ],
+  "atencao": "reverter recoloca um NAO-TECNICO como responsavel do C.I. — a rota recusa isso desde 26/08. So faz sentido se a limpeza tiver sido um engano.",
+  "nao_tocado": [
+    "ci_situacao",
+    "ci_rodada",
+    "ci_encerrado_em",
+    "ci_encerrado_por",
+    "baixada",
+    "data_baixa",
+    "enviado_ci"
+  ]
+}

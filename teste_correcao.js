@@ -314,5 +314,78 @@ T('/estornar continua declarada ANTES de /:codigo_pc',
   srv.indexOf("app.patch('/prestacoes_contas/estornar'") <
   srv.indexOf("app.patch('/prestacoes_contas/:codigo_pc'"));
 
+// ═════════════════════════════════════════════════════════════════════════════
+S('10. O BURACO DO PUXAR_CI — a PC que o C.I. JA TOCOU  (26/08/2026)');
+
+// ⚠️ O QUE ESTA SECAO EXISTE PARA IMPEDIR.
+//
+// `SQL_PUXAR_CI` derruba `baixada`, `enviado_ci` e `parecer_tipo`, marca `estornada` e TIRA
+// a PC da produtividade. O `WHERE` dele era so `enviado_ci = true` — e as 1.737 PCs que o
+// C.I. ja encerrou tem `enviado_ci = true` e `enviado_ci_por` NULO (vieram da carga de
+// 16/08). O caso 3 de `podePuxarCi` ("sem autoria registrada o analista passa") deixava a
+// PROPRIA analista apagar a produtividade de um trabalho que o C.I. ja aprovou. Nenhum erro
+// na tela, nenhum erro no log.
+//
+// Medido em 26/08 no acervo inteiro: `enviado_ci = true` ⟺ `ci_situacao IS NOT NULL`, em
+// 14.658 de 14.658 linhas (11.527 nulas · 1.392 na_fila · 2 com_analista · 1.737 encerrado).
+// Logo bloquear por `ci_situacao` nao muda NADA para PC que nunca foi encaminhada.
+
+const ENC = (o = {}) => PC({ enviado_ci: true, enviado_ci_por: null, ci_situacao: 'encerrado', ...o });
+const DEV = (o = {}) => PC({ enviado_ci: true, enviado_ci_por: 10, ci_situacao: 'com_analista', ...o });
+
+T('o C.I. ja se manifestou: encerrado', correcao.ciJaSeManifestou(ENC()) === true);
+T('o C.I. ja se manifestou: com_analista', correcao.ciJaSeManifestou(DEV()) === true);
+T('na_fila NAO e manifestacao — o C.I. ainda nao olhou',
+  correcao.ciJaSeManifestou(NOCI()) === false);
+T('e ci_situacao nula tambem nao', correcao.ciJaSeManifestou(PC({ enviado_ci: false })) === false);
+T('sem PC nenhuma, nao inventa manifestacao', correcao.ciJaSeManifestou(null) === false);
+
+T('ENCERRADA: a analista NAO puxa, mesmo sem autoria registrada',
+  correcao.podePuxarCi('analista', 10, ENC()).pode === false);
+T('e essa recusa NAO vira pedido ao coordenador — nao ha o que aprovar',
+  correcao.podePuxarCi('analista', 10, ENC()).viaSolicitacao === false);
+T('DEVOLVIDA pelo C.I.: tambem nao puxa',
+  correcao.podePuxarCi('analista', 10, DEV()).pode === false);
+// ⚠️ A CONFERENCIA VEM ANTES DO SUPERADMIN, e e o ponto da correcao. Ele e isento em todo o
+// resto do sistema; aqui a isencao o deixaria apagar a produtividade de uma analista por um
+// caminho que existe para consertar engano de encaminhamento.
+T('NEM O TECNICO DO SISTEMA puxa uma encerrada',
+  correcao.podePuxarCi('superadmin', 4, ENC()).pode === false);
+T('nem uma devolvida', correcao.podePuxarCi('superadmin', 4, DEV()).pode === false);
+T('a recusa da encerrada aponta para a porta certa',
+  /Reabrir no C\.I\./.test(correcao.podePuxarCi('analista', 10, ENC()).motivo));
+
+// ⚠️ O QUE NAO PODE TER MUDADO: a acao existe para desfazer engano de encaminhamento, e
+// esse caso e `na_fila`. Se ele quebrar, a correcao curou o paciente matando-o.
+T('na_fila: quem encaminhou CONTINUA puxando',
+  correcao.podePuxarCi('analista', 10, NOCI()).pode === true);
+T('na_fila sem autoria: a analista CONTINUA puxando',
+  correcao.podePuxarCi('analista', 99, NOCI({ enviado_ci_por: null })).pode === true);
+T('na_fila de outro: continua virando solicitacao',
+  correcao.podePuxarCi('analista', 99, NOCI()).viaSolicitacao === true);
+T('e o tecnico continua puxando na_fila', correcao.podePuxarCi('superadmin', 4, NOCI()).pode === true);
+T('PC fora do C.I.: a recusa continua sendo a de sempre',
+  /não está no Controle Interno/.test(correcao.podePuxarCi('analista', 10, PC({ enviado_ci: false })).motivo));
+
+// A segunda tranca: o WHERE do banco, para o caminho novo que esquecer de perguntar.
+const wPux = correcao.SQL_PUXAR_CI.slice(correcao.SQL_PUXAR_CI.indexOf('WHERE'),
+                                         correcao.SQL_PUXAR_CI.indexOf('RETURNING'));
+T('o WHERE do UPDATE tambem barra quem o C.I. tocou',
+  /ci_situacao IS NULL OR ci_situacao = 'na_fila'/.test(wPux));
+T('e continua exigindo enviado_ci = true', /enviado_ci = true/.test(wPux));
+// ⚠️ `IS NULL OR = 'na_fila'`, e nao `= 'na_fila'` seco: uma PC encaminhada com ci_situacao
+// nula e uma PC que o C.I. NAO tocou. Hoje nao existe nenhuma; recusa-la seria mudar o
+// comportamento de um caso que este ciclo nao veio mudar.
+T('a PC encaminhada sem ci_situacao continua alcancada — nao e caso deste ciclo',
+  /ci_situacao IS NULL/.test(wPux));
+
+// E a aprovacao do coordenador reconfere AGORA, nao no instante do pedido.
+T('a aprovacao do pedido reconfere se o C.I. se manifestou no meio do caminho',
+  /p\.acao === 'puxar_ci' && correcao\.ciJaSeManifestou\(alvo\.pc\)/.test(srv));
+T('e usa a MESMA funcao de podePuxarCi — duas copias divergiriam',
+  (srv.match(/correcao\.ciJaSeManifestou/g) || []).length >= 1);
+T('a reabertura e oferecida como a saida certa para a encerrada',
+  /POST \/ci\/reabrir/.test(fs.readFileSync('./lib/correcao.js', 'utf8')));
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exitCode = falhou ? 1 : 0;

@@ -271,6 +271,107 @@ console.log('\n═══ 9. TRAVAS NO server.js ═══');
   conf(/parciais\.length > 200/.test(rota), 'e recusa lote grande demais');
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// REABRIR UMA PC ENCERRADA — a porta de volta que o ciclo nao tinha (26/08/2026)
+//
+// ⚠️ O QUE ESTES TESTES PROTEGEM
+//   · a reabertura NAO carimba ci_tecnico_id/ci_tecnico_em — ordem do Richard: as duas
+//     colunas continuam com UM caminho de escrita, que e ci.decidir;
+//   · ela NAO toca baixada, data_baixa nem enviado_ci — a PC reaberta e trabalho FEITO
+//     que precisa de mais uma volta, nao trabalho anulado;
+//   · o destino e `com_analista`, nao `na_fila`: `na_fila` devolveria a PC para o C.I.,
+//     que e justamente quem esta pedindo para devolve-la;
+//   · e o alvo e `ci_situacao = 'encerrado'`, o que a torna idempotente.
+console.log('\n═══ 15. REABRIR UMA PC ENCERRADA ═══');
+{
+  const ENC = [
+    { codigo_pc: '2020PC001898', tr: '2020TR000680', parcial_num: '6', analista_id: 16, entidade: 'APAE', ci_rodada: 1 },
+    { codigo_pc: '2020PC002958', tr: '2020TR000680', parcial_num: '6', analista_id: 16, entidade: 'APAE', ci_rodada: 1 },
+  ];
+  const d = db(ENC);
+  const r = await C.reabrir(d, { codigos_pc: ENC.map(p => p.codigo_pc),
+                                 texto: 'O processo voltou pelo SGPe apos o encerramento.',
+                                 autor: { id: 62, nome: 'Marcia', perfil: 'controle_interno' } });
+  const upd = d.ch.filter(c => /^UPDATE prestacoes_contas/i.test(c.sql));
+  const set = upd.map(u => u.sql.slice(u.sql.indexOf('SET'), u.sql.indexOf('WHERE'))).join(' ');
+
+  conf(upd.length === 1, 'UM UPDATE so', `${upd.length}`);
+  conf(/ci_situacao\s*=\s*'com_analista'/.test(set), "vai para 'com_analista', nao para 'na_fila'");
+  conf(!/'na_fila'/.test(set), "e NAO menciona 'na_fila' em lugar nenhum do SET");
+  conf(/ci_rodada\s*=\s*GREATEST\(ci_rodada, 1\) \+ 1/.test(set), 'a rodada sobe uma');
+  conf(/ci_encerrado_em\s*=\s*NULL/.test(set) && /ci_encerrado_por\s*=\s*NULL/.test(set),
+       'zera ci_encerrado_em e ci_encerrado_por');
+
+  // ⚠️ A TRAVA DO CARIMBO. Se um dia alguem acrescentar ci_tecnico_* aqui "para ficar
+  // completo", este teste cai — e e' esse o ponto: a coluna deixaria de responder "quem
+  // deu o parecer" e passaria a responder "quem mexeu por ultimo".
+  conf(!/ci_tecnico_id/.test(set) && !/ci_tecnico_em/.test(set),
+       'NAO carimba ci_tecnico_id nem ci_tecnico_em — a escrita deles e so de ci.decidir');
+  conf(!/\bbaixada\b|\bdata_baixa\b|\benviado_ci\b|\bestornada\b|\bparecer_tipo\b/.test(set),
+       'NAO toca baixada, data_baixa, enviado_ci, estornada nem parecer_tipo');
+
+  // O alvo, e a idempotencia que sai dele.
+  const sel = d.ch.find(c => /FOR UPDATE/.test(c.sql));
+  conf(/ci_situacao = 'encerrado'/.test(sel.sql), "so alcanca quem esta 'encerrado'");
+  conf(/codigo_pc = ANY\(\$1\)/.test(sel.sql), 'e a chave e codigo_pc, nunca parcial_num');
+  conf(!/parcial_num\s*=/.test(sel.sql), 'nada de filtrar por parcial_num');
+  conf(/ci_situacao = 'encerrado'/.test(upd[0].sql.slice(upd[0].sql.indexOf('WHERE'))),
+       'o WHERE do UPDATE tambem exige encerrado — e o que faz a segunda passada nao somar rodada');
+
+  // A conversa e a trilha.
+  const msg = d.ch.filter(c => /^INSERT INTO ci_mensagem/i.test(c.sql));
+  conf(msg.length === 1 && msg[0].params[1] === 'ci_para_analista',
+       'grava UMA mensagem, ci_para_analista');
+  conf(d.ch.indexOf(msg[0]) < d.ch.indexOf(upd[0]),
+       'e a mensagem vem ANTES do UPDATE — a rodada dela e a de quem escreveu');
+  const hist = d.ch.filter(c => /^INSERT INTO parcela_historico/i.test(c.sql));
+  conf(hist.length === ENC.length, 'uma linha de historico POR PC', `${hist.length}`);
+  conf(/'ci_reabriu'/.test(hist[0].sql), 'com o evento ci_reabriu');
+  conf(/'encerrado'/.test(hist[0].sql) && /'com_analista'/.test(hist[0].sql),
+       'de encerrado para com_analista, escrito na trilha');
+  conf(d.ch.some(c => /COMMIT/.test(c.sql)) && d.ch.indexOf(hist[0]) < d.ch.findIndex(c => /COMMIT/.test(c.sql)),
+       'tudo dentro da MESMA transacao');
+  conf(r.pcs.length === ENC.length && r.jaReaberto === false, 'devolve as PCs para a rota notificar');
+
+  // Nada encerrado -> 409, e nenhuma escrita.
+  const vazio = db([]);
+  const r2 = await C.reabrir(vazio, { codigos_pc: ['X'], texto: 'nada', autor: { id: 62 } });
+  conf(r2.jaReaberto === true && r2.pcs.length === 0,
+       'nenhuma PC encerrada: avisa jaReaberto, para a rota responder 409');
+  conf(!vazio.ch.some(c => /^UPDATE|^INSERT/i.test(c.sql)) && vazio.ch.some(c => /ROLLBACK/.test(c.sql)),
+       'e nao escreve nada — ROLLBACK');
+
+  // O texto do historico.
+  const t = C.textoReabertura('Marcia', '2020PC001898', 'voltou pelo SGPe');
+  conf(/Marcia/.test(t) && /2020PC001898/.test(t), 'o texto nomeia quem reabriu e a PC');
+  conf(/baixa e o encaminhamento ao C\.I\. seguem valendo/.test(t),
+       'e diz, na propria trilha, que a baixa nao caiu');
+  conf(/Motivo: voltou pelo SGPe/.test(t), 'e carrega o motivo');
+  conf(!/Motivo:/.test(C.textoReabertura('M', 'X', '  ')),
+       'sem motivo, nao sobra um rotulo "Motivo:" vazio');
+}
+
+console.log('\n═══ 16. A ROTA POST /ci/reabrir ═══');
+{
+  const src = fs.readFileSync('./server.js', 'utf8');
+  const ini = src.indexOf("app.post('/ci/reabrir'");
+  conf(ini > 0, 'a rota existe');
+  const rota = src.slice(ini, src.indexOf("app.get('/limite_tr_excecao'"));
+  const cod = rota.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+
+  conf(/ci\.validar\(\{ \.\.\.b, exigeTexto: true \}\)/.test(cod),
+       'o motivo e OBRIGATORIO — vai para a ci_mensagem');
+  conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = \$1/.test(cod),
+       'quem reabre e lido do BANCO, nao do corpo do pedido');
+  conf(/ciFila\.podeReabrir\(autor\)/.test(cod), 'e passa por ciFila.podeReabrir');
+  conf(cod.indexOf('podeReabrir') < cod.indexOf('await ci.reabrir('),
+       'a conferencia vem ANTES de escrever');
+  conf(/status\(409\)/.test(cod), 'jaReaberto responde 409, nao 200 sobre coisa nenhuma');
+  conf(/ci_reabriu\|\$\{\(g\.rodada \|\| 1\) \+ 1\}/.test(cod),
+       'o ref_id do sino carrega a rodada NOVA — senao a segunda volta nao avisa');
+  conf(!/ci_tecnico/.test(cod), 'a rota nao menciona ci_tecnico — nem para ler');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);
 process.exit(falhou ? 1 : 0);
 })();

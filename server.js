@@ -2384,6 +2384,86 @@ app.post('/ci/responder', async (req, res) => {
   }
 });
 
+// POST /ci/reabrir  body { codigos_pc[], texto, autor_id } — o C.I. reabre PC encerrada
+//
+// ⚠️ O CASO REAL: o processo volta pelo SGPe DEPOIS de o C.I. ter encerrado a PC. Antes de
+// 26/08/2026 não havia caminho nenhum — `decidir` só lê `na_fila`, `responder` só lê
+// `com_analista`, e a PC ficava no chip Encerradas para sempre.
+//
+// ⚠️ O MOTIVO É OBRIGATÓRIO, e vai para a `ci_mensagem`. Não é formalidade: estas PCs têm
+// ZERO mensagens no acervo inteiro, e uma pendência que reaparece na fila de uma analista
+// meses depois do encerramento, sem uma linha dizendo por quê, é um recado que não chegou.
+// É por isso que aqui vale o `exigeTexto`, como na resposta do analista, e não a observação
+// opcional das duas decisões.
+//
+// ⚠️ SÓ O CONTROLE INTERNO — SUPERADMIN INCLUÍDO NA RECUSA. Vem em par com `podeDecidir`:
+// se ele não pode encerrar, não pode desencerrar. A regra mora em `ciFila.podeReabrir`, que
+// deliberadamente NÃO é um apelido de `podeDecidir` — os dois motivos são diferentes.
+//
+// ⚠️ E A REABERTURA NÃO CARIMBA `ci_tecnico_id`/`ci_tecnico_em`. Ordem do Richard: as duas
+// colunas continuam com UM caminho de escrita em todo o servidor, que é `ci.decidir`, no
+// mesmo UPDATE do parecer.
+app.post('/ci/reabrir', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const erro = ci.validar({ ...b, exigeTexto: true });
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    // Quem reabre é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
+    const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
+    const autor = q.rows[0];
+    if (!autor)
+      return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    if (!ciFila.podeReabrir(autor))
+      return res.status(403).json({ data: null, error: { message: ciFila.motivoNaoReabre() } });
+
+    const { pcs, jaReaberto } = await ci.reabrir(pool, {
+      codigos_pc: b.codigos_pc, texto: b.texto, autor,
+    });
+    // ⚠️ 409, e não 200 com zero: a PC pode ter sido reaberta por outro técnico entre a tela
+    // e o clique. Responder 200 faria a tela dizer "pronto" sobre coisa nenhuma.
+    if (jaReaberto)
+      return res.status(409).json({ data: null, error: {
+        message: 'Estas PCs não estão encerradas no C.I. — recarregue a tela.' } });
+
+    // Uma notificação POR PARCELA, como nas outras duas transições. A parcela 1 da
+    // 2020TR000657 tem 7 PCs, e sete avisos idênticos matam o sino.
+    //
+    // ⚠️ O SINO É DECISÃO MINHA, e está aqui porque `com_analista` é uma PENDÊNCIA DO
+    // ANALISTA: a devolução por `ressalva` — a MESMA transição de estado — notifica desde
+    // que existe. Sem isto, reabrir seria a única entrada em `com_analista` que ninguém vê.
+    for (const g of ci.agruparPorParcela(pcs)) {
+      if (!g.analista_id) continue;
+      const manif = String(b.texto || '').trim();
+      const corpo = [
+        `Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}`
+          + `${g.entidade ? ` (${g.entidade})` : ''}.`,
+        'O processo voltou pelo SGPe depois de o C.I. ter encerrado esta parcela, '
+          + 'e ela volta para você. A baixa continua valendo.',
+        `Reaberta por ${autor.nome}.`,
+        `Motivo do C.I.:\n${manif}`,
+      ].join('\n\n');
+
+      await notif.criar(pool, {
+        destinatario_id: g.analista_id,
+        // Exige ação do analista — é diligência, o mesmo tipo da devolução por ressalva.
+        tipo: 'diligencia',
+        titulo: `C.I. reabriu · ${g.tr}`,
+        link: `#planilha:${g.tr}:${g.parcial_num}`,
+        mensagem: corpo,
+        ref_tipo: 'pc',
+        // ⚠️ `+ 1` PELO MESMO MOTIVO DA RESSALVA: `ci.reabrir` já subiu a rodada no banco,
+        // mas `g.rodada` veio da leitura feita ANTES do UPDATE. Sem o +1, reabrir a mesma PC
+        // numa segunda volta cairia no dedupe do sino e o aviso não sairia.
+        ref_id: `${g.pcs[0]}|ci_reabriu|${(g.rodada || 1) + 1}`,
+      });
+    }
+    res.json({ data: { afetadas: pcs.length }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // GET /limite_tr_excecao — exceções com nome e grupo vindos de usuarios (nunca duplicados)
 app.get('/limite_tr_excecao', async (req, res) => {
   try {
@@ -4850,6 +4930,17 @@ app.patch('/solicitacao_correcao/:id', async (req, res) => {
       if (p.acao === 'puxar_ci' && alvo.pc.enviado_ci !== true) { await cli.query('ROLLBACK');
         return res.status(409).json({ data: null, error: {
           message: 'Esta parcial já não está no Controle Interno. O pedido perdeu o objeto.' } }); }
+
+      // ⚠️ E O C.I. PODE TER SE MANIFESTADO ENQUANTO O PEDIDO ESPERAVA (26/08/2026). Um
+      // pedido aberto com a PC `na_fila` e aprovado depois de o C.I. decidir apagaria a
+      // produtividade de um trabalho já aprovado — pela mão do coordenador, sem erro nenhum
+      // na tela. A regra é a mesma de `podePuxarCi`, e por isso sai da MESMA função: duas
+      // cópias divergiriam no primeiro ajuste.
+      if (p.acao === 'puxar_ci' && correcao.ciJaSeManifestou(alvo.pc)) { await cli.query('ROLLBACK');
+        return res.status(409).json({ data: null, error: {
+          message: 'O Controle Interno já se manifestou nesta parcial depois do pedido — '
+                 + 'puxá-la de volta apagaria a baixa de um trabalho já analisado. '
+                 + 'O pedido perdeu o objeto.' } }); }
 
       const motivoExec = `${p.motivo} · aprovado por ${quem.nome}: ${b.motivo_decisao.trim()}`
         + (autodec ? ` · ${solCor.MARCA_AUTODECIDIDO}` : '');

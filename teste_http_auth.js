@@ -299,14 +299,24 @@ setTimeout(async () => {
       // ⚠️ E A TRAVA DO PARECER E POR PERFIL, conferida contra o servidor de verdade. O duble
       // nao pega isto: duble nao roteia, e a leitura do autor vem do BANCO.
       //   57 e analista · a rota le o perfil pelo id e recusa qualquer um que nao seja do C.I.
+      //
+      // ⚠️ O CORPO E `{ tr, parcial_num }` DESDE 26/08/2026 — a decisao passou a ser da
+      // PARCELA. Com o corpo antigo (`codigos_pc`) a rota devolve 400 antes de olhar quem
+      // pediu, e este teste passaria a medir a validacao do corpo achando que mede a trava de
+      // perfil. A TR e' inexistente de proposito: a recusa tem de vir do PERFIL, nao de a
+      // parcela nao existir — se um dia a ordem inverter, o 403 vira 404 e o teste acusa.
       const naoCi = await pedir('/ci/decidir', { method: 'POST',
-        body: JSON.stringify({ codigos_pc: ['__x__'], decisao: 'de_acordo', autor_id: 57 }) });
+        body: JSON.stringify({ tr: '__x__', parcial_num: '1', decisao: 'de_acordo', autor_id: 57 }) });
       conf(naoCi.status === 403, 'POST /ci/decidir recusa quem nao e do C.I.', `status ${naoCi.status}`);
       conf(/técnico do C\.I\./.test(naoCi.texto), 'e diz POR QUE: o nome de quem decide fica na PC');
       // ⚠️ E MANDAR O PERFIL NO CORPO NAO AJUDA — quem decide e o perfil lido do banco.
       const mentiu = await pedir('/ci/decidir', { method: 'POST',
-        body: JSON.stringify({ codigos_pc: ['__x__'], decisao: 'de_acordo', autor_id: 57, perfil: 'controle_interno' }) });
+        body: JSON.stringify({ tr: '__x__', parcial_num: '1', decisao: 'de_acordo', autor_id: 57, perfil: 'controle_interno' }) });
       conf(mentiu.status === 403, 'e mandar perfil no corpo nao ajuda ninguem a passar', `status ${mentiu.status}`);
+      // ⚠️ E SEM A PARCELA E' 400, antes de tudo: a rota nao adivinha o alvo.
+      const semParcela = await pedir('/ci/decidir', { method: 'POST',
+        body: JSON.stringify({ decisao: 'de_acordo', autor_id: 57 }) });
+      conf(semParcela.status === 400, 'POST /ci/decidir sem tr/parcial_num e 400', `status ${semParcela.status}`);
 
       // ⚠️ `/ci/pc/...` NAO PODE SER ENGOLIDA por `/ci/fila` nem por `/ci/decidir`: nenhuma
       // delas tem parametro de rota, mas se um dia alguem declarar `/ci/:algo` antes, estas

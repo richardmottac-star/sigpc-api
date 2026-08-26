@@ -2189,6 +2189,11 @@ app.get('/ci/fila', async (req, res) => {
       pool.query(ciFila.SQL_ANALISTAS),
     ]);
 
+    // ⚠️ A UNIDADE DESTA ROTA É A PARCELA desde 26/08/2026 — `linhas`, `count`, `total` e os
+    // números do resumo contam parcelas, não PCs. Cada linha traz `n_pcs` e `codigos_pc` com
+    // quantas e quais. Nada mais aqui mudou: `linksDeLinhas` continua achando `processo_pc` e
+    // `processo_mae` na linha, e `dias_espera` continua vindo pronto do SQL.
+    //
     // ⚠️ O CORTE É DITO, NUNCA SILENCIOSO. A consulta pede LIMITE+1 justamente para saber se
     // sobrou — uma lista truncada sem aviso se lê como "é só isso que existe", e o técnico
     // fecharia a tela achando que a fila acabou.
@@ -2242,11 +2247,27 @@ app.get('/ci/fila', async (req, res) => {
 // `ciFila.podeDecidir`. Uma exceção por usuário seria a lista paralela que o CLAUDE.md manda
 // não criar: um dia ela divergiria do cadastro, sem erro nenhum.
 
-// POST /ci/decidir  body { codigos_pc[], decisao: 'de_acordo'|'ressalva', texto?, autor_id }
+// POST /ci/decidir  body { tr, parcial_num, setorial_id?, decisao, texto?, autor_id }
+//
+// ⚠️ A UNIDADE É A PARCELA — mudou em 26/08/2026, e o corpo do pedido mudou junto.
+//
+// Até aqui entrava `codigos_pc[]` e a tela mandava UMA PC por clique. A análise é por
+// parcial: `POST /parcela/parecer` grava em `(setorial_id, tr, parcial_num)` e a analista
+// decide uma vez. O C.I. decidia por PC, então oferecia 1.395 decisões para 875 parcelas —
+// nove cliques onde houve um parecer, e a mesma parcela podia acabar com desfechos
+// diferentes. Nada no banco impedia.
+//
+// ⚠️ E O C.I. DECIDE SÓ O QUE FOI ENCAMINHADO. O alvo é `ci_situacao = 'na_fila'` dentro da
+// parcela: as PCs que a analista não mandou não são tocadas e não bloqueiam a decisão.
+// A regra mora em `ci.decidir`; aqui só se confere quem pede.
 app.post('/ci/decidir', async (req, res) => {
   try {
     const b = req.body || {};
-    const erro = ci.validar(b);
+    if (!b.tr || b.parcial_num === undefined || b.parcial_num === null || b.parcial_num === '')
+      return res.status(400).json({ data: null, error: { message: 'tr e parcial_num são obrigatórios.' } });
+    // `validar` cobre a decisão e o tamanho do texto; a lista de PCs saiu do corpo, então a
+    // conferência dela sai junto — quem escolhe as PCs agora é o banco, pela parcela.
+    const erro = ci.validar({ ...b, codigos_pc: ['-'] });
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
     if (!ci.DECISOES.includes(b.decisao))
       return res.status(400).json({ data: null, error: { message: 'decisao é obrigatória' } });
@@ -2281,12 +2302,19 @@ app.post('/ci/decidir', async (req, res) => {
     // uma pergunta que já não se faz.
 
     const { pcs, jaDecidido } = await ci.decidir(pool, {
-      codigos_pc: b.codigos_pc, decisao: b.decisao, texto: b.texto, autor,
+      setorial_id: b.setorial_id || 'FCEE', tr: b.tr, parcial_num: b.parcial_num,
+      decisao: b.decisao, texto: b.texto, autor,
     });
     if (jaDecidido)
-      return res.status(409).json({ data: null, error: { message: 'Estas PCs já saíram da fila — recarregue a tela.' } });
+      return res.status(409).json({ data: null, error: { message: 'Esta parcela já saiu da fila — recarregue a tela.' } });
 
     // Uma notificação POR ENCAMINHAMENTO. Ver o comentário de `agruparPorParcela`.
+    //
+    // ⚠️ E O NÚMERO DE PCs PASSOU A SER VERDADE em 26/08/2026, sem uma linha mudar aqui.
+    // O texto sempre disse "Parcela {n} — {g.pcs.length} PC(s)", e `g.pcs` vinha do alvo de
+    // `ci.decidir`: com a decisão por PC, o alvo tinha UMA PC e a parcela de 2 recebia
+    // "Parcela 3 — 1 PC". Agora o alvo é a parcela inteira que estava na fila, e o número
+    // conta o que de fato foi decidido. O defeito estava na UNIDADE, não na frase.
     //
     // ⚠️ AS DUAS DECISÕES AVISAM — a de acordo passou a avisar em 24/08/2026.
     //
@@ -2384,7 +2412,13 @@ app.post('/ci/responder', async (req, res) => {
   }
 });
 
-// POST /ci/reabrir  body { codigos_pc[], texto, autor_id } — o C.I. reabre PC encerrada
+// POST /ci/reabrir  body { tr, parcial_num, setorial_id?, texto, autor_id }
+//
+// ⚠️ MESMA UNIDADE DE `/ci/decidir`: a parcela. (26/08/2026) Reabrir é desfazer uma decisão
+// do C.I., e a decisão passou a ser da parcela — reabrir por PC deixaria de volta o problema
+// que a decisão por parcela veio resolver, só que pelo outro lado.
+// A entrada por lista de PCs sobrevive em `ci.reabrir`, e quem a usa é o script de correção
+// em lote, cujo alvo nasce de uma lista de processos do SGPe.
 //
 // ⚠️ O CASO REAL: o processo volta pelo SGPe DEPOIS de o C.I. ter encerrado a PC. Antes de
 // 26/08/2026 não havia caminho nenhum — `decidir` só lê `na_fila`, `responder` só lê
@@ -2406,7 +2440,9 @@ app.post('/ci/responder', async (req, res) => {
 app.post('/ci/reabrir', async (req, res) => {
   try {
     const b = req.body || {};
-    const erro = ci.validar({ ...b, exigeTexto: true });
+    if (!b.tr || b.parcial_num === undefined || b.parcial_num === null || b.parcial_num === '')
+      return res.status(400).json({ data: null, error: { message: 'tr e parcial_num são obrigatórios.' } });
+    const erro = ci.validar({ ...b, codigos_pc: ['-'], exigeTexto: true });
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
     // Quem reabre é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
@@ -2418,13 +2454,14 @@ app.post('/ci/reabrir', async (req, res) => {
       return res.status(403).json({ data: null, error: { message: ciFila.motivoNaoReabre() } });
 
     const { pcs, jaReaberto } = await ci.reabrir(pool, {
-      codigos_pc: b.codigos_pc, texto: b.texto, autor,
+      setorial_id: b.setorial_id || 'FCEE', tr: b.tr, parcial_num: b.parcial_num,
+      texto: b.texto, autor,
     });
-    // ⚠️ 409, e não 200 com zero: a PC pode ter sido reaberta por outro técnico entre a tela
-    // e o clique. Responder 200 faria a tela dizer "pronto" sobre coisa nenhuma.
+    // ⚠️ 409, e não 200 com zero: a parcela pode ter sido reaberta por outro técnico entre a
+    // tela e o clique. Responder 200 faria a tela dizer "pronto" sobre coisa nenhuma.
     if (jaReaberto)
       return res.status(409).json({ data: null, error: {
-        message: 'Estas PCs não estão encerradas no C.I. — recarregue a tela.' } });
+        message: 'Esta parcela não está encerrada no C.I. — recarregue a tela.' } });
 
     // Uma notificação POR PARCELA, como nas outras duas transições. A parcela 1 da
     // 2020TR000657 tem 7 PCs, e sete avisos idênticos matam o sino.

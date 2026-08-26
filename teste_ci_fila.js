@@ -90,8 +90,17 @@ console.log('\n═══ 2. A LISTA LE ci_situacao, NUNCA enviado_ci ═══')
   conf(!/enviado_ci/.test(f.sql), 'e enviado_ci nao entra no filtro');
   const sql = CF.sqlLista(f.sql);
   conf(/FROM prestacoes_contas p/.test(sql), 'a lista sai de prestacoes_contas');
-  // ⚠️ A UNIDADE E A PC. Um GROUP BY aqui devolveria a TR de novo.
-  conf(!/GROUP BY/.test(sql), 'sem GROUP BY: uma linha por PC, nao por TR');
+  // ⚠️ A UNIDADE E A PARCELA — mudou em 26/08/2026. Ate aqui esta trava dizia "sem GROUP BY:
+  // uma linha por PC, nao por TR", e ela estava certa contra o defeito da epoca (agrupar de
+  // volta na TR desfaria a analise por parcial). O agrupamento certo nao e nem a PC nem a TR:
+  // e a PARCELA, que e a unidade em que a analista da o parecer. Por isso a trava mudou de
+  // "nao agrupe" para "agrupe EXATAMENTE por (setorial_id, tr, parcial_num)".
+  conf(/GROUP BY p\.setorial_id, p\.tr, p\.parcial_num/.test(sql),
+       'agrupa pela PARCELA — a mesma chave de carregarParcela');
+  conf(!/GROUP BY p\.tr\b(?!,)/.test(sql.replace(/GROUP BY p\.setorial_id, p\.tr, p\.parcial_num/g, '')),
+       'e NUNCA so pela TR — isso desfaria a analise por parcial');
+  conf(/AS n_pcs/.test(sql) && /AS codigos_pc/.test(sql),
+       'e a linha diz quantas PCs tem e quais sao');
   conf(/p\.codigo_pc/.test(sql), 'e o codigo da PC vem na resposta');
   // ⚠️ O parecer mora em parcela_historico, e e RARO — 26 de 958 medidos em 18/08. A tela
   // precisa distinguir "a analista nao escreveu nada" de "nao veio na consulta".
@@ -375,7 +384,15 @@ console.log('\n═══ 14. A DECISAO ENTRA NO HISTORICO DA PARCELA ═══')
   const dec = src.slice(src.indexOf('async function decidir'), src.indexOf('async function responder'));
   conf(/INSERT INTO parcela_historico/.test(dec), 'decidir grava no parcela_historico');
   conf(/'ci_decidiu'/.test(dec), 'com o evento ci_decidiu');
-  conf(/for \(const r of alvo\.rows\)/.test(dec), 'uma linha POR PC');
+  // ⚠️ UMA LINHA POR PARCELA — era uma por PC ate 26/08/2026, e a mudanca acompanha a da
+  // unidade da decisao. Enquanto cada PC era um ato separado, uma linha por PC estava certa;
+  // agora e UM ato, e `parcela_historico` e indexado por (tr, parcial_num) — N linhas
+  // identicas na mesma chave enterrariam a trilha em repeticao.
+  conf(!/for \(const r of alvo\.rows\)/.test(dec), 'NAO ha mais um laco por PC');
+  conf(/VALUES \(\$1::text, \$2::text, \$3::text, 'ci_decidiu'/.test(dec),
+       'uma linha POR PARCELA, na chave (tr, parcial_num, setorial_id)');
+  conf(/codigos\.join\(', '\)/.test(dec),
+       'e o texto nomeia as PCs alcancadas — a tabela nao tem coluna codigo_pc');
   conf(dec.indexOf('INSERT INTO parcela_historico') < dec.indexOf("await cli.query('COMMIT')"),
        'e dentro da MESMA transacao da decisao');
   // ⚠️ E NADA DISSO TOCA NA BAIXA, em nenhum dos dois caminhos.

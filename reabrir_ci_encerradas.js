@@ -316,6 +316,14 @@ const conf = (passou, rotulo, detalhe) => {
     // ⚠️ POR LISTA EXPLICITA DE CHAVES (armadilha 12). O `WHERE` da reversao e
     // `codigo_pc = ANY(...)` e `id = ANY(...)`, com as listas capturadas aqui — nunca uma
     // condicao derivada, que em 12/08 carimbou 14.639 linhas no lugar de 7.
+    //
+    // ⚠️ E UM DRY-RUN NUNCA SOBRESCREVE A REVERSAO DE UMA GRAVACAO.  (26/08/2026)
+    //
+    // Aconteceu no script irmao (`avisar_reabertura_ci_20260826.js`): um dry-run rodado DEPOIS
+    // do `--gravar` reescreveu o JSON com `gravado: false` e a lista de ids VAZIA. A reversao
+    // ficou sem o que reverter e nada acusou. Aqui o defeito era o mesmo e so nao apareceu
+    // porque o `--gravar` foi o ultimo a rodar. O dry-run escreve em arquivo com sufixo
+    // proprio, e o da gravacao fica intocado.
     const reversao = {
       gerado_em: new Date().toISOString(),
       script: 'reabrir_ci_encerradas.js',
@@ -344,8 +352,15 @@ const conf = (passou, rotulo, detalhe) => {
       md5_fora_do_alvo: fotoFora.h,
       contagens_antes: fotoCont,
     };
-    fs.writeFileSync(REVERSAO, JSON.stringify(reversao, null, 2), 'utf8');
-    say(`Reversao gravada em ${REVERSAO}`);
+    const destino = (GRAVAR && erros === 0) ? REVERSAO : REVERSAO.replace(/\.json$/, '_DRYRUN.json');
+    if (!GRAVAR && fs.existsSync(REVERSAO)) {
+      try {
+        if (JSON.parse(fs.readFileSync(REVERSAO, 'utf8')).gravado === true)
+          say(`⚠️ ${REVERSAO.split(/[\\/]/).pop()} e de uma GRAVACAO — preservado, intocado.`);
+      } catch (_) {}
+    }
+    fs.writeFileSync(destino, JSON.stringify(reversao, null, 2), 'utf8');
+    say(`Reversao gravada em ${destino}`);
 
     // ══ 6. COMMIT ou ROLLBACK ═════════════════════════════════════════════════
     if (erros > 0) {

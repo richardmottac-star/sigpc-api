@@ -1,0 +1,768 @@
+{
+  "gerado_em": "2026-08-26T13:16:09.536Z",
+  "script": "reabrir_ci_encerradas.js",
+  "gravado": true,
+  "autor": {
+    "id": 62,
+    "nome": "Marcia Terezinha Miranda"
+  },
+  "motivo": "Processo devolvido pelo SGPe após o encerramento no Controle Interno. A parcela volta ao analista para nova análise. A baixa e o encaminhamento ao C.I. seguem valendo.",
+  "como_reverter": [
+    "UPDATE prestacoes_contas SET ci_situacao='encerrado', ci_rodada=$rodada_antes,",
+    "  ci_encerrado_em=$encerrado_em_antes, ci_encerrado_por=$encerrado_por_antes,",
+    "  atualizado_em=NOW() WHERE codigo_pc = $codigo_pc   -- uma por PC, pelos valores abaixo",
+    "DELETE FROM ci_mensagem      WHERE id = ANY(ci_mensagem_ids)",
+    "DELETE FROM parcela_historico WHERE id = ANY(parcela_historico_ids)"
+  ],
+  "pcs": [
+    {
+      "codigo_pc": "2020PC000429",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC000575",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC000917",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC001421",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC001530",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC001895",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC002248",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC002564",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC003136",
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2023PC000222",
+      "tr": "2020TR000633",
+      "parcial_num": "8",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2023PC000223",
+      "tr": "2020TR000633",
+      "parcial_num": "8",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "25",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2022PC003325",
+      "tr": "2020TR000640",
+      "parcial_num": "15",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "9",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2022PC000447",
+      "tr": "2020TR000640",
+      "parcial_num": "16",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "9",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2022PC003326",
+      "tr": "2020TR000640",
+      "parcial_num": "16",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "9",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC001898",
+      "tr": "2020TR000680",
+      "parcial_num": "6",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "16",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC002958",
+      "tr": "2020TR000680",
+      "parcial_num": "6",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "16",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2021PC002076",
+      "tr": "2020TR000719",
+      "parcial_num": "6",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "33",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2021PC002279",
+      "tr": "2020TR000719",
+      "parcial_num": "8",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "33",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC000820",
+      "tr": "2020TR000762",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "17",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2020PC000821",
+      "tr": "2020TR000762",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalva",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "17",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2021PC002215",
+      "tr": "2021TR001849",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "40",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2021TR001849-PFINAL",
+      "tr": "2021TR001849",
+      "parcial_num": "FINAL",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "40",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    },
+    {
+      "codigo_pc": "2021PC002473",
+      "tr": "2021TR002189",
+      "parcial_num": "1",
+      "antes": {
+        "ci_situacao": "encerrado",
+        "ci_rodada": 1,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "depois": {
+        "ci_situacao": "com_analista",
+        "ci_rodada": 2,
+        "ci_encerrado_em": null,
+        "ci_encerrado_por": null
+      },
+      "intocadas": {
+        "baixada": "true",
+        "data_baixa": "2026-06-30T03:00:00.000Z",
+        "enviado_ci": "true",
+        "dt_envio_ci": "2026-06-30T03:00:00.000Z",
+        "parecer_tipo": "Parecer Regular com Ressalvas",
+        "estornada": "false",
+        "status": "baixada",
+        "analista_id": "46",
+        "ci_tecnico_id": null,
+        "ci_tecnico_em": null,
+        "setorial_id": "FCEE"
+      }
+    }
+  ],
+  "ci_mensagem_ids": [
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85
+  ],
+  "parcela_historico_ids": [
+    1892,
+    1893,
+    1894,
+    1895,
+    1896,
+    1897,
+    1898,
+    1899,
+    1900,
+    1901,
+    1902,
+    1903,
+    1904,
+    1905,
+    1906,
+    1907,
+    1908,
+    1909,
+    1910,
+    1911,
+    1912,
+    1913,
+    1914
+  ],
+  "md5_fora_do_alvo": "b85079729b58481b3406cd8e22891f00",
+  "contagens_antes": {
+    "encerrado": 1737,
+    "com_analista": 2,
+    "na_fila": 1392,
+    "fora_ciclo": 11527,
+    "produtivas": 4049,
+    "total": 14658
+  }
+}

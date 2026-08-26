@@ -1,0 +1,143 @@
+{
+  "gerado_em": "2026-08-26T13:22:12.298Z",
+  "script": "avisar_reabertura_ci_20260826.js",
+  "gravado": true,
+  "origem": "reverter_ci_reabertura_20260826.json",
+  "como_reverter": "DELETE FROM notificacao WHERE id = ANY(notificacao_ids)",
+  "notificacao_ids": [
+    432,
+    433,
+    434,
+    435,
+    436,
+    437,
+    438,
+    439,
+    440,
+    441,
+    442
+  ],
+  "avisos": [
+    {
+      "tr": "2020TR000633",
+      "parcial_num": "1",
+      "pcs": [
+        "2020PC000429",
+        "2020PC000575",
+        "2020PC000917",
+        "2020PC001421",
+        "2020PC001530",
+        "2020PC001895",
+        "2020PC002248",
+        "2020PC002564",
+        "2020PC003136"
+      ],
+      "analista_id": 25,
+      "ref_id": "2020PC000429|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000633",
+      "parcial_num": "8",
+      "pcs": [
+        "2023PC000222",
+        "2023PC000223"
+      ],
+      "analista_id": 25,
+      "ref_id": "2023PC000222|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000640",
+      "parcial_num": "15",
+      "pcs": [
+        "2022PC003325"
+      ],
+      "analista_id": 9,
+      "ref_id": "2022PC003325|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000640",
+      "parcial_num": "16",
+      "pcs": [
+        "2022PC000447",
+        "2022PC003326"
+      ],
+      "analista_id": 9,
+      "ref_id": "2022PC000447|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000680",
+      "parcial_num": "6",
+      "pcs": [
+        "2020PC001898",
+        "2020PC002958"
+      ],
+      "analista_id": 16,
+      "ref_id": "2020PC001898|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000719",
+      "parcial_num": "6",
+      "pcs": [
+        "2021PC002076"
+      ],
+      "analista_id": 33,
+      "ref_id": "2021PC002076|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000719",
+      "parcial_num": "8",
+      "pcs": [
+        "2021PC002279"
+      ],
+      "analista_id": 33,
+      "ref_id": "2021PC002279|ci_reabriu|2"
+    },
+    {
+      "tr": "2020TR000762",
+      "parcial_num": "1",
+      "pcs": [
+        "2020PC000820",
+        "2020PC000821"
+      ],
+      "analista_id": 17,
+      "ref_id": "2020PC000820|ci_reabriu|2"
+    },
+    {
+      "tr": "2021TR001849",
+      "parcial_num": "1",
+      "pcs": [
+        "2021PC002215"
+      ],
+      "analista_id": 40,
+      "ref_id": "2021PC002215|ci_reabriu|2"
+    },
+    {
+      "tr": "2021TR001849",
+      "parcial_num": "FINAL",
+      "pcs": [
+        "2021TR001849-PFINAL"
+      ],
+      "analista_id": 40,
+      "ref_id": "2021TR001849-PFINAL|ci_reabriu|2"
+    },
+    {
+      "tr": "2021TR002189",
+      "parcial_num": "1",
+      "pcs": [
+        "2021PC002473"
+      ],
+      "analista_id": 46,
+      "ref_id": "2021PC002473|ci_reabriu|2"
+    }
+  ],
+  "contagens_antes": {
+    "notif": 343,
+    "notif_max": 442,
+    "msgs": 25,
+    "hist": 1643,
+    "com_analista": 25,
+    "produtivas": 4049
+  },
+  "recuperado_em": "2026-08-26",
+  "nota_recuperacao": "Os ids foram RECUPERADOS pelo ref_id em 26/08: um dry-run posterior sobrescreveu este arquivo com gravado=false e a lista vazia. Conferido: os 11 ref_id casam com o destinatario previsto em avisos[]."
+}

@@ -2182,9 +2182,18 @@ app.get('/ci/fila', async (req, res) => {
 
     // ⚠️ O RESUMO NÃO RECEBE O FILTRO — de propósito. Ver o comentário de `SQL_RESUMO`: o
     // card "na fila" diz quantas há na fila, não quantas sobraram da busca.
-    const [resumo, lista, tecnicos, analistas] = await Promise.all([
+    // ⚠️ A PAGINAÇÃO SAI DE `ciFila.paginacao`, e não é lida solta aqui. Ela prende o tamanho
+    // à lista fechada (10..50) e o teto ao `LIMITE`: sem isso, `?tamanho=99999` devolveria o
+    // acervo inteiro por uma URL montada à mão.
+    const pag = ciFila.paginacao(req.query);
+
+    const [resumo, lista, contagem, tecnicos, analistas] = await Promise.all([
       pool.query(ciFila.SQL_RESUMO, [quem.id]),
-      pool.query(ciFila.sqlLista(sql), params),
+      pool.query(ciFila.sqlLista(sql, pag), params),
+      // ⚠️ O TOTAL AGORA É SEMPRE CONSULTADO — antes só quando a lista estourava o teto.
+      // Com paginação de verdade ele é o que define quantas páginas existem, e "o total é o
+      // que veio" só valia enquanto a única página era a primeira.
+      pool.query(ciFila.sqlContar(sql), params),
       pool.query(ciFila.SQL_TECNICOS),
       pool.query(ciFila.SQL_ANALISTAS),
     ]);
@@ -2194,14 +2203,12 @@ app.get('/ci/fila', async (req, res) => {
     // quantas e quais. Nada mais aqui mudou: `linksDeLinhas` continua achando `processo_pc` e
     // `processo_mae` na linha, e `dias_espera` continua vindo pronto do SQL.
     //
-    // ⚠️ O CORTE É DITO, NUNCA SILENCIOSO. A consulta pede LIMITE+1 justamente para saber se
-    // sobrou — uma lista truncada sem aviso se lê como "é só isso que existe", e o técnico
-    // fecharia a tela achando que a fila acabou.
-    const linhas = lista.rows.slice(0, ciFila.LIMITE);
-    let total = linhas.length;
-    if (lista.rows.length > ciFila.LIMITE) {
-      total = (await pool.query(ciFila.sqlContar(sql), params)).rows[0].n;
-    }
+    // ⚠️ O CORTE DEIXOU DE SER CORTE em 27/08/2026 — virou página, e por isso a lista não é
+    // mais fatiada aqui: o `LIMIT`/`OFFSET` já veio do banco. A faixa amarela que dizia
+    // "mostrando as 300 mais antigas de 875" saiu junto: ela era honesta sobre um limite que
+    // não precisava existir, e mandava "use a busca", que só ajuda quem já sabe o que procurar.
+    const linhas = lista.rows;
+    const total = contagem.rows[0].n;
 
     // ⚠️ O MAPA DE LINKS DO SGPe É O QUE FAZ O NÚMERO VIRAR LINK. `procHtml` na tela é um
     // `Map.get` e nada mais: sem esta consulta o processo aparece em texto puro, sem erro
@@ -2212,6 +2219,11 @@ app.get('/ci/fila', async (req, res) => {
     res.json({
       data: linhas.map(l => ({ ...l, faixa_espera: ciFila.faixaEspera(l.dias_espera) })), links,
       count: linhas.length, total, limite: ciFila.LIMITE,
+      // ⚠️ A PÁGINA VOLTA NA RESPOSTA, e a tela desenha a partir DELA, não do que pediu. Se
+      // alguém montar `?tamanho=7`, `paginacao` devolve 20 — e a tela tem de mostrar 20 no
+      // seletor, não 7. O servidor é quem sabe o que aplicou.
+      pagina: pag.pagina, tamanho: pag.tamanho, tamanhos: ciFila.TAMANHOS,
+      paginas: Math.max(1, Math.ceil(total / pag.tamanho)),
       resumo: {
         cards: { fila: r.fila || 0, espera_media: r.espera_media || 0,
                  com_analista: r.com_analista || 0, encerradas: r.encerradas || 0 },

@@ -1,7 +1,7 @@
 {
   "script": "migracao_estado_anterior_20260826.js",
   "modo": "dry-run",
-  "quando": "2026-08-26T23:59:23.382Z",
+  "quando": "2026-08-27T00:16:26.746Z",
   "autorizado_por": "Richard Motta Coelho, 26/08/2026",
   "alterou": {
     "tabela": "parcela_historico",

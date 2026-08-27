@@ -1,10 +1,179 @@
-# SIGPC-API — ESTADO EM 17/08/2026 (madrugada)
+# SIGPC-API — ESTADO EM 27/08/2026
 
 Cole no início do chat novo. Este arquivo é o que basta para retomar.
 
 ---
 
-## ✅ 17/08/2026 — O FECHAMENTO. Leia isto antes de tudo.
+## ✅ 27/08/2026 — A CONFERÊNCIA COM O SIGEF. Leia isto antes de tudo.
+
+> **TRÊS escritas em produção**, todas de estrutura + carga da planilha da CGE.
+> **Nenhuma tocou em `baixada`, `enviado_ci`, `data_baixa`, `parecer_tipo` ou produtividade** —
+> e cada uma provou isso com um `md5` do conteúdo de TODAS as colunas pré-existentes, linha a
+> linha, antes e depois.
+
+### O acervo, medido em 27/08 (não presumido)
+
+| | |
+|---|---|
+| PCs | **14.658** (13.627 parciais · 1.031 finais) |
+| TRs | **1.560** |
+| baixadas | **4.063** · enviadas ao C.I. **3.161** |
+| **produtividade** (`baixada` OU `enviado_ci`, PCs distintas) | **4.064** |
+| sem dono | 6.055 |
+| usuários | **54** (46 analista · 3 coordenador · 4 controle_interno · 1 superadmin) |
+| colunas em `prestacoes_contas` | **57** |
+
+⚠️ Os números antigos deste arquivo (14.652 PCs, 1.559 TRs, 6.090 sem dono) estão
+**desatualizados, não errados** — o acervo andou.
+
+### 1. As QUATRO colunas do SIGEF
+
+O extrato `Baixas FCEE.xlsx` da CGE (3.359 parciais + 107 finais = **3.466 PCs**) entrou em
+três rodadas, cada uma com dry-run mostrado antes:
+
+| coluna | tipo | o que é | preenchidas |
+|---|---|---|---|
+| `data_baixa_sigef` | `date` | quando o SIGEF foi modificado (col. `Data Ult Mod - 07-08-26`) | **3.466** |
+| `sigef_status` | `text` | o rótulo **literal** do SIGEF | **3.466** |
+| `sigef_registro_em` | `date` | a data que o ANALISTA informa ter registrado | **0** |
+| `sigef_declaracao` | `jsonb` | a declaração do analista — **array que só cresce** | **0** |
+
+⚠️ **`data_baixa` NÃO FOI TOCADA, e não deve ser.** Ela é o carimbo do SISTEMA (quando o
+SIGPC-GT registrou) e é ela que a produtividade usa. `data_baixa_sigef` é o carimbo do SIGEF.
+São perguntas diferentes. **Qual das duas o relatório trimestral vai usar é decisão do
+Richard, e não foi tomada.**
+
+⚠️ **`sigef_status` NÃO SUBSTITUI `parecer_tipo`.** São duas fontes sobre a mesma PC, e
+**38 discordam** em ressalva (das 3.064 com parecer dos dois lados). A discordância É o achado;
+normalizar o rótulo para "ficar igual" a apagaria. Consultável direto:
+
+```sql
+SELECT codigo_pc, tr, analista_nome, sigef_status, parecer_tipo
+  FROM prestacoes_contas
+ WHERE sigef_status IS NOT NULL AND parecer_tipo IS NOT NULL
+   AND (sigef_status ILIKE '%ressalva%') <> (parecer_tipo ILIKE '%ressalva%');
+```
+
+⚠️ **A data foi lida TRÊS vezes por caminhos independentes** e o script aborta se divergirem:
+o `Date` do `cellDates`, o serial cru via `SSF.parse_date_code` (sem fuso) e o texto `m/d/yy`.
+`11/4/25` é 04/11 ou 11/04 conforme a leitura. **0 divergências em 3.466 linhas.**
+
+⚠️ **A aba `Parciais -TEVs` tem DUAS colunas `Parcial`** (índices 8 e 11) — armadilha 16-A.
+Toda leitura é por ÍNDICE, com o nome do cabeçalho conferido antes.
+
+### 2. As TRÊS situações — calculadas, NUNCA gravadas
+
+| tag | regra | PCs |
+|---|---|---|
+| `SEM_REGISTRO_SIGEF` | `baixada`, `parcial`, sem `sigef_status` | **353** |
+| `ABERTA_COM_BAIXA_SIGEF` | tem `sigef_status` e `baixada = false` | **401** |
+| `VERIFICAR_FINAL` | `baixada`, `final`, sem `sigef_status` | **284** |
+| `REGISTRO_DECLARADO` | as duas primeiras, já declaradas | 0 |
+
+**Todas com `data_baixa < 2026-08-01`.** As três não se sobrepõem; 13.620 ficam sem tag.
+
+⚠️ **NÃO EXISTE COLUNA `sigef_tag`, E NÃO PODE HAVER.** Ela mudaria sozinha a cada extração
+nova da CGE e ficaria mentindo até alguém rodar um script. O que se grava é o FATO; a tag é
+leitura, feita na hora, por `sigef.SQL_TAG` colado no SELECT.
+
+⚠️ **O CORTE 01/08 VALE PARA AS TRÊS** — decisão do Richard, 27/08. Sem ele em
+`VERIFICAR_FINAL` a conta dá **324** em vez de 284: são **40 finais** baixadas em agosto,
+posteriores à extração. Acusá-las mandaria o analista conferir o que está certo.
+(As parciais de agosto na mesma situação são **321**.)
+
+⚠️ **O corte é inequívoco:** 0 PCs com `data_baixa` entre 31/07 20h e 01/08 04h. Não é caso da
+armadilha 18 — é data fixa histórica contra coluna naive, sem conversão nenhuma.
+
+### 3. A declaração do analista — **por PARCELA**
+
+`POST /parcela/sigef_declaracao`, chave `(setorial_id, tr, parcial_num)` — a MESMA de
+`carregarParcela`, do parecer e do C.I.
+
+⚠️ **NASCEU POR `codigo_pc` E DUROU MEIO DIA.** O modal dizia "Vale para a PC 2021PC002125", e
+numa parcela de 7 PCs o analista declarava sete vezes o mesmo fato. **A rota antiga foi
+REMOVIDA, não comentada** — viva, seria um segundo caminho de escrita na mesma coluna, sem a
+conferência de tag.
+
+⚠️ **A TAG ENTRA NA CHAVE, e é RECALCULADA NO BANCO.** Uma parcela pode ter parciais vermelhas
+ao lado da final azul; a declaração alcança só as PCs na tag do modal aberto. E a tag do corpo
+**não escolhe linha** — ela é comparada com a do banco. Aceitá-la como alvo deixaria o cliente
+escolher onde escrever.
+
+⚠️ **A DECLARAÇÃO NÃO SE DESMARCA.** Não há rota de apagar, e o SQL só sabe apendar
+(`sigef_declaracao || $2`). Se o analista errar, declara de novo e as duas ficam. **É a forma
+do dado que impede o desfazer** — três colunas soltas permitiriam um `SET declarou = false`.
+
+⚠️ **Só a vermelha e a azul aceitam declaração.** Na âmbar o SIGEF já registrou: o que falta é
+o parecer AQUI, e a rota responde 409. Os próprios textos da tela dizem isso.
+
+⚠️ **`podeDeclararParcela` exige ser responsável por TODAS as PCs alcançadas**, não por uma:
+numa parcela de dono misto, bastar uma deixaria alguém gravar no acervo de outro.
+
+### 4. As tags na tela — um componente, quatro lugares
+
+Fila do analista · cartão da parcela · Estoque · Produtividade. `_sigefBadge` desenha;
+`sigefBadges(pcs)`, `sigefBadgesDeTags(tags,n)` e `sigefBadgesContagem(mapa)` só decidem
+quantas. **A tag chega pronta em `pc.sigef_tag`** — a tela não classifica nada.
+
+O texto das quatro situações está em `SIGEF_TAGS`, **uma vez só**, e o balão do "?" lê dali.
+O "?" é um **botão**, não um `title`: o texto tem quatro linhas e diz o que fazer.
+
+Na âmbar o modal mostra **o que o SIGEF registrou** (PC · parecer · data, uma linha por PC) e
+o botão **"→ Ir para a parcela"**, que chama `irPlanilha(tr, parcial)`.
+⚠️ **Ele NÃO baixa nada** — a baixa continua sendo o passo do parecer. Um atalho que baixasse
+do modal seria um terceiro caminho de baixa, sem parecer e sem trilha.
+
+### 5. ⚠️ O DEFEITO QUE CUSTOU UMA REVERSÃO — e a lição
+
+O `migracao_sigef_status_20260827.js --gravar` rodou **uma segunda vez**. Como o script é
+idempotente, `valores_anteriores` saiu **vazia** e sobrescreveu o arquivo que guardava as
+**3.466 chaves** do caminho de volta. **As 16 conferências passaram. O script disse COMMIT.**
+Só não se perdeu porque havia uma cópia tirada minutos antes.
+
+> **A lição não é "não rode duas vezes".** Idempotência existe para que rodar de novo seja
+> seguro. Se rodar de novo destrói alguma coisa, o script era idempotente **no banco** e
+> destrutivo **no disco**.
+
+Corrigido em `lib/reversao.js`, e os três scripts de 27/08 passam por ela: quando já existe uma
+reversão com `modo: "gravacao"`, escreve **ao lado** com sufixo de hora e preserva a antiga.
+O critério é `modo === 'gravacao'`, **não** "tem conteúdo" — uma gravação legítima pode ter a
+lista vazia e ainda ser o registro de que a escrita aconteceu.
+`teste_reversao.js`, 31 checagens, em pasta temporária.
+
+### 6. O que foi publicado em 27/08
+
+| repo | commit | o que é |
+|---|---|---|
+| `sigpc-api` | `e5f13d3` | `data_baixa_sigef` — a data real da baixa no SIGEF |
+| `sigpc-api` | `07ad70e` | `sigef_status` e `sigef_registro_em` |
+| `sigpc-api` | `96da540` | `lib/sigef.js`, as tags, a coluna `sigef_declaracao`, a rota |
+| `sigpc-api` | `5f14482` | a declaração passa a ser por **parcela**, numa transação |
+| `sigpc-api` | `a781c18` | `lib/reversao.js` — a reversão deixa de ser destruída |
+| `sigpc-gt` | `1d316b6` | as tags nas quatro telas |
+| `sigpc-gt` | `d38e7d5` | o modal fala de parcela, e declara numa chamada |
+| `sigpc-gt` | `ea51384` | a âmbar mostra o do SIGEF e leva à parcela |
+
+**Testes:** `sigpc-api` **24 suítes · 1.717 checagens · 0 falhas**.
+⚠️ `sigpc-gt`: **19 checagens falham em 7 suítes** (`acoes` 1 · `busca` 2 · **`ci_fila` 10** ·
+`links` 1 · `menu` 1 · `painel` 3 · `vercomo` 1). **Todas anteriores a esta frente** —
+conferido restaurando o `index.html` de `8ac96f0`. Não foram olhadas uma a uma.
+
+⚠️ **Cuidado ao contar falhas com `grep -v "0 falharam"`:** ele esconde "1**0** falharam". Foi
+assim que as 10 do `ci_fila` ficaram invisíveis por meio dia.
+
+### 7. O que ficou registrado e SEM EXECUTAR
+
+- **As 19 checagens do front**, acima.
+- **`ZZ TESTE TRAVA` (id 57) virou `controle_interno`, grupo 3, e está ATIVO.** Era analista
+  quando esta pendência foi escrita. Como técnico do C.I., ele vê a fila do Controle Interno.
+- **O cadastro diz `Sirlene Wolf dos Santos`** (id 64), e este documento dizia "Sirene".
+  Corrigido — a armadilha 1 exige o nome copiado exatamente como está no cadastro.
+- **A auditoria planilhas × base** continua aberta, sem medição.
+- **Nove `.md` de diagnóstico** de 26–27/08 não versionados na raiz do `sigpc-api`.
+
+---
+
+## ✅ 17/08/2026 — O FECHAMENTO.
 
 > **UMA escrita no banco em 17/08: o aviso id 6, às 09h54.** Uma linha, duas colunas.
 > A **madrugada** (00h–01h30) foi só tela e documentação. As **doze escritas** grandes são de

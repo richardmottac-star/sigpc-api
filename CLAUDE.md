@@ -4,8 +4,55 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 17/08/2026 — ver `SESSAO.md`. **DOZE escritas em produção em 16/08; UMA em
-17/08 — o aviso id 6.**
+**Última sessão:** 27/08/2026 — ver `SESSAO.md`. **TRÊS escritas em produção em 27/08 — as
+quatro colunas do SIGEF.**
+
+> ## ▶ 27/08/2026 — A CONFERÊNCIA COM O SIGEF. Três escritas, nenhuma tocou em baixa.
+>
+> O extrato oficial do SIGEF que a CGE enviou (`Baixas FCEE.xlsx` — 3.359 parciais + 107
+> finais) entrou em **quatro colunas novas**, e o cruzamento com o nosso estado revelou
+> **1.038 PCs em três situações**. Detalhe completo no `SESSAO.md`.
+>
+> **Acervo medido em 27/08:** 14.658 PCs (13.627 parciais · 1.031 finais) · 1.560 TRs ·
+> 4.063 baixadas · 3.161 no C.I. · **produtividade 4.064** · 6.055 sem dono · 54 usuários ·
+> **57 colunas** em `prestacoes_contas`.
+>
+> | coluna nova | tipo | o que é | preenchidas |
+> |---|---|---|---|
+> | `data_baixa_sigef` | `date` | quando o SIGEF foi modificado | 3.466 |
+> | `sigef_status` | `text` | o rótulo **literal** do SIGEF | 3.466 |
+> | `sigef_registro_em` | `date` | a data que o ANALISTA informa | 0 |
+> | `sigef_declaracao` | `jsonb` | a declaração — **array que só cresce** | 0 |
+>
+> ⚠️ **`data_baixa` NÃO FOI TOCADA.** Ela é o carimbo do SISTEMA e é ela que a produtividade
+> usa; `data_baixa_sigef` é o carimbo do SIGEF. **Qual das duas o relatório trimestral vai
+> usar é decisão do Richard, e não foi tomada.** As 3.614 baixas da carga caíam todas em
+> 30/06/2026 (a data do recarregamento); agora se distribuem em seis trimestres.
+>
+> ⚠️ **`sigef_status` NÃO SUBSTITUI `parecer_tipo`** — são duas fontes sobre a mesma PC, e
+> **38 discordam** em ressalva. A discordância É o achado; normalizar o rótulo a apagaria.
+>
+> **As três situações — CALCULADAS, nunca gravadas** (`lib/sigef.js`):
+>
+> | tag | regra | PCs |
+> |---|---|---|
+> | `SEM_REGISTRO_SIGEF` | `baixada`, `parcial`, sem `sigef_status` | **353** |
+> | `ABERTA_COM_BAIXA_SIGEF` | tem `sigef_status` e `baixada = false` | **401** |
+> | `VERIFICAR_FINAL` | `baixada`, `final`, sem `sigef_status` | **284** |
+> | `REGISTRO_DECLARADO` | as duas primeiras, já declaradas | 0 |
+>
+> ⚠️ **NÃO EXISTE COLUNA `sigef_tag`, E NÃO PODE HAVER.** Ela mudaria sozinha a cada extração
+> nova da CGE e ficaria mentindo até alguém rodar um script.
+>
+> ⚠️ **O corte `data_baixa < 2026-08-01` vale para as TRÊS.** Sem ele em `VERIFICAR_FINAL` a
+> conta dá 324 em vez de 284: são 40 finais baixadas em agosto, posteriores à extração.
+>
+> ⚠️ **A declaração é por PARCELA** (`POST /parcela/sigef_declaracao`), e **não se desmarca** —
+> o SQL só sabe apendar. A rota por `codigo_pc` nasceu e foi removida no mesmo dia.
+>
+> ⚠️ **A LIÇÃO CARA DO DIA:** o `--gravar` de um script idempotente rodou duas vezes e
+> **sobrescreveu o JSON de reversão com uma lista vazia** — 3.466 chaves, e as 16 conferências
+> passaram. *Idempotente no banco, destrutivo no disco.* Corrigido em `lib/reversao.js`.
 
 > ## ▶ 17/08/2026 — UMA escrita. E uma coisa ainda espera ordem sua.
 >
@@ -287,7 +334,7 @@ papéis coincidiam, ninguém percebeu.
 | 3 | Gustavo Hallack Porto (id 56) | 17 |
 
 **Controle Interno** — 3 técnicos, perfil `controle_interno`, sem grupo, `meta_mensal = 0`:
-ids **62 Marcia Terezinha Miranda · 63 Atemilson Bispo dos Santos · 64 Sirene Wolf dos Santos**.
+ids **62 Marcia Terezinha Miranda · 63 Atemilson Bispo dos Santos · 64 Sirlene Wolf dos Santos**.
 
 ⚠️ **Coordenadores E técnicos do C.I. não entram em relatório de produtividade.** Não é meta
 zero — é não aparecer. A regra é `contaProdutividade(u)` no `index.html`, usada pela
@@ -318,6 +365,8 @@ a lib é testar a regra.
 | `sgpe-link.js` | o mapa de **183 órgãos** e a URL do SGPe |
 | `sgpe-lote.js` / `sgpe-dwr.js` | o cache de links e a consulta ao SGPe |
 | `datas.js` | `HOJE_BR` — prazo é data civil brasileira, nunca `CURRENT_DATE` |
+| `sigef.js` | as três situações do cruzamento com o SIGEF, e a declaração do analista |
+| `reversao.js` | escrever o JSON de reversão **sem destruir o de uma gravação anterior** |
 
 ### Rotas que escrevem em bloco — todas transacionais
 
@@ -337,6 +386,7 @@ POST /solicitacao_devolucao                 ele PEDE (não devolve)
 GET  /solicitacao_devolucao                 a fila — recorte pelo perfil lido no BANCO
 PATCH /solicitacao_devolucao/:id            decide e, se aprovada, DEVOLVE na mesma transação
 
+POST /parcela/sigef_declaracao              a declaração do SIGEF — por PARCELA, uma transação
 PATCH /usuarios/:id/papel                   troca o papel (só o próprio, só superadmin)
 GET  /usuarios/:id/papel                    o papel de agora e as últimas 20 trocas
 ```
@@ -377,6 +427,9 @@ corrigir_processo_pc.js          correção em lote (aceita --mae)
 resolver_processos_restantes.js  os casos que a regra recusou
 job_sgpe_links.js                resolve links no SGPe — NUNCA no boot
 atualizar_aviso_id6.js           o texto e o fim do aviso id 6 — JA RODADO em 17/08
+migracao_data_baixa_sigef_20260827.js   a data real da baixa no SIGEF — JA RODADO
+migracao_sigef_status_20260827.js       o status do SIGEF — JA RODADO
+migracao_sigef_declaracao_20260827.js   a coluna da declaração — JA RODADO
 ```
 
 ⚠️ **`atualizar_aviso_id6.js` vai por script e não por `psql` de propósito:** o texto tem
@@ -605,6 +658,23 @@ modelo cego: **o `FIM_NOVO` é uma constante `2026-08-31` escrita no arquivo.**
     a trava existia justamente para esconder. Use uma função que trate `Date` e string
     (`paraIso` em `lib/busca-global.js`). É a mesma família de erro da armadilha 18.
 
+26. **⚠️ IDEMPOTENTE NO BANCO NÃO É IDEMPOTENTE NO DISCO.** Em 27/08 o `--gravar` de um
+    script idempotente rodou uma segunda vez: como já não havia nada a gravar, a lista
+    `valores_anteriores` saiu VAZIA e **sobrescreveu o JSON com as 3.466 chaves da reversão**.
+    As 16 conferências passaram e o script disse COMMIT — o banco estava certo, e o único
+    caminho de volta tinha sumido. Só não se perdeu porque havia uma cópia de minutos antes.
+
+    **A lição não é "não rode duas vezes":** idempotência existe justamente para que rodar de
+    novo seja seguro. Todo efeito colateral **fora** da transação — arquivo, log, notificação —
+    precisa da própria proteção. Hoje é `lib/reversao.js`, e o critério é
+    `modo === 'gravacao'`, **não** "tem conteúdo": uma gravação legítima pode ter a lista
+    vazia e ainda ser o registro de que a escrita aconteceu.
+
+27. **⚠️ `grep -v "0 falharam"` ESCONDE `"10 falharam"`.** Em 27/08 isso deixou 10 checagens do
+    `teste_front_ci_fila.js` invisíveis por meio dia, e um número errado foi reportado ao
+    Richard ("9 falhas em 6 suítes"; eram 19 em 7). Ao filtrar contagem, casar o número
+    inteiro — nunca o sufixo do texto.
+
 ---
 
 ## Método: TRABALHAR EM BLOCO, NÃO PASSO A PASSO (desde 12/08/2026)
@@ -827,6 +897,11 @@ Corrigem pelo **lápis**, quando alguém tiver o número certo do SGPe. Detalhe 
       ~1.217). G1 e G3 deram 96,4% e 93,1% de razão 1,0 lendo o mesmo banco.
       Medir → separar quem diverge de quanto diverge → levar a lista ao Richard **antes** de
       qualquer `UPDATE`.
+- [ ] **19 checagens falham em 7 suítes do front** (`acoes` 1 · `busca` 2 · **`ci_fila` 10** ·
+      `links` 1 · `menu` 1 · `painel` 3 · `vercomo` 1). Todas **anteriores** à frente do SIGEF —
+      conferido restaurando o `index.html` de `8ac96f0`. Nunca olhadas uma a uma.
+- [ ] **`ZZ TESTE TRAVA` (id 57) virou `controle_interno`, grupo 3, e está ATIVO** — era
+      analista. Como técnico do C.I., ele vê a fila do Controle Interno.
 - [ ] **Ativar o time de agentes** — os quatro estão em `.claude/agents/`, nada acionado.
 - [ ] **As 14 telas que ninguém clicou** — as duas últimas são os dois papéis e o agir pela conta.
 - [ ] **3 PCs FINAIS com `parcial_num = '1'`** — `2021TR001689`, `2021TR002133`,

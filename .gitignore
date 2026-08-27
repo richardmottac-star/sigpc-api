@@ -76,6 +76,11 @@ reverter_87livres_*.json
 
 reverter_soltas_*.json
 
+# Lista de reversao da data real de baixa do SIGEF (27/08/2026) — 3.466 chaves com o
+# valor anterior de cada PC. Dado operacional; o script que a gera ESTA versionado.
+# ⚠️ Sao DOIS nomes de proposito — o `_DRYRUN` e o da gravacao —, e o padrao cobre os dois.
+reverter_data_baixa_sigef_*.json
+
 # ── Os relatorios de 25/08/2026 — dado operacional, nunca versionar ──────────
 # Planilhas e PDFs com ENTIDADE, CNPJ, VALOR e NOME DE ANALISTA, PC a PC.
 # Sao 5 arquivos e somam 5,4 MB. O que os EXPLICA pode ser versionado (um .md);

@@ -107,3 +107,17 @@ PCS_BAIXADAS_ATE_*_CGE.pdf
 
 # O diagnostico dos 16 processos do C.I. — traz entidade e nome de analista
 DIAGNOSTICO_CI_16_PROCESSOS_*.md
+
+# ⚠️ CSV de diagnostico gerado NA RAIZ — a familia inteira, nao os nomes de um dia so.
+# Estes arquivos nascem de script de leitura contra o banco e saem com dado operacional
+# NOMINAL: entidade, processo SGPe, NL, valor e o nome do analista, linha a linha. Em 26/08
+# o CRUZAMENTO_SIGEF.csv (4.464 linhas) e o PCS_BAIXADAS_POR_ANALISTA.csv (4.063) apareceram
+# soltos no `git status` — um `git add .` os levaria para o historico, de onde nao saem mais.
+#
+# A barra INICIAL ancora na raiz de proposito: e ali que os scripts escrevem. Um CSV dentro
+# de uma pasta de codigo continua visivel, que e o que se quer.
+#
+# ⚠️ O PADRAO E POR PREFIXO, e a proxima rodada vai inventar outro prefixo. Antes de
+# `git add -A`, conferir `git status` — vale aqui a mesma advertencia das planilhas acima.
+/CRUZAMENTO_*.csv
+/PCS_*.csv

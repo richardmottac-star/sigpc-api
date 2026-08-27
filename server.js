@@ -1403,8 +1403,14 @@ app.get('/prestacoes_contas', async (req, res) => {
     // cada extração nova da CGE. E a expressão vem da lib, não copiada: esta rota alimenta as
     // QUATRO telas que mostram a tag (fila, cartão, setorial, produtividade), e uma segunda
     // cópia da regra seria a que ficaria velha.
+    // ⚠️ `sigef_conta` VEM PRONTO DO SERVIDOR, e a tela SOMA — não recalcula. Cards, anel de
+    // meta, dashboard, relatórios e setorial usam este mesmo booleano. Foi a tela ter a
+    // própria conta que criou a divergência achada em 27/08: o `mapaStats` somava
+    // `status = 'baixada'` para o anel enquanto a regra escrita dizia `baixada OU enviado_ci`.
     const { rows } = await pool.query(
-      `SELECT p.*, ${sigef.SQL_TAG} AS sigef_tag
+      `SELECT p.*, ${sigef.SQL_TAG} AS sigef_tag,
+              ${sigef.SQL_CONTA_PRODUTIVIDADE} AS sigef_conta,
+              ${sigef.SQL_DESCONTADA} AS sigef_descontada
          FROM prestacoes_contas p ${where} ORDER BY p.tr LIMIT $${i++} OFFSET $${i++}`,
       [...values, parseInt(limit), parseInt(offset)]
     );
@@ -1481,6 +1487,9 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
               -- (sem crase nos nomes: crase dentro de template literal fecha a string — armadilha 10)
               array_remove(array_agg(DISTINCT ${sigef.SQL_TAG}), NULL) AS sigef_tags,
               COUNT(*) FILTER (WHERE ${sigef.SQL_TAG} IS NOT NULL) AS sigef_pendentes,
+              -- a conta conciliada, por TR — mesma expressão da lib
+              COUNT(*) FILTER (WHERE ${sigef.SQL_CONTA_PRODUTIVIDADE})::int AS sigef_conta,
+              COUNT(*) FILTER (WHERE ${sigef.SQL_DESCONTADA})::int AS sigef_descontadas,
               array_agg(DISTINCT status) AS status
        FROM prestacoes_contas p
        ${where}
@@ -1677,16 +1686,27 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
     const { corte, analista_id } = req.query;
     if (!corte)
       return res.status(400).json({ data: null, error: { message: 'corte é obrigatório' } });
-    const conditions = ['data_baixa <= $1', '(estornada = false OR data_estorno > $1)'];
+    const conditions = ['p.data_baixa <= $1', '(p.estornada = false OR p.data_estorno > $1)'];
     const values = [corte];
     let i = 2;
-    if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
+    if (analista_id) { conditions.push(`p.analista_id = $${i++}`); values.push(parseInt(analista_id)); }
     const where = 'WHERE ' + conditions.join(' AND ');
+    // ⚠️ A CONTA CONCILIADA COM O SIGEF, pela MESMA expressão da lib (27/08/2026). O `total`
+    // continua sendo o número que vai a relatório; `descontadas` é quanto o SIGEF está
+    // segurando, e `total_bruto` é o que seria sem a conferência. Devolver os três impede que
+    // alguém precise refazer a subtração — e refazer é onde as contas divergem.
     const { rows } = await pool.query(
-      `SELECT COUNT(*) FROM prestacoes_contas ${where}`,
+      `SELECT COUNT(*) FILTER (WHERE ${sigef.SQL_CONTA_PRODUTIVIDADE})::int AS total,
+              COUNT(*) FILTER (WHERE ${sigef.SQL_DESCONTADA})::int         AS descontadas,
+              COUNT(*) FILTER (WHERE ${sigef.SQL_BASE_PRODUTIVIDADE})::int AS total_bruto
+         FROM prestacoes_contas p ${where}`,
       values
     );
-    res.json({ data: { total: parseInt(rows[0].count) }, error: null });
+    res.json({ data: {
+      total: rows[0].total,
+      descontadas: rows[0].descontadas,
+      total_bruto: rows[0].total_bruto,
+    }, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }

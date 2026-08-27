@@ -72,6 +72,70 @@ secao('3. O CINZA — declarada, aguardando a proxima extracao');
   conf(s.classificar({ ...OK_PC, sigef_declaracao: decl }) === null, 'PC sem pendencia nao ganha cinza');
 }
 
+secao('3-B. A PRODUTIVIDADE CONCILIADA COM O SIGEF');
+{
+  const decl = [{ resposta: 'ja_estava', data_registro: '2026-08-20' }];
+  const baixadaOk = { ...OK_PC };                                  // baixada, sem tag
+  const soCi = { codigo_pc: 'E', tipo: 'parcial', baixada: false, enviado_ci: true, sigef_status: null, data_baixa: null };
+
+  // A base nao mudou: PC distinta com baixada OU enviado_ci.
+  conf(s.baseProdutividade(baixadaOk) === true, 'baixada entra na base');
+  conf(s.baseProdutividade(soCi) === true, 'enviada ao C.I. sem baixa TAMBEM entra na base');
+  conf(s.baseProdutividade({ baixada: false, enviado_ci: false }) === false, 'nem baixada nem no C.I. fica fora');
+
+  // ⚠️ O DESCONTO: as duas pendencias saem enquanto nao houver declaracao.
+  conf(s.contaProdutividade(VERMELHA) === false, 'a vermelha NAO conta');
+  conf(s.contaProdutividade(AZUL) === false, 'a azul NAO conta');
+  conf(s.descontadaPeloSigef(VERMELHA) === true, 'e a vermelha aparece como descontada');
+  conf(s.descontadaPeloSigef(AZUL) === true, 'a azul tambem');
+
+  // ⚠️ DECLAROU, VOLTA NA HORA — nao espera a proxima extracao.
+  conf(s.contaProdutividade({ ...VERMELHA, sigef_declaracao: decl }) === true,
+       'declarada, a vermelha volta a contar IMEDIATAMENTE');
+  conf(s.contaProdutividade({ ...AZUL, sigef_declaracao: decl }) === true, 'a azul tambem');
+  conf(s.descontadaPeloSigef({ ...VERMELHA, sigef_declaracao: decl }) === false,
+       'e deixa de ser descontada');
+
+  // ⚠️ A AMBAR NAO E TOCADA por esta regra: ela ja nao contava, porque nao esta baixada.
+  conf(s.baseProdutividade(AMBAR) === false, 'a ambar nao esta na base — nao esta baixada');
+  conf(s.contaProdutividade(AMBAR) === false, 'entao nao conta');
+  conf(s.descontadaPeloSigef(AMBAR) === false, 'e NAO e "descontada" — nunca esteve na conta');
+  // Se o analista registrar o parecer aqui, ela entra pelo caminho normal.
+  conf(s.contaProdutividade({ ...AMBAR, baixada: true }) === true,
+       'confirmado o parecer, a ambar entra pelo caminho de sempre');
+
+  // Nada muda para quem nao tem tag.
+  conf(s.contaProdutividade(baixadaOk) === true, 'PC sem tag continua contando');
+  conf(s.contaProdutividade(soCi) === true, 'e a que so foi ao C.I. tambem');
+
+  // ⚠️ A LISTA DE DESCONTO TEM DUAS TAGS, e so duas. Um dia alguem vai querer por a ambar
+  // aqui "para ficar completo" — e ai a PC seria descontada de uma conta em que nunca entrou.
+  conf(s.TAGS_QUE_DESCONTAM.length === 2, 'sao DUAS tags que descontam');
+  conf(!s.TAGS_QUE_DESCONTAM.includes(s.TAGS.ABERTA_COM_BAIXA_SIGEF), 'e a ambar NAO e uma delas');
+  conf(!s.TAGS_QUE_DESCONTAM.includes(s.TAGS.REGISTRO_DECLARADO), 'nem a declarada');
+}
+
+secao('3-C. O SQL DA PRODUTIVIDADE');
+{
+  // ⚠️ O COALESCE E O QUE IMPEDE O DESASTRE: a tag e NULL em 13.620 das 14.658 linhas, e
+  // `NULL NOT IN (...)` e NULL — que num FILTER nao passa. Sem ele, a produtividade dessas
+  // PCs zeraria em silencio.
+  conf(/COALESCE\(/.test(s.SQL_CONTA_PRODUTIVIDADE), 'a conta protege a tag NULL com COALESCE');
+  conf(/NOT IN/.test(s.SQL_CONTA_PRODUTIVIDADE), 'e exclui as tags que descontam');
+  // ⚠️ A CONFERENCIA E SOBRE A LISTA DO `NOT IN`, e nao sobre o SQL inteiro: `SQL_TAG` esta
+  // embutido aqui dentro e cita as QUATRO tags, inclusive a ambar. Procurar o nome dela no
+  // texto todo acusaria a propria expressao que classifica — e foi o que este teste fez na
+  // primeira versao. E a mesma familia do md5 que precisou excluir a coluna nova.
+  const listaNotIn = (s.SQL_CONTA_PRODUTIVIDADE.match(/NOT IN \(([^)]*)\)/) || [, ''])[1];
+  for (const t of s.TAGS_QUE_DESCONTAM) conf(listaNotIn.includes(t), `a tag ${t} sai da conta`);
+  conf(!listaNotIn.includes(s.TAGS.ABERTA_COM_BAIXA_SIGEF), 'a ambar NAO esta na lista de desconto');
+  conf(!listaNotIn.includes(s.TAGS.REGISTRO_DECLARADO), 'nem a declarada');
+  conf(/baixada = true OR p\.enviado_ci = true/.test(s.SQL_BASE_PRODUTIVIDADE),
+       'a base e baixada OU enviado_ci — a regra do projeto, intacta');
+  conf(s.SQL_CONTA_PRODUTIVIDADE.includes(s.SQL_BASE_PRODUTIVIDADE.trim()),
+       'e a conta e construida SOBRE a base, nao reescrita ao lado');
+}
+
 secao('4. QUEM PODE DECLARAR');
 {
   const pc = { ...VERMELHA, analista_id: 51 };
@@ -247,6 +311,20 @@ secao('10. A LIB E O SERVER');
        'e confere DEPOIS de escrever, com ROLLBACK se nao bater');
   conf(!/req\.body[\s\S]{0,40}perfil/.test(bloco), 'a rota nao le o perfil do corpo');
   conf(/TAGS_QUE_DECLARAM\.includes\(b\.tag\)/.test(bloco), 'so as duas tags que declaram passam');
+
+  // ⚠️ A PRODUTIVIDADE SAI DA LIB EM TODA PARTE. Se uma rota reescrever a conta, ela vai
+  // divergir das outras no primeiro ajuste — foi exatamente o que aconteceu com a tela, que
+  // contava `status = 'baixada'` enquanto a regra escrita dizia `baixada OU enviado_ci`.
+  conf(/sigef\.SQL_CONTA_PRODUTIVIDADE/.test(src), 'o server usa a conta da lib');
+  conf((src.match(/sigef\.SQL_CONTA_PRODUTIVIDADE/g) || []).length >= 3,
+       'em pelo menos tres pontos', String((src.match(/sigef\.SQL_CONTA_PRODUTIVIDADE/g) || []).length));
+  conf(/sigef\.SQL_DESCONTADA/.test(src), 'e devolve tambem quantas o SIGEF esta segurando');
+  // A rota de produtividade nao pode ter voltado a contar `COUNT(*)` cru.
+  const iProd = src.indexOf("app.get('/prestacoes_contas/produtividade'");
+  const bProd = iProd < 0 ? '' : src.slice(iProd, iProd + 2000);
+  conf(!/SELECT COUNT\(\*\) FROM prestacoes_contas/.test(bProd),
+       'a rota de produtividade nao conta linha crua');
+  conf(/AS total_bruto/.test(bProd), 'e devolve o bruto ao lado do conciliado');
 }
 
 console.log(`\n=== RESULTADO: ${ok} passaram · ${falhou} falharam ===\n`);

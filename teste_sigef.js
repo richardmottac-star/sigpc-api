@@ -134,6 +134,48 @@ secao('7. O QUE FICA GRAVADO');
   conf(Object.keys(s.RESPOSTAS).length === 2, 'sao duas respostas, e so duas');
 }
 
+secao('7-B. A DECLARACAO E POR PARCELA — e a tag entra na chave');
+{
+  // Uma parcela com PCs em situacoes diferentes: 2 vermelhas, 1 azul (a final), 1 sem tag.
+  const parcela = [
+    { codigo_pc: '2021PC002125', analista_id: 51, sigef_tag: s.TAGS.SEM_REGISTRO_SIGEF },
+    { codigo_pc: '2021PC002126', analista_id: 51, sigef_tag: s.TAGS.SEM_REGISTRO_SIGEF },
+    { codigo_pc: '2021TR000559-PFINAL', analista_id: 51, sigef_tag: s.TAGS.VERIFICAR_FINAL },
+    { codigo_pc: '2021PC002127', analista_id: 51, sigef_tag: null },
+  ];
+
+  const v = s.alvoDaDeclaracao(parcela, s.TAGS.SEM_REGISTRO_SIGEF);
+  conf(v.codigos.length === 2, 'a vermelha alcanca as 2 PCs vermelhas', String(v.codigos.length));
+  conf(v.codigos.join(',') === '2021PC002125,2021PC002126', 'e sao exatamente essas duas');
+  // ⚠️ A FINAL NAO ENTRA. Declarar sobre ela o que foi dito das parciais seria afirmar em
+  // nome do analista algo que ele nao afirmou — e e a prestacao final, que a CGE olha.
+  conf(v.fora.length === 2, 'as outras 2 ficam de fora', String(v.fora.length));
+  conf(!v.codigos.includes('2021TR000559-PFINAL'), 'a PC FINAL nao e alcancada pela tag vermelha');
+
+  const a = s.alvoDaDeclaracao(parcela, s.TAGS.VERIFICAR_FINAL);
+  conf(a.codigos.length === 1 && a.codigos[0] === '2021TR000559-PFINAL',
+       'e a azul alcanca so a final');
+
+  // A PC sem tag nunca e alcancada por nada.
+  conf(!s.alvoDaDeclaracao(parcela, s.TAGS.SEM_REGISTRO_SIGEF).codigos.includes('2021PC002127')
+    && !s.alvoDaDeclaracao(parcela, s.TAGS.VERIFICAR_FINAL).codigos.includes('2021PC002127'),
+       'a PC sem tag nao entra em declaracao nenhuma');
+  conf(s.alvoDaDeclaracao([], s.TAGS.SEM_REGISTRO_SIGEF).codigos.length === 0, 'parcela vazia nao alcanca nada');
+
+  // ── quem pode, na PARCELA ───────────────────────────────────────────────────
+  const dono = { id: 51 }, outro = { id: 22 }, rich = { id: 4 };
+  conf(s.podeDeclararParcela(dono, v.alcanca, 'analista') === true, 'o dono declara na parcela dele');
+  conf(s.podeDeclararParcela(outro, v.alcanca, 'analista') === false, 'outro analista nao');
+  conf(s.podeDeclararParcela(rich, v.alcanca, 'superadmin') === true, 'o superadmin declara em qualquer uma');
+  // ⚠️ DONO MISTO: tem de poder em TODAS, e nao em uma. Bastar uma deixaria alguem gravar no
+  // acervo de outro numa parcela que ficou com dois donos.
+  const misto = [{ codigo_pc: 'A', analista_id: 51 }, { codigo_pc: 'B', analista_id: 22 }];
+  conf(s.podeDeclararParcela(dono, misto, 'analista') === false,
+       'parcela de dono MISTO recusa quem e dono de so uma das PCs');
+  conf(s.podeDeclararParcela(rich, misto, 'superadmin') === true, 'o superadmin passa mesmo no misto');
+  conf(s.podeDeclararParcela(dono, [], 'analista') === false, 'sem PC alcancada, ninguem declara');
+}
+
 secao('8. O SQL — o que ele NAO pode conter');
 {
   // ⚠️ Declarar nao baixa, nao estorna e nao move produtividade. Se um destes nomes voltar ao
@@ -146,7 +188,20 @@ secao('8. O SQL — o que ele NAO pode conter');
   // ⚠️ APENDA, nunca substitui: e o `||` que faz "a declaracao nao se desmarca".
   conf(/\|\|\s*\$2::jsonb/.test(set), 'e o jsonb e APENDADO, nunca substituido');
   conf(/COALESCE\(sigef_declaracao, '\[\]'::jsonb\)/.test(set), 'com COALESCE para a primeira declaracao');
-  conf(/WHERE codigo_pc = \$1/.test(s.SQL_DECLARAR), 'e a chave e o codigo_pc, uma PC por vez');
+  // ⚠️ LISTA EXPLICITA DE CHAVES, e nao condicao derivada de tr/parcial/tag — armadilha 12.
+  // A condicao seria reavaliada no UPDATE e poderia casar linha que a conferencia nunca viu.
+  conf(/WHERE codigo_pc = ANY\(\$1\)/.test(s.SQL_DECLARAR), 'a escrita vai por LISTA de codigo_pc');
+  conf(!/\btr\b|\bparcial_num\b|\bsetorial_id\b/.test(s.SQL_DECLARAR),
+       'e o UPDATE nao repete a chave da parcela — quem escolheu as PCs foi o SELECT FOR UPDATE');
+
+  // O SELECT que escolhe as PCs da parcela.
+  const sel = s.SQL_PCS_DA_PARCELA_NA_TAG;
+  conf(/setorial_id = \$1[\s\S]*tr = \$2[\s\S]*parcial_num = \$3/.test(sel),
+       'o SELECT entra por (setorial_id, tr, parcial_num), como carregarParcela');
+  conf(/FOR UPDATE/.test(sel), 'e trava as linhas — FOR UPDATE');
+  // ⚠️ A TAG E RECALCULADA NO BANCO. Se ela viesse do corpo, o cliente escolheria em quais
+  // linhas escrever: bastaria mandar outra tag para alcancar PC que a tela nunca ofereceu.
+  conf(/AS sigef_tag/.test(sel), 'e a tag e CALCULADA no SELECT, nao recebida do corpo');
 }
 
 secao('9. O SQL DA TAG');
@@ -169,14 +224,29 @@ secao('10. A LIB E O SERVER');
   // ⚠️ A regra nao pode estar escrita duas vezes no server.
   conf(!/SEM_REGISTRO_SIGEF'/.test(src.replace(/sigef\.TAGS\.\w+/g, '')),
        'o server nao repete o nome das tags em texto solto');
-  conf(/sigef\.podeDeclarar/.test(src), 'a guarda de quem declara vem da lib');
-  // ⚠️ A rota da declaracao usa o perfil EFETIVO, e nao `u.perfil`: no papel de analista o
-  // superadmin e analista em toda parte, e aqui isso limita as PCs dele.
-  const iRota = src.indexOf("sigef_declaracao'");
-  const bloco = iRota < 0 ? '' : src.slice(iRota, iRota + 2600);
-  conf(/papel\.perfilEfetivo/.test(bloco), 'e a rota resolve o perfil pelo papel efetivo');
-  conf(/BEGIN[\s\S]*SQL_DECLARAR[\s\S]*COMMIT/.test(bloco), 'a declaracao vai numa transacao');
+  conf(/sigef\.podeDeclararParcela/.test(src), 'a guarda de quem declara vem da lib');
+
+  // ⚠️ A ROTA ANTIGA, POR `codigo_pc`, SAIU — e nao ficou comentada. Ela nasceu de manha e
+  // durou um dia; deixa-la viva seria um segundo caminho de escrita na mesma coluna, sem a
+  // conferencia de tag. Rota morta nao incomoda ninguem ate o dia em que alguem a religa.
+  conf(!/prestacoes_contas\/:codigo_pc\/sigef_declaracao/.test(src),
+       'a rota por codigo_pc nao existe mais');
+  conf(/app\.post\('\/parcela\/sigef_declaracao'/.test(src), 'e a rota e POST /parcela/sigef_declaracao');
+
+  const iRota = src.indexOf("app.post('/parcela/sigef_declaracao'");
+  const bloco = iRota < 0 ? '' : src.slice(iRota, iRota + 4200);
+  // ⚠️ A rota usa o perfil EFETIVO, e nao `u.perfil`: no papel de analista o superadmin e
+  // analista em toda parte, e aqui isso limita as PCs dele.
+  conf(/papel\.perfilEfetivo/.test(bloco), 'a rota resolve o perfil pelo papel efetivo');
+  conf(/faltaChave/.test(bloco), 'e exige a chave da parcela, como as outras rotas de parcela');
+  // ⚠️ UMA transacao para a parcela inteira — armadilha 24: tirado o laco de requisicoes, a
+  // conferencia passa a ser UMA, antes de escrever.
+  conf(/BEGIN[\s\S]*SQL_PCS_DA_PARCELA_NA_TAG[\s\S]*SQL_DECLARAR[\s\S]*COMMIT/.test(bloco),
+       'a parcela inteira vai numa transacao so');
+  conf(/gravou\.length !== codigos\.length[\s\S]{0,200}ROLLBACK/.test(bloco),
+       'e confere DEPOIS de escrever, com ROLLBACK se nao bater');
   conf(!/req\.body[\s\S]{0,40}perfil/.test(bloco), 'a rota nao le o perfil do corpo');
+  conf(/TAGS_QUE_DECLARAM\.includes\(b\.tag\)/.test(bloco), 'so as duas tags que declaram passam');
 }
 
 console.log(`\n=== RESULTADO: ${ok} passaram · ${falhou} falharam ===\n`);

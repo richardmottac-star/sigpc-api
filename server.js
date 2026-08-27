@@ -1692,31 +1692,48 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
   }
 });
 
-// POST /prestacoes_contas/:codigo_pc/sigef_declaracao
-//   body { resposta: 'ja_estava'|'registrei_agora', data_registro: 'AAAA-MM-DD', usuario_id }
+// POST /parcela/sigef_declaracao
+//   body { tr, parcial_num, setorial_id?, tag, resposta, data_registro, usuario_id }
 //
 // A DECLARAÇÃO DO ANALISTA sobre o registro do parecer no SIGEF. Especificação do Richard,
 // 27/08/2026. A regra inteira mora em `lib/sigef.js`.
 //
-// ⚠️ A DECLARAÇÃO NÃO SE DESMARCA. Não há rota para apagar, e o SQL só sabe apendar
-// (`sigef_declaracao || $2`). Se o analista errar, ele declara de novo e as duas ficam — a
-// mais recente é a que vale, e `sigef_registro_em` acompanha. Uma rota de "desfazer" seria o
-// caminho por onde a afirmação some sem deixar rastro, justamente na coluna que a CGE lê.
+// ⚠️ É POR PARCELA, e a chave é `(setorial_id, tr, parcial_num)` — a MESMA de
+// `carregarParcela`, do parecer e da decisão do C.I. Nasceu por `codigo_pc` de manhã, e o
+// modal dizia "Vale para a PC 2021PC002125": numa parcela de 7 PCs o analista declarava sete
+// vezes o mesmo fato. O parecer no SIGEF é UM — quem o registrou registrou a parcela.
 //
-// ⚠️ SÓ O ANALISTA RESPONSÁVEL PELA PC, OU O SUPERADMIN — e o perfil vem do BANCO, pelo
-// `usuario_id`, nunca do corpo. As quatro rotas de 14/08 fecharam esse buraco; esta nasce
-// fechada. E o perfil é o EFETIVO: no papel de analista o superadmin só declara nas PCs dele.
+// ⚠️ NUMA TRANSAÇÃO SÓ. Antes eram N requisições disparadas pela tela em laço, e uma falha no
+// meio deixava metade da parcela declarada. É a armadilha 24: ao tirar o laço de requisições,
+// a conferência de quem-pode passa a ser UMA, antes de escrever.
+//
+// ⚠️ A TAG ENTRA NA CHAVE, e é RECALCULADA AQUI. Uma parcela pode ter PCs em situações
+// diferentes, e a declaração alcança só as que estão na tag do modal aberto — misturar
+// `SEM_REGISTRO_SIGEF` com `VERIFICAR_FINAL` afirmaria sobre a prestação final o que o
+// analista disse sobre as parciais. E a tag do corpo NÃO é usada para escolher linha: ela é
+// comparada com a que o banco calcula. Confiar na do navegador seria deixar o cliente
+// escolher onde escrever.
+//
+// ⚠️ A DECLARAÇÃO NÃO SE DESMARCA. Não há rota para apagar, e o SQL só sabe apendar
+// (`sigef_declaracao || $2`). Se o analista errar, ele declara de novo e as duas ficam.
+//
+// ⚠️ SÓ O ANALISTA RESPONSÁVEL, OU O SUPERADMIN — perfil lido do BANCO pelo `usuario_id`,
+// nunca do corpo. E tem de ser responsável por TODAS as PCs alcançadas, não por uma: numa
+// parcela de dono misto, bastar uma deixaria alguém gravar no acervo de outro.
 //
 // ⚠️ E ELA NÃO BAIXA NADA. `baixada`, `enviado_ci`, `data_baixa`, `parecer_tipo` e
-// `sigef_status` não aparecem no SET — declarar que o parecer está no SIGEF não é o mesmo que
-// baixar aqui, e confundir as duas moveria produtividade sem parecer. `teste_sigef.js` falha
-// se um desses nomes voltar ao SQL.
-app.post('/prestacoes_contas/:codigo_pc/sigef_declaracao', async (req, res) => {
+// `sigef_status` não aparecem no SET. `teste_sigef.js` falha se um desses nomes voltar ao SQL.
+app.post('/parcela/sigef_declaracao', async (req, res) => {
   const cli = await pool.connect();
   try {
     const b = req.body || {};
+    const semChave = faltaChave(b);
+    if (semChave) return res.status(400).json({ data: null, error: { message: semChave } });
     const erro = sigef.validarDeclaracao(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    if (!sigef.TAGS_QUE_DECLARAM.includes(b.tag))
+      return res.status(400).json({ data: null, error: {
+        message: `tag inválida. Use uma de: ${sigef.TAGS_QUE_DECLARAM.join(', ')}.` } });
 
     const { rows: us } = await cli.query(
       `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
@@ -1725,49 +1742,60 @@ app.post('/prestacoes_contas/:codigo_pc/sigef_declaracao', async (req, res) => {
     if (!quem) return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } });
     if (await barrouPreparacao(res, b.usuario_id)) return;
 
-    // ⚠️ O BEGIN vem ANTES da leitura, com `FOR UPDATE`: entre ler a PC e gravar a declaração,
-    // outra sessão poderia baixar a parcial e mudar a tag debaixo da conferência.
+    // ⚠️ O BEGIN vem ANTES da leitura, com `FOR UPDATE`: entre escolher as PCs e gravar, outra
+    // sessão poderia baixar a parcial e tirar uma delas da situação.
     await cli.query('BEGIN');
-    const { rows: alvo } = await cli.query(
-      `SELECT codigo_pc, tipo, baixada, data_baixa, sigef_status, sigef_declaracao, analista_id
-         FROM prestacoes_contas WHERE codigo_pc = $1 FOR UPDATE`, [req.params.codigo_pc]);
-    if (!alvo.length) {
+    const { rows: daParcela } = await cli.query(sigef.SQL_PCS_DA_PARCELA_NA_TAG,
+      [b.setorial_id || 'FCEE', b.tr, String(b.parcial_num)]);
+    if (!daParcela.length) {
       await cli.query('ROLLBACK');
-      return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+      return res.status(404).json({ data: null, error: { message: 'Parcela não encontrada.' } });
     }
-    const pc = alvo[0];
 
-    if (!sigef.podeDeclarar(quem, pc, papel.perfilEfetivo(quem))) {
+    const { alcanca, fora, codigos } = sigef.alvoDaDeclaracao(daParcela, b.tag);
+    if (!alcanca.length) {
       await cli.query('ROLLBACK');
-      return res.status(403).json({
-        data: null, error: { message: 'Só o analista responsável por esta PC pode declarar.' } });
+      // ⚠️ O 409 DIZ O QUE MUDOU, em vez de recusar em silêncio: entre a tela abrir e o
+      // analista clicar, a situação pode ter deixado de existir — outra pessoa baixou, ou ele
+      // mesmo já declarou noutra aba.
+      return res.status(409).json({ data: null, error: {
+        message: 'Nenhuma PC desta parcela está nessa situação agora. Recarregue a tela.' } });
     }
-    // ⚠️ A ÂMBAR NÃO ACEITA DECLARAÇÃO, e o 409 diz por quê em vez de recusar em silêncio: lá
-    // o SIGEF já registrou, e o que falta é o parecer NESTE sistema.
-    if (!sigef.aceitaDeclaracao(pc)) {
+    if (!sigef.podeDeclararParcela(quem, alcanca, papel.perfilEfetivo(quem))) {
       await cli.query('ROLLBACK');
-      return res.status(409).json({
-        data: null,
-        error: { message: sigef.classificar(pc) === sigef.TAGS.ABERTA_COM_BAIXA_SIGEF
-          ? 'Esta prestação já consta baixada no SIGEF. O que falta é registrar o parecer aqui.'
-          : 'Esta prestação não tem pendência de registro no SIGEF.' } });
+      return res.status(403).json({ data: null, error: {
+        message: 'Só o analista responsável por esta parcela pode declarar.' } });
     }
 
     const decl = sigef.montarDeclaracao({
       resposta: b.resposta, data_registro: b.data_registro, quem });
     const { rows: gravou } = await cli.query(
-      sigef.SQL_DECLARAR, [pc.codigo_pc, JSON.stringify([decl]), b.data_registro]);
+      sigef.SQL_DECLARAR, [codigos, JSON.stringify([decl]), b.data_registro]);
+
+    // ⚠️ CONFERE DEPOIS DE ESCREVER, DENTRO DA MESMA TRANSAÇÃO, e desfaz se não bater. É a
+    // regra das gravações em massa deste projeto: conferir só antes prova o que se esperava,
+    // não o que aconteceu. Aqui são poucas linhas, mas a razão é a mesma.
+    if (gravou.length !== codigos.length) {
+      await cli.query('ROLLBACK');
+      return res.status(500).json({ data: null, error: {
+        message: `Esperava gravar ${codigos.length} PCs e o banco devolveu ${gravou.length}. Nada foi gravado.` } });
+    }
     await cli.query('COMMIT');
 
     // A tag depois da escrita, pela MESMA regra da lista — se a prévia e a gravação
     // calculassem de jeitos diferentes, a tela prometeria um estado e o banco faria outro.
-    const atualizada = { ...pc, ...gravou[0] };
+    const porCodigo = new Map(gravou.map((r) => [r.codigo_pc, r]));
     res.json({
       data: {
-        codigo_pc: gravou[0].codigo_pc,
-        sigef_registro_em: gravou[0].sigef_registro_em,
-        declaracoes: gravou[0].sigef_declaracao,
-        sigef_tag: sigef.classificar(atualizada),
+        tr: b.tr, parcial_num: String(b.parcial_num), tag: b.tag,
+        alcancadas: codigos,
+        // as que ficaram de fora, e em que situação — a tela avisa em vez de fingir que acabou
+        fora: fora.map((p) => ({ codigo_pc: p.codigo_pc, sigef_tag: p.sigef_tag })),
+        sigef_registro_em: b.data_registro,
+        declaracoes: alcanca.map((p) => ({
+          codigo_pc: p.codigo_pc,
+          sigef_tag: sigef.classificar({ ...p, ...porCodigo.get(p.codigo_pc) }),
+        })),
       }, error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) { /* pode não ter começado */ }

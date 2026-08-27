@@ -136,6 +136,33 @@ secao('3-C. O SQL DA PRODUTIVIDADE');
        'e a conta e construida SOBRE a base, nao reescrita ao lado');
 }
 
+secao('3-D. A CONTA "ATE UMA DATA" — as DUAS pernas da regra');
+{
+  const b = s.sqlBaseAte('$1');
+  // ⚠️ CADA PERNA COM A PROPRIA DATA. Cortar as duas por `data_baixa` deixa de fora, de
+  // forma estrutural, a PC que conta SO por ter ido ao C.I.: ela tem `dt_envio_ci`, nao
+  // `data_baixa`. Era metade da regra escrita, e a rota dizia implementa-la inteira.
+  conf(/data_baixa <= \$1/.test(b), 'a perna da baixa corta por data_baixa');
+  conf(/enviado_ci = true and p\.dt_envio_ci <= \$1/i.test(b), 'a perna do C.I. corta por dt_envio_ci');
+  conf(/ OR /i.test(b), 'e as duas sao ligadas por OR — a regra escrita');
+  conf(!/dt_envio_ci <= \$1[\s\S]*data_baixa <= \$1[\s\S]*dt_envio_ci/.test(b), 'sem perna repetida');
+
+  // ⚠️ A PERNA DA BAIXA NAO PODE GANHAR `baixada = true`. A rota e CUMULATIVA: quem responde
+  // "o que valia naquela data" e `data_baixa <= corte` junto com o filtro de estorno.
+  // `data_baixa` e preservada depois do estorno justamente para isso (lib/correcao.js) —
+  // exigir `baixada = true` faria a PC estornada HOJE sumir de um relatorio de ONTEM.
+  conf(!/baixada = true AND p\.data_baixa/.test(b), 'a perna da baixa NAO exige baixada = true');
+
+  // O parametro e respeitado: trocar o placeholder troca em todas as ocorrencias.
+  const b2 = s.sqlBaseAte('$7');
+  conf(!/\$1/.test(b2) && (b2.match(/\$7/g) || []).length === 2, 'o placeholder e parametrizavel');
+
+  // A conta e a descontada se constroem SOBRE a base — nao sao reescritas ao lado.
+  conf(s.sqlContaAte('$1').includes(b), 'a conta ate-a-data usa a mesma base');
+  conf(s.sqlDescontadaAte('$1').includes(b), 'a descontada tambem');
+  conf(/COALESCE\(/.test(s.sqlContaAte('$1')), 'e protege a tag NULL com COALESCE');
+}
+
 secao('4. QUEM PODE DECLARAR');
 {
   const pc = { ...VERMELHA, analista_id: 51 };
@@ -316,8 +343,13 @@ secao('10. A LIB E O SERVER');
   // divergir das outras no primeiro ajuste — foi exatamente o que aconteceu com a tela, que
   // contava `status = 'baixada'` enquanto a regra escrita dizia `baixada OU enviado_ci`.
   conf(/sigef\.SQL_CONTA_PRODUTIVIDADE/.test(src), 'o server usa a conta da lib');
-  conf((src.match(/sigef\.SQL_CONTA_PRODUTIVIDADE/g) || []).length >= 3,
-       'em pelo menos tres pontos', String((src.match(/sigef\.SQL_CONTA_PRODUTIVIDADE/g) || []).length));
+  // ⚠️ SÃO DUAS FORMAS DA MESMA CONTA: a do estado de hoje (`SQL_CONTA_PRODUTIVIDADE`) e a
+  // cumulativa até uma data (`sqlContaAte`). O que este teste guarda é que NENHUMA rota
+  // escreva a conta à mão — por isso conta as duas juntas, e não uma só.
+  const usos = (src.match(/sigef\.(SQL_CONTA_PRODUTIVIDADE|sqlContaAte)/g) || []).length;
+  conf(usos >= 3, 'a conta da lib aparece em pelo menos tres pontos', String(usos));
+  conf(!/COUNT\(\*\) FILTER \(WHERE \(p\.baixada = true OR p\.enviado_ci = true\)/.test(src),
+       'e nenhuma rota reescreve a base a mao');
   conf(/sigef\.SQL_DESCONTADA/.test(src), 'e devolve tambem quantas o SIGEF esta segurando');
   // A rota de produtividade nao pode ter voltado a contar `COUNT(*)` cru.
   const iProd = src.indexOf("app.get('/prestacoes_contas/produtividade'");
@@ -325,6 +357,13 @@ secao('10. A LIB E O SERVER');
   conf(!/SELECT COUNT\(\*\) FROM prestacoes_contas/.test(bProd),
        'a rota de produtividade nao conta linha crua');
   conf(/AS total_bruto/.test(bProd), 'e devolve o bruto ao lado do conciliado');
+  // ⚠️ AS DUAS PERNAS, e pela lib. Um `data_baixa <= $1` solto no WHERE seria a volta do
+  // defeito: ele corta a perna do C.I. antes de o FILTER poder ve-la.
+  conf(/sigef\.sqlContaAte\('\$1'\)/.test(bProd), 'a rota usa a conta ate-a-data da lib');
+  conf(!/conditions = \[[^\]]*data_baixa <= \$1/.test(bProd),
+       'e o WHERE nao corta mais por data_baixa — isso e do FILTER agora');
+  conf(/estornada = false OR p\.data_estorno > \$1/.test(bProd),
+       'o recorte de estorno continua no WHERE, e continua sendo "o que valia na data"');
 }
 
 console.log(`\n=== RESULTADO: ${ok} passaram · ${falhou} falharam ===\n`);

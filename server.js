@@ -1686,7 +1686,14 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
     const { corte, analista_id } = req.query;
     if (!corte)
       return res.status(400).json({ data: null, error: { message: 'corte é obrigatório' } });
-    const conditions = ['p.data_baixa <= $1', '(p.estornada = false OR p.data_estorno > $1)'];
+    // ⚠️ O `WHERE` GUARDA SÓ O RECORTE — o estorno e o analista. Quem qualifica a PC é a
+    // expressão do FILTER, e ela precisa das DUAS pernas da regra escrita.
+    //
+    // ⚠️ ATÉ 27/08 O RECORTE ERA `data_baixa <= corte` NO `WHERE`, e isso deixava de fora,
+    // estruturalmente, a PC que conta SÓ por ter ido ao C.I. — `enviado_ci = true` sem baixa
+    // tem `dt_envio_ci`, não `data_baixa`. A rota dizia implementar "baixada OU enviado_ci" e
+    // implementava só a primeira metade. Hoje é uma PC; a falha é de forma, não de tamanho.
+    const conditions = ['(p.estornada = false OR p.data_estorno > $1)'];
     const values = [corte];
     let i = 2;
     if (analista_id) { conditions.push(`p.analista_id = $${i++}`); values.push(parseInt(analista_id)); }
@@ -1696,9 +1703,9 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
     // segurando, e `total_bruto` é o que seria sem a conferência. Devolver os três impede que
     // alguém precise refazer a subtração — e refazer é onde as contas divergem.
     const { rows } = await pool.query(
-      `SELECT COUNT(*) FILTER (WHERE ${sigef.SQL_CONTA_PRODUTIVIDADE})::int AS total,
-              COUNT(*) FILTER (WHERE ${sigef.SQL_DESCONTADA})::int         AS descontadas,
-              COUNT(*) FILTER (WHERE ${sigef.SQL_BASE_PRODUTIVIDADE})::int AS total_bruto
+      `SELECT COUNT(*) FILTER (WHERE ${sigef.sqlContaAte('$1')})::int AS total,
+              COUNT(*) FILTER (WHERE ${sigef.sqlDescontadaAte('$1')})::int AS descontadas,
+              COUNT(*) FILTER (WHERE ${sigef.sqlBaseAte('$1')})::int AS total_bruto
          FROM prestacoes_contas p ${where}`,
       values
     );

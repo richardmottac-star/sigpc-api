@@ -50,6 +50,7 @@
 
 const { Pool } = require('pg');
 const fs = require('fs');
+const { escreverReversao } = require('./lib/reversao');
 const { HOJE_BR } = require('./lib/datas');
 
 let XLSX;
@@ -532,8 +533,15 @@ function sqlFoto(listaColunas) {
         'Se uma rodada posterior tiver escrito nesta coluna, o DROP COLUMN apaga aquilo junto. '
         + 'Voltar pela lista `valores_anteriores` desfaz SO o que esta rodada fez.',
     };
-    fs.writeFileSync(ARQ_REVERSAO, JSON.stringify(reversao, null, 2), 'utf8');
-    linha(`   escrito: ${ARQ_REVERSAO}`);
+    // ⚠️ POR `escreverReversao`, E NAO POR `writeFileSync` DIRETO. Rodar o `--gravar` uma
+    // segunda vez chegaria aqui com `valores_anteriores: []` — o script e idempotente, entao
+    // nao ha mais nada a gravar — e apagaria as 3.466 chaves do caminho de volta. Aconteceu
+    // em 27/08, com este arquivo. Ver `lib/reversao.js`.
+    const escrito = escreverReversao(ARQ_REVERSAO, reversao);
+    linha(`   escrito: ${escrito.caminho}`);
+    if (escrito.preservou) {
+      linha(`   ⚠️  ${escrito.preservou} FOI PRESERVADO — ${escrito.motivo}.`);
+    }
     linha(`   ${reversao.valores_anteriores.length} chaves com o valor anterior de cada uma`);
 
     // ── 8. DESFECHO ──────────────────────────────────────────────────────────

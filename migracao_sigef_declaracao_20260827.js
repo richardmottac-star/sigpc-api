@@ -35,6 +35,7 @@
 const { Pool } = require('pg');
 const fs = require('fs');
 const sigef = require('./lib/sigef');
+const { escreverReversao } = require('./lib/reversao');
 
 const GRAVAR = process.argv.includes('--gravar');
 const TABELA = 'prestacoes_contas';
@@ -66,30 +67,6 @@ function conferir(nome, cond, detalhe) {
   if (cond) { confOk++; linha(`   OK    ${nome}`); }
   else { confFalhou++; linha(`   FALHA ${nome}${detalhe ? ' — ' + detalhe : ''}`); }
   return cond;
-}
-
-/**
- * Escreve a reversao SEM DESTRUIR uma reversao de gravacao que ja exista.
- *
- * ⚠️ ISTO CORRIGE UM DEFEITO ACHADO EM 27/08, nos dois scripts anteriores: rodar o `--gravar`
- * uma segunda vez, depois de a gravacao ja ter passado, reescrevia o JSON com
- * `valores_anteriores: []` — porque a essa altura nao ha mais nada a gravar. O arquivo que
- * guardava o caminho de volta virava um arquivo vazio, e ninguem notaria ate precisar dele.
- * Separar dry-run de gravacao nao bastava: faltava proteger a gravacao dela mesma.
- */
-function escreverReversao(caminho, conteudo) {
-  if (fs.existsSync(caminho)) {
-    let antigo = null;
-    try { antigo = JSON.parse(fs.readFileSync(caminho, 'utf8')); } catch (_) { antigo = null; }
-    const ehGravacaoComConteudo = antigo && antigo.modo === 'gravacao';
-    if (ehGravacaoComConteudo) {
-      const alt = caminho.replace(/\.json$/, `_${conteudo.quando.replace(/[:.]/g, '-')}.json`);
-      fs.writeFileSync(alt, JSON.stringify(conteudo, null, 2), 'utf8');
-      return { caminho: alt, preservou: caminho };
-    }
-  }
-  fs.writeFileSync(caminho, JSON.stringify(conteudo, null, 2), 'utf8');
-  return { caminho, preservou: null };
 }
 
 // ⚠️ O `md5` cobre TODAS as colunas pre-existentes, EXCLUINDO a nova. Um `md5` de

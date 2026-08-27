@@ -47,6 +47,7 @@
 
 const { Pool } = require('pg');
 const fs = require('fs');
+const { escreverReversao } = require('./lib/reversao');
 
 let XLSX;
 try {
@@ -556,8 +557,15 @@ function sqlFoto(listaColunas) {
         + 'gravacao. Conferir antes: SELECT COUNT(*) FROM prestacoes_contas WHERE '
         + 'sigef_registro_em IS NOT NULL; se for > 0, NAO derrubar a coluna.',
     };
-    fs.writeFileSync(ARQ_REVERSAO, JSON.stringify(reversao, null, 2), 'utf8');
-    linha(`   escrito: ${ARQ_REVERSAO}`);
+    // ⚠️ POR `escreverReversao`, E NAO POR `writeFileSync` DIRETO. Foi ESTE arquivo que perdeu
+    // a reversao em 27/08: o `--gravar` rodou uma segunda vez, chegou aqui com
+    // `valores_anteriores: []` — o script e idempotente, entao nao havia mais o que gravar —
+    // e sobrescreveu as 3.466 chaves. As conferencias passaram todas. Ver `lib/reversao.js`.
+    const escrito = escreverReversao(ARQ_REVERSAO, reversao);
+    linha(`   escrito: ${escrito.caminho}`);
+    if (escrito.preservou) {
+      linha(`   ⚠️  ${escrito.preservou} FOI PRESERVADO — ${escrito.motivo}.`);
+    }
     linha(`   ${reversao.valores_anteriores.length} chaves com o valor anterior de cada uma`);
 
     // ── 8. DESFECHO ──────────────────────────────────────────────────────────

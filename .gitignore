@@ -85,6 +85,10 @@ reverter_data_baixa_sigef_*.json
 # rotulo anterior de cada PC. Dado operacional; o script que a gera ESTA versionado.
 reverter_sigef_status_*.json
 
+# Lista de reversao da coluna sigef_declaracao (27/08/2026). O script que a gera ESTA
+# versionado; a reversao, nao.
+reverter_sigef_declaracao_*.json
+
 # ── Os relatorios de 25/08/2026 — dado operacional, nunca versionar ──────────
 # Planilhas e PDFs com ENTIDADE, CNPJ, VALOR e NOME DE ANALISTA, PC a PC.
 # Sao 5 arquivos e somam 5,4 MB. O que os EXPLICA pode ser versionado (um .md);

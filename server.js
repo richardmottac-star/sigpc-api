@@ -56,6 +56,7 @@ const dup = require('./lib/duplicata');
 const correcao = require('./lib/correcao');
 const pcNova = require('./lib/pc-nova');
 const solCor = require('./lib/solicitacao-correcao');
+const sigef = require('./lib/sigef');
 
 const app = express();
 app.use(cors());
@@ -1396,9 +1397,15 @@ app.get('/prestacoes_contas', async (req, res) => {
     }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-    const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas ${where}`, values);
+    const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas p ${where}`, values);
+    // ⚠️ `sigef_tag` É CALCULADA AQUI, E NÃO EXISTE NO BANCO. Ver o cabeçalho de
+    // `lib/sigef.js`: uma coluna gravada ficaria mentindo até alguém rodar um script depois de
+    // cada extração nova da CGE. E a expressão vem da lib, não copiada: esta rota alimenta as
+    // QUATRO telas que mostram a tag (fila, cartão, setorial, produtividade), e uma segunda
+    // cópia da regra seria a que ficaria velha.
     const { rows } = await pool.query(
-      `SELECT * FROM prestacoes_contas ${where} ORDER BY tr LIMIT $${i++} OFFSET $${i++}`,
+      `SELECT p.*, ${sigef.SQL_TAG} AS sigef_tag
+         FROM prestacoes_contas p ${where} ORDER BY p.tr LIMIT $${i++} OFFSET $${i++}`,
       [...values, parseInt(limit), parseInt(offset)]
     );
     // Link do SGPe junto com os dados — ver o cabeçalho de lib/sgpe-lote.js. Só cache, nunca
@@ -1467,8 +1474,15 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
               -- Agora a contagem sai de assumir.PC_LIVRE_SQL, a MESMA string que o
               -- SQL_LIVRES usa. Duas implementacoes da mesma pergunta e o que abriu o vao.
               COUNT(*) FILTER (WHERE ${assumir.PC_LIVRE_SQL}) AS pcs_livres,
+              -- ⚠️ AS TAGS DO SIGEF, AGREGADAS POR TR — a tela Estoque mostra a TR, não a PC.
+              -- É a MESMA expressão de lib/sigef.js que o GET /prestacoes_contas usa: se
+              -- esta rota classificasse do seu jeito, o Estoque e a Minha Planilha diriam
+              -- coisas diferentes sobre a mesma TR.
+              -- (sem crase nos nomes: crase dentro de template literal fecha a string — armadilha 10)
+              array_remove(array_agg(DISTINCT ${sigef.SQL_TAG}), NULL) AS sigef_tags,
+              COUNT(*) FILTER (WHERE ${sigef.SQL_TAG} IS NOT NULL) AS sigef_pendentes,
               array_agg(DISTINCT status) AS status
-       FROM prestacoes_contas
+       FROM prestacoes_contas p
        ${where}
        GROUP BY tr
        ORDER BY tr`,
@@ -1675,6 +1689,91 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
     res.json({ data: { total: parseInt(rows[0].count) }, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /prestacoes_contas/:codigo_pc/sigef_declaracao
+//   body { resposta: 'ja_estava'|'registrei_agora', data_registro: 'AAAA-MM-DD', usuario_id }
+//
+// A DECLARAÇÃO DO ANALISTA sobre o registro do parecer no SIGEF. Especificação do Richard,
+// 27/08/2026. A regra inteira mora em `lib/sigef.js`.
+//
+// ⚠️ A DECLARAÇÃO NÃO SE DESMARCA. Não há rota para apagar, e o SQL só sabe apendar
+// (`sigef_declaracao || $2`). Se o analista errar, ele declara de novo e as duas ficam — a
+// mais recente é a que vale, e `sigef_registro_em` acompanha. Uma rota de "desfazer" seria o
+// caminho por onde a afirmação some sem deixar rastro, justamente na coluna que a CGE lê.
+//
+// ⚠️ SÓ O ANALISTA RESPONSÁVEL PELA PC, OU O SUPERADMIN — e o perfil vem do BANCO, pelo
+// `usuario_id`, nunca do corpo. As quatro rotas de 14/08 fecharam esse buraco; esta nasce
+// fechada. E o perfil é o EFETIVO: no papel de analista o superadmin só declara nas PCs dele.
+//
+// ⚠️ E ELA NÃO BAIXA NADA. `baixada`, `enviado_ci`, `data_baixa`, `parecer_tipo` e
+// `sigef_status` não aparecem no SET — declarar que o parecer está no SIGEF não é o mesmo que
+// baixar aqui, e confundir as duas moveria produtividade sem parecer. `teste_sigef.js` falha
+// se um desses nomes voltar ao SQL.
+app.post('/prestacoes_contas/:codigo_pc/sigef_declaracao', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const erro = sigef.validarDeclaracao(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const { rows: us } = await cli.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
+      [parseInt(b.usuario_id) || 0]);
+    const quem = us[0];
+    if (!quem) return res.status(403).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    if (await barrouPreparacao(res, b.usuario_id)) return;
+
+    // ⚠️ O BEGIN vem ANTES da leitura, com `FOR UPDATE`: entre ler a PC e gravar a declaração,
+    // outra sessão poderia baixar a parcial e mudar a tag debaixo da conferência.
+    await cli.query('BEGIN');
+    const { rows: alvo } = await cli.query(
+      `SELECT codigo_pc, tipo, baixada, data_baixa, sigef_status, sigef_declaracao, analista_id
+         FROM prestacoes_contas WHERE codigo_pc = $1 FOR UPDATE`, [req.params.codigo_pc]);
+    if (!alvo.length) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+    }
+    const pc = alvo[0];
+
+    if (!sigef.podeDeclarar(quem, pc, papel.perfilEfetivo(quem))) {
+      await cli.query('ROLLBACK');
+      return res.status(403).json({
+        data: null, error: { message: 'Só o analista responsável por esta PC pode declarar.' } });
+    }
+    // ⚠️ A ÂMBAR NÃO ACEITA DECLARAÇÃO, e o 409 diz por quê em vez de recusar em silêncio: lá
+    // o SIGEF já registrou, e o que falta é o parecer NESTE sistema.
+    if (!sigef.aceitaDeclaracao(pc)) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({
+        data: null,
+        error: { message: sigef.classificar(pc) === sigef.TAGS.ABERTA_COM_BAIXA_SIGEF
+          ? 'Esta prestação já consta baixada no SIGEF. O que falta é registrar o parecer aqui.'
+          : 'Esta prestação não tem pendência de registro no SIGEF.' } });
+    }
+
+    const decl = sigef.montarDeclaracao({
+      resposta: b.resposta, data_registro: b.data_registro, quem });
+    const { rows: gravou } = await cli.query(
+      sigef.SQL_DECLARAR, [pc.codigo_pc, JSON.stringify([decl]), b.data_registro]);
+    await cli.query('COMMIT');
+
+    // A tag depois da escrita, pela MESMA regra da lista — se a prévia e a gravação
+    // calculassem de jeitos diferentes, a tela prometeria um estado e o banco faria outro.
+    const atualizada = { ...pc, ...gravou[0] };
+    res.json({
+      data: {
+        codigo_pc: gravou[0].codigo_pc,
+        sigef_registro_em: gravou[0].sigef_registro_em,
+        declaracoes: gravou[0].sigef_declaracao,
+        sigef_tag: sigef.classificar(atualizada),
+      }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) { /* pode não ter começado */ }
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally {
+    cli.release();
   }
 });
 

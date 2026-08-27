@@ -1,0 +1,34 @@
+{
+  "script": "migracao_estado_anterior_20260826.js",
+  "modo": "dry-run",
+  "quando": "2026-08-26T23:59:23.382Z",
+  "autorizado_por": "Richard Motta Coelho, 26/08/2026",
+  "alterou": {
+    "tabela": "parcela_historico",
+    "coluna": "estado_anterior",
+    "tipo": "jsonb",
+    "comando": "ALTER TABLE parcela_historico ADD COLUMN IF NOT EXISTS estado_anterior jsonb"
+  },
+  "foto_antes": {
+    "tem_coluna": 0,
+    "tipo_coluna": null,
+    "n_colunas": 11,
+    "n_linhas": 1756,
+    "n_puxadas": 6,
+    "md5_conteudo": "6b150945578a4ba2da1cf6384c937ea9"
+  },
+  "foto_depois": {
+    "tem_coluna": 1,
+    "tipo_coluna": "jsonb",
+    "n_colunas": 12,
+    "n_linhas": 1756,
+    "n_puxadas": 6,
+    "md5_conteudo": "6b150945578a4ba2da1cf6384c937ea9"
+  },
+  "conferencias": {
+    "passaram": 9,
+    "falharam": 0
+  },
+  "reverter_com": "ALTER TABLE parcela_historico DROP COLUMN IF EXISTS estado_anterior",
+  "aviso_reversao": "O DROP COLUMN apaga as fotos ja tiradas. Conferir antes: SELECT COUNT(*) FROM parcela_historico WHERE estado_anterior IS NOT NULL; se for > 0, reverter tira o caminho de volta daquelas puxadas."
+}

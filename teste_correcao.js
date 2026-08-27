@@ -387,5 +387,164 @@ T('e usa a MESMA funcao de podePuxarCi — duas copias divergiriam',
 T('a reabertura e oferecida como a saida certa para a encerrada',
   /POST \/ci\/reabrir/.test(fs.readFileSync('./lib/correcao.js', 'utf8')));
 
+// ═════════════════════════════════════════════════════════════════════════════
+S('9. A FOTO DO ESTADO ANTERIOR, E O DESFAZER DA PUXADA (26/08/2026)');
+
+const corr = fs.readFileSync('./lib/correcao.js', 'utf8');
+
+// ── a foto: o que ela cobre ──────────────────────────────────────────────────
+// As colunas que o SQL_PUXAR_CI escreve, lidas do proprio SQL. O teste nao repete a lista a
+// mao: uma coluna nova no UPDATE tem de aparecer na foto sozinha, ou aqui falha.
+const escritas = [...correcao.SQL_PUXAR_CI
+  .slice(correcao.SQL_PUXAR_CI.indexOf('SET'), correcao.SQL_PUXAR_CI.indexOf('WHERE'))
+  // O `SET` divide a linha com a primeira coluna (`SET enviado_ci = false`); sem tira-lo
+  // daqui a primeira coluna escapa da contagem — e era justamente a `enviado_ci`.
+  .replace(/\bSET\b/, '   ')
+  .matchAll(/^\s*(\w+)\s*=/gm)].map(m => m[1]);
+T('o SQL_PUXAR_CI escreve as 20 colunas conhecidas', escritas.length === 20, `achou ${escritas.length}`);
+const faltando = escritas.filter(c => c !== 'atualizado_em' && !correcao.COLUNAS_FOTO.includes(c));
+T('TODA coluna escrita pelo puxar_ci esta na foto', faltando.length === 0, faltando.join(', '));
+T('menos atualizado_em, que e o carimbo de "acabou de ser mexida"',
+  !correcao.COLUNAS_FOTO.includes('atualizado_em'));
+T('e data_baixa esta na foto mesmo sem ser escrita — ela e a PROVA',
+  correcao.COLUNAS_FOTO.includes('data_baixa') && !escritas.includes('data_baixa'));
+T('os quatro campos que se perdiam estao na foto',
+  ['dt_envio_ci', 'parecer_tipo', 'estornada', 'baixada'].every(c => correcao.COLUNAS_FOTO.includes(c)));
+
+// ⚠️ A armadilha 18: o JSON tem de ser montado pelo Postgres, nunca por JSON.stringify(Date).
+T('a foto e montada com to_jsonb no banco, nao em JavaScript', /to_jsonb\(x\)/.test(correcao.SQL_FOTO));
+T('e chaveada por codigo_pc — uma parcela leva ate 7 PCs que divergem',
+  /jsonb_object_agg\(x\.codigo_pc/.test(correcao.SQL_FOTO));
+
+// ── a restauracao: nenhuma data nova ─────────────────────────────────────────
+const setRestaura = correcao.SQL_RESTAURAR_FOTO.slice(
+  correcao.SQL_RESTAURAR_FOTO.indexOf('SET'), correcao.SQL_RESTAURAR_FOTO.indexOf('FROM jsonb_each'));
+T('a restauracao NAO carimba NOW() em data original',
+  (setRestaura.match(/NOW\(\)/g) || []).length === 1);
+T('e o unico NOW() e o do atualizado_em', /atualizado_em\s*=\s*NOW\(\)/.test(setRestaura));
+T('data_baixa NAO e escrita na restauracao — ela nunca foi apagada',
+  !/data_baixa\s*=/.test(setRestaura));
+['dt_envio_ci', 'data_estorno', 'dt_situacao'].forEach(c =>
+  T(`${c} sai da FOTO, com cast de timestamp`,
+    new RegExp(`${c}\\s*=\\s*\\(e\\.v->>'${c}'\\)::timestamp`).test(setRestaura)));
+T('ci_rodada leva COALESCE — e a unica NOT NULL da lista',
+  /ci_rodada\s*=\s*COALESCE\(\(e\.v->>'ci_rodada'\)::integer, 0\)/.test(setRestaura));
+T('toda coluna da foto (menos data_baixa) e restaurada',
+  correcao.COLUNAS_FOTO.filter(c => c !== 'data_baixa')
+    .every(c => new RegExp(`\\b${c}\\s*=`).test(setRestaura)));
+
+// ── quem desfaz ──────────────────────────────────────────────────────────────
+const HIST = (over = {}) => ({ id: 9, evento: 'puxar_ci', estado_anterior: { '2020PC000001': {} }, ...over });
+
+T('so o superadmin desfaz', correcao.podeDesfazerPuxarCi('superadmin', HIST()).pode === true);
+T('o analista NAO desfaz', correcao.podeDesfazerPuxarCi('analista', HIST()).pode === false);
+T('o coordenador tambem NAO', correcao.podeDesfazerPuxarCi('coordenador', HIST()).pode === false);
+// ⚠️ Papel analista: o superadmin e analista aqui tambem — e o perfilEfetivo que chega.
+T('superadmin no papel analista NAO desfaz',
+  correcao.podeDesfazerPuxarCi('analista', HIST()).pode === false);
+T('evento que nao e puxar_ci: recusa',
+  correcao.podeDesfazerPuxarCi('superadmin', HIST({ evento: 'estorno' })).pode === false);
+T('evento inexistente: recusa', correcao.podeDesfazerPuxarCi('superadmin', null).pode === false);
+
+// ⚠️ O CORACAO DA DECISAO DO RICHARD, 26/08: SEM FOTO NAO DESFAZ, E DIZ POR QUE.
+T('puxada SEM foto (null) NAO pode ser desfeita',
+  correcao.podeDesfazerPuxarCi('superadmin', HIST({ estado_anterior: null })).pode === false);
+T('puxada com foto VAZIA tambem nao',
+  correcao.podeDesfazerPuxarCi('superadmin', HIST({ estado_anterior: {} })).pode === false);
+T('e o motivo diz que a foto nao existe, para a tela mostrar',
+  /NÃO TEM FOTO/.test(correcao.podeDesfazerPuxarCi('superadmin', HIST({ estado_anterior: null })).motivo));
+T('e diz que desfazer seria inventar valor',
+  /inventar valor/.test(correcao.podeDesfazerPuxarCi('superadmin', HIST({ estado_anterior: null })).motivo));
+
+// ── a PC ainda esta como a puxada deixou? ────────────────────────────────────
+const DEIXADA = (over = {}) => ({
+  codigo_pc: '2020PC000001', enviado_ci: false, dt_envio_ci: null, enviado_ci_por: null,
+  ci_situacao: null, ci_rodada: 0, baixada: false, parecer_tipo: null, estornada: true,
+  data_baixa: '2026-08-21T18:40:42.186', ...over,
+});
+const FOTO1 = { data_baixa: '2026-08-21T18:40:42.186' };
+
+T('intacta: passa', correcao.conferirIntacta(DEIXADA(), FOTO1) === null);
+T('foi baixada de novo: RECUSA', /baixada de novo/.test(correcao.conferirIntacta(DEIXADA({ baixada: true }), FOTO1)));
+T('tem parecer de novo: RECUSA', /parecer de novo/.test(correcao.conferirIntacta(DEIXADA({ parecer_tipo: 'X' }), FOTO1)));
+T('foi reencaminhada ao C.I.: RECUSA', /reencaminhada/.test(correcao.conferirIntacta(DEIXADA({ enviado_ci: true }), FOTO1)));
+T('voltou ao ciclo do C.I.: RECUSA', /ciclo do C\.I\./.test(correcao.conferirIntacta(DEIXADA({ ci_situacao: 'na_fila' }), FOTO1)));
+T('mudou de rodada: RECUSA', /rodada 1/.test(correcao.conferirIntacta(DEIXADA({ ci_rodada: 1 }), FOTO1)));
+T('deixou de estar estornada: RECUSA', /estornada/.test(correcao.conferirIntacta(DEIXADA({ estornada: false }), FOTO1)));
+T('a PC sumiu: RECUSA', correcao.conferirIntacta(null, FOTO1) === 'a PC não existe mais');
+// ⚠️ O CASO REAL DA 2023PC002107 — baixa de 17/08 refeita a mao virou baixa de 20/08.
+T('a data da baixa MUDOU (a baixa foi refeita a mao): RECUSA',
+  /a data da baixa mudou/.test(correcao.conferirIntacta(DEIXADA({ data_baixa: '2026-08-20T23:45:25.674' }), FOTO1)));
+
+// ── a conferencia DEPOIS de gravar ───────────────────────────────────────────
+const F = { '2020PC000001': { baixada: true, data_baixa: '2026-08-21T18:40:42.186', status: 'baixada',
+  situacao_atual: null, parecer_tipo: 'Parecer Regular com Ressalvas', baixado_por: 33,
+  enviado_ci: true, dt_envio_ci: '2026-08-21T18:40:54.458', enviado_ci_por: 33, parecer_ci: null,
+  ci_situacao: 'na_fila', ci_rodada: 1, ci_encerrado_em: null, ci_encerrado_por: null,
+  estornada: false, data_estorno: null, motivo_estorno: null, estornado_por: null,
+  dt_situacao: null, obs_situacao: null } };
+// ⚠️ OS DOIS LADOS SAO FOTOS — objetos chaveados por codigo_pc, vindos do mesmo `to_jsonb`.
+// Comparar contra uma LINHA lida em JavaScript era o defeito que a prova de banco achou em
+// 26/08: o `Date` do JS trunca o microssegundo do `timestamp` e a conferencia acusava
+// divergencia numa restauracao correta, derrubando tudo no ROLLBACK.
+const outra = { '2020PC000001': { ...F['2020PC000001'], parecer_tipo: 'outro' } };
+T('foto == foto depois: bate', correcao.conferirRestauracao(F, F).length === 0);
+T('uma coluna fora do lugar: acusa', correcao.conferirRestauracao(F, outra).length === 1);
+T('e diz qual coluna e o que esperava',
+  /parecer_tipo: esperado/.test(correcao.conferirRestauracao(F, outra)[0]));
+T('PC que sumiu: acusa', /sumiu/.test(correcao.conferirRestauracao(F, {})[0]));
+// ⚠️ O microssegundo TEM de sobreviver a comparacao — e o digito que o Date comia.
+const micro = { '2020PC000001': { ...F['2020PC000001'], dt_envio_ci: '2026-08-19T17:54:40.866734' } };
+T('microssegundo identico: bate', correcao.conferirRestauracao(micro, micro).length === 0);
+T('microssegundo truncado no milissegundo: ACUSA',
+  correcao.conferirRestauracao(micro,
+    { '2020PC000001': { ...micro['2020PC000001'], dt_envio_ci: '2026-08-19T17:54:40.866' } }).length === 1);
+
+// ⚠️ ARMADILHA 18 — o Date do pg e comparado pelos componentes LOCAIS, nunca por toISOString.
+const dtLocal = new Date(2026, 7, 21, 18, 40, 54, 458);   // 21/08/2026 18:40:54.458 local
+T('textoData le o Date pelo relogio de parede, como o to_jsonb do Postgres',
+  correcao.textoData(dtLocal) === '2026-08-21T18:40:54.458');
+T('e NAO usa toISOString, que somaria o fuso',
+  correcao.textoData(dtLocal) !== dtLocal.toISOString().replace('Z', ''));
+T('milissegundo zero sai sem .000, igual ao to_jsonb',
+  correcao.textoData(new Date(2026, 5, 30, 0, 0, 0, 0)) === '2026-06-30T00:00:00');
+T('texto que ja veio texto passa direto', correcao.textoData('2026-06-30T00:00:00') === '2026-06-30T00:00:00');
+T('null continua null', correcao.textoData(null) === null);
+T('a funcao nao usa toISOString em lugar nenhum',
+  !/toISOString/.test(corr.slice(corr.indexOf('function textoData'), corr.indexOf('function conferirIntacta'))));
+
+// ── a rota, no server ────────────────────────────────────────────────────────
+T('a rota de desfazer existe', /app\.post\('\/parcela\/desfazer_puxar_ci'/.test(srv));
+T('e exige motivo pela MESMA validacao das outras',
+  /desfazer_puxar_ci[\s\S]{0,700}correcao\.validarMotivo/.test(srv));
+T('o puxar_ci grava a foto no historico', /estado_anterior: r\.foto/.test(srv));
+T('a foto e tirada ANTES do UPDATE que apaga',
+  srv.indexOf('correcao.SQL_FOTO, [alvo]') < srv.indexOf('correcao.SQL_PUXAR_CI, [alvo'));
+T('a aprovacao do coordenador tambem grava foto', /estado_anterior: r\.foto \?\? null/.test(srv));
+T('registrarHistorico passa a gravar estado_anterior', /observacao, executado_por, estado_anterior/.test(srv));
+T('o desfazer confere DEPOIS de gravar, contra a foto',
+  srv.indexOf('correcao.SQL_RESTAURAR_FOTO') < srv.indexOf('correcao.conferirRestauracao(foto,'));
+// ⚠️ A conferencia NAO pode ler a linha em JavaScript — o Date trunca o microssegundo do
+// timestamp e acusa divergencia numa restauracao correta. Os dois lados vem do SQL_FOTO.
+const rotaDesfazer = srv.slice(srv.indexOf("app.post('/parcela/desfazer_puxar_ci'"),
+                               srv.indexOf("app.post('/prestacoes_contas/nova'"));
+T('a rota trava as PCs, mas le os VALORES pelo SQL_FOTO',
+  /SQL_TRAVAR_PARA_DESFAZER/.test(rotaDesfazer) && (rotaDesfazer.match(/SQL_FOTO/g) || []).length === 2);
+T('nenhuma conferencia da rota passa por textoData',
+  !/conferirIntacta\([^)]*textoData|conferirRestauracao\([^)]*textoData/.test(rotaDesfazer));
+T('e a lib avisa que textoData nao serve para comparar',
+  /NÃO USE ISTO EM CONFERÊNCIA/.test(corr));
+T('e faz ROLLBACK quando a conferencia nao bate',
+  /conferirRestauracao[\s\S]{0,400}ROLLBACK/.test(srv));
+T('o desfazer e idempotente — recusa a puxada ja desfeita',
+  /SQL_JA_DESFEITA[\s\S]{0,400}já foi desfeita/.test(srv));
+T('a coluna nasce pelo boot, idempotente',
+  /ADD COLUMN IF NOT EXISTS estado_anterior jsonb/.test(srv));
+T('e o boot chama garantirFotoHistorico', /\.then\(garantirFotoHistorico\)/.test(srv));
+T('GET /parcela/acoes diz a tela se da para desfazer, e por que nao',
+  /desfazer_puxar_ci: desfazer/.test(srv));
+T('o desfazimento vira evento proprio no acompanhamento',
+  /desfazer_puxar_ci:\s*\{ rotulo:/.test(fs.readFileSync('./lib/acompanhamento.js', 'utf8')));
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exitCode = falhou ? 1 : 0;

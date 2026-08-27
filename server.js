@@ -3965,15 +3965,21 @@ const SITUACAO_PARA_STATUS = {
 // ⚠️ `analista_id` é o DONO do trabalho; `executado_por` é QUEM CLICOU, e fica NULO quando
 // são a mesma pessoa. Nulo quer dizer "foi ele mesmo" — preencher sempre tiraria o sinal, e o
 // que importa achar é a linha em que os dois DIFEREM. Ver `lib/autoria.js`.
+//
+// ⚠️ `estado_anterior` (jsonb, 26/08/2026) É A FOTO DO QUE A AÇÃO VAI APAGAR, por `codigo_pc`.
+// Fica NULO em quase todo evento, de propósito: só quem DESTRÓI dado precisa de foto. Hoje é
+// o `puxar_ci`, que zerava 19 colunas e guardava uma string. Ver `lib/correcao.js`.
 function registrarHistorico(cli, h) {
   return cli.query(
     `INSERT INTO parcela_historico
        (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id,
-        observacao, executado_por)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        observacao, executado_por, estado_anterior)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING id`,
     [h.tr, h.parcial_num, h.setorial_id, h.evento,
      h.valor_anterior ?? null, h.valor_novo ?? null, h.analista_id ?? null, h.observacao ?? null,
-     h.executado_por ?? null]
+     h.executado_por ?? null,
+     h.estado_anterior == null ? null : JSON.stringify(h.estado_anterior)]
   );
 }
 
@@ -4692,10 +4698,25 @@ async function aplicarCorrecaoSituacao(cli, { pc, alvo }, destino, motivo, quemN
   return { linhas: rows, desfezBaixa: false };
 }
 
-/** Executa a volta do C.I. Mesma função para a rota direta (B) e para a aprovação (D). */
+/**
+ * Executa a volta do C.I. Mesma função para a rota direta (B) e para a aprovação (D).
+ *
+ * ⚠️ A FOTO É TIRADA ANTES DO `UPDATE`, E DENTRO DA MESMA TRANSAÇÃO — 26/08/2026. Depois do
+ * `UPDATE` não há mais o que fotografar: 19 colunas já viraram NULL/false. As PCs já estão
+ * travadas (`SQL_CARREGAR_IRMAS` é `FOR UPDATE`), então nada muda entre a foto e a escrita.
+ *
+ * ⚠️ E A FOTO É DAS PCs DO `alvo`, NÃO DA PARCELA INTEIRA. É o mesmo conjunto que o `UPDATE`
+ * alcança (`alvoDaAcao` exclui a final); fotografar a mais gravaria estado de PC que ninguém
+ * mexeu, e o desfazer a devolveria a um passado que ela nunca deixou.
+ *
+ * ⚠️ A `foto` sai `null` quando o `alvo` está vazio — `jsonb_object_agg` de zero linhas é
+ * NULL, e não `{}`. Quem lê precisa aguentar isso; `podeDesfazerPuxarCi` recusa os dois.
+ */
 async function aplicarPuxarCi(cli, { alvo }, motivo, quemNome) {
+  const { rows: f } = await cli.query(correcao.SQL_FOTO, [alvo]);
+  const foto = f[0]?.foto ?? null;
   const { rows } = await cli.query(correcao.SQL_PUXAR_CI, [alvo, motivo, quemNome ?? null]);
-  return { linhas: rows, desfezBaixa: true };
+  return { linhas: rows, desfezBaixa: true, foto };
 }
 
 // GET /parcela/acoes?codigo_pc=X&usuario_id=N — o que ESTE usuário pode fazer nesta parcial.
@@ -4720,6 +4741,43 @@ app.get('/parcela/acoes', async (req, res) => {
     const corr = correcao.podeCorrigirBaixa(pe, quem.id, pc);
     const puxar = correcao.podePuxarCi(pe, quem.id, pc);
 
+    // ── DESFAZER A PUXADA (26/08/2026) ────────────────────────────────────────
+    //
+    // ⚠️ É O SERVIDOR QUE DIZ SE DÁ, E POR QUE NÃO DÁ. A tela desenha o botão e, quando ele
+    // não pode ser aceso, mostra o `motivo` no `title` — armadilha 15: botão que aceita
+    // clique e não responde é pior que botão cinza.
+    //
+    // ⚠️ A PUXADA É POR PARCELA E A FOTO É POR PC, então a busca cruza os dois: a última
+    // puxada DESTA parcela cuja foto contém ESTA `codigo_pc`. Sem o segundo filtro, uma PC
+    // cadastrada depois da puxada ofereceria um desfazer que não a alcança.
+    const { rows: pux } = await cli.query(
+      `SELECT id, criado_em, estado_anterior IS NOT NULL AS tem_foto
+         FROM parcela_historico
+        WHERE evento = 'puxar_ci' AND setorial_id = $1 AND tr = $2 AND parcial_num = $3
+          -- Operador seta com IS NOT NULL, e nao o operador ? do jsonb: o ? e valido aqui,
+          -- mas basta um pooler ou um driver no meio do caminho trata-lo como placeholder
+          -- para a consulta quebrar num ambiente e nao no outro.
+          -- (Armadilha 10: sem crase nenhuma dentro de template literal.)
+          AND (estado_anterior IS NULL OR estado_anterior -> $4 IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM parcela_historico d
+                           WHERE d.evento = 'desfazer_puxar_ci'
+                             AND (d.estado_anterior->>'desfaz_historico_id')::int = parcela_historico.id)
+        ORDER BY criado_em DESC
+        LIMIT 1`,
+      [pc.setorial_id, pc.tr, pc.parcial_num, pc.codigo_pc]);
+
+    const desfazer = !pux.length
+      ? { pode: false, historico_id: null, motivo: 'Não há puxada do C.I. pendente de desfazimento nesta parcial.' }
+      : { ...correcao.podeDesfazerPuxarCi(pe, {
+            evento: 'puxar_ci',
+            // ⚠️ UM MARCADOR, E NÃO A FOTO. Aqui só interessa se ela EXISTE; trazer o jsonb
+            // de até 7 PCs numa rota que a tela chama a cada cartão seria pagar o acervo por
+            // uma pergunta de sim ou não. A foto de verdade é lida na rota que grava, com a
+            // linha travada — que é onde ela precisa estar certa.
+            estado_anterior: pux[0].tem_foto ? { ha_foto: true } : null,
+          }),
+          historico_id: pux[0].id, puxada_em: pux[0].criado_em };
+
     // Já existe pedido pendente? A tela precisa saber para não oferecer "solicitar" de novo.
     const { rows: pend } = await cli.query(
       `SELECT acao FROM solicitacao_correcao WHERE codigo_pc = $1 AND status = 'pendente'`,
@@ -4732,6 +4790,9 @@ app.get('/parcela/acoes', async (req, res) => {
         enviado_ci: pc.enviado_ci, destinos: correcao.DESTINOS,
         corrigir_situacao: { ...corr, pendente: pendentes.includes('corrigir_situacao') },
         puxar_ci: { ...puxar, pendente: pendentes.includes('puxar_ci') },
+        // Desfazer a puxada — só superadmin, e só quando há foto. PC sem foto vem com
+        // `pode: false` e o motivo por extenso, que é o que a tela mostra.
+        desfazer_puxar_ci: desfazer,
         // Cadastrar PC é por TR, não por PC — a tela usa isto para acender o item do menu.
         cadastrar_pc: pe === 'superadmin' || String(pc.analista_id ?? '') === String(quem.id),
       }, error: null,
@@ -4826,10 +4887,134 @@ app.post('/parcela/puxar_ci', async (req, res) => {
         `${b.motivo.trim()} · DESFEZ A BAIXA — sai da produtividade · ${r.linhas.length} PC${r.linhas.length > 1 ? 's' : ''}`,
         b._autoria, b._autoria?.executor_nome),
       executado_por: b._autoria?.executado_por ?? null,
+      // ⚠️ A FOTO. Sem ela esta ação continua sendo o único evento do sistema que destrói
+      // dado sem caminho de volta. Ver `lib/correcao.js`.
+      estado_anterior: r.foto,
     });
 
     await cli.query('COMMIT');
-    res.json({ data: { codigos_pc: r.linhas.map(x => x.codigo_pc) }, count: r.linhas.length, error: null });
+    res.json({ data: { codigos_pc: r.linhas.map(x => x.codigo_pc), com_foto: r.foto != null },
+               count: r.linhas.length, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// ══════════════════════════════════════
+//  DESFAZER A PUXADA DO C.I. — só superadmin, motivo obrigatório.  Richard, 26/08/2026.
+// ══════════════════════════════════════
+//
+// POST /parcela/desfazer_puxar_ci — body { historico_id, motivo, analista_id }
+//
+// ⚠️ ELE RESTAURA VALOR GRAVADO, E SÓ ISSO. Nenhum campo é deduzido, calculado ou carimbado
+// com `NOW()`: `dt_envio_ci`, `parecer_tipo`, `baixada`, `data_estorno` e `dt_situacao` saem
+// da foto que o `puxar_ci` tirou. Se a foto não existir, a rota RECUSA — é a decisão do
+// Richard de 26/08: inventar valor é pior que o buraco, ainda mais com a auditoria da CGE.
+//
+// ⚠️ E ELE NÃO GERA `data_baixa` NOVA. Esse era o dano: refazer a baixa à mão movia a
+// produtividade de mês (a baixa de 17/08 da 2023PC002107 virou 20/08). Aqui a `data_baixa`
+// nem é escrita — o `puxar_ci` nunca a apagou, ela está intacta o tempo todo.
+app.post('/parcela/desfazer_puxar_ci', async (req, res) => {
+  const b = req.body || {};
+  if (await barrouPreparacao(res, b.analista_id)) return;
+  const hid = parseInt(b.historico_id);
+  if (!hid) return res.status(400).json({ data: null, error: { message: 'historico_id é obrigatório' } });
+  const eM = correcao.validarMotivo(b.motivo);
+  if (eM) return res.status(400).json({ data: null, error: { message: eM } });
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, b.executado_por ?? b.analista_id);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+    const pe = papel.perfilEfetivo(quem);
+
+    const { rows: hs } = await cli.query(correcao.SQL_BUSCAR_PUXADA, [hid]);
+    const linha = hs[0] || null;
+
+    const ok = correcao.podeDesfazerPuxarCi(pe, linha);
+    if (!ok.pode) { await cli.query('ROLLBACK');
+      return res.status(linha ? 403 : 404).json({ data: null, error: { message: ok.motivo } }); }
+
+    // ⚠️ IDEMPOTÊNCIA NO NÍVEL DA AÇÃO, e não do dado. Desfazer duas vezes a mesma puxada
+    // gravaria duas linhas de desfazimento e uma segunda restauração por cima de um estado
+    // que já é o restaurado — a conferência `conferirIntacta` até barraria, mas com a
+    // mensagem errada. Aqui a resposta diz o que de fato houve.
+    const { rows: ja } = await cli.query(correcao.SQL_JA_DESFEITA, [hid]);
+    if (ja.length) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: `Esta puxada já foi desfeita (histórico #${ja[0].id}).` } }); }
+
+    const foto = linha.estado_anterior;
+    const codigos = Object.keys(foto);
+
+    // Trava as PCs ANTES de conferir — conferir sem lock deixa a janela em que a analista
+    // baixa a parcial entre a leitura e a escrita. É a mesma escolha do `corrigir_situacao`.
+    await cli.query(correcao.SQL_TRAVAR_PARA_DESFAZER, [codigos]);
+
+    // A foto do estado de AGORA. Ela serve a DUAS coisas: é contra ela que a guarda compara,
+    // e é ela que fica no histórico para que o próprio desfazimento tenha volta.
+    //
+    // ⚠️ OS DOIS LADOS DA COMPARAÇÃO SAEM DO MESMO `to_jsonb`, e nunca de uma linha lida em
+    // JavaScript. Medido em 26/08: o `timestamp` do Postgres tem microssegundos e o `Date` do
+    // JS só tem milissegundos — ler a coluna aqui truncaria `.175269` para `.175` e a
+    // conferência acusaria divergência numa restauração correta, derrubando tudo no ROLLBACK.
+    const { rows: fA } = await cli.query(correcao.SQL_FOTO, [codigos]);
+    const agora = fA[0]?.foto ?? {};
+
+    // ⚠️ A PARCIAL AINDA ESTÁ COMO A PUXADA A DEIXOU? Se não, o desfazer apagaria trabalho
+    // feito DEPOIS da puxada — inclusive uma baixa nova. Recusa, e diz o que mudou.
+    const mudou = [];
+    for (const codigo of codigos) {
+      const d = correcao.conferirIntacta(agora[codigo], foto[codigo]);
+      if (d) mudou.push(`${codigo}: ${d}`);
+    }
+    if (mudou.length) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: 'A parcial mudou depois da puxada e o desfazer apagaria trabalho novo. '
+               + mudou.join(' | '), mudancas: mudou } }); }
+
+    const { rows: restauradas } = await cli.query(correcao.SQL_RESTAURAR_FOTO, [JSON.stringify(foto)]);
+
+    // ⚠️ CONFERE DEPOIS DE GRAVAR, DENTRO DA MESMA TRANSAÇÃO, CONTRA A FOTO — e faz ROLLBACK
+    // se não bater. Conferir só antes prova o que se esperava, não o que aconteceu.
+    const { rows: fD } = await cli.query(correcao.SQL_FOTO, [codigos]);
+    const fora = correcao.conferirRestauracao(foto, fD[0]?.foto ?? {});
+    if (restauradas.length !== codigos.length) fora.push(
+      `linhas restauradas: esperado ${codigos.length}, obtido ${restauradas.length}`);
+    if (fora.length) { await cli.query('ROLLBACK');
+      return res.status(500).json({ data: null, error: {
+        message: 'A restauração não bateu com a foto e foi desfeita (ROLLBACK). ' + fora.join(' | '),
+        divergencias: fora } }); }
+
+    const ciVolta = foto[codigos[0]]?.ci_situacao ?? null;
+    await registrarHistorico(cli, {
+      tr: linha.tr, parcial_num: linha.parcial_num, setorial_id: linha.setorial_id,
+      evento: 'desfazer_puxar_ci',
+      valor_anterior: 'fora do C.I.', valor_novo: ciVolta || 'enviado_ci = true',
+      // ⚠️ O DONO continua sendo o dono do trabalho, que é o `analista_id` da puxada. Quem
+      // clicou é o técnico, e vai em `executado_por` — nulo só se forem a mesma pessoa.
+      analista_id: linha.analista_id ?? null,
+      observacao: `${b.motivo.trim()} · DESFEZ A PUXADA #${hid} de `
+        + `${correcao.textoData(linha.criado_em)} · restaurou ${restauradas.length} PC`
+        + `${restauradas.length > 1 ? 's' : ''} ao estado gravado · por ${quem.nome}`,
+      executado_por: String(linha.analista_id ?? '') === String(quem.id) ? null : quem.id,
+      // O que existia imediatamente ANTES do desfazimento, mais o ponteiro que torna a ação
+      // idempotente. É por `desfaz_historico_id` que `SQL_JA_DESFEITA` acha esta linha.
+      estado_anterior: { desfaz_historico_id: hid, pcs: agora },
+    });
+
+    await cli.query('COMMIT');
+    res.json({
+      data: {
+        historico_id: hid,
+        codigos_pc: restauradas.map(x => x.codigo_pc),
+        tr: linha.tr, parcial_num: linha.parcial_num,
+        ci_situacao: ciVolta,
+      }, count: restauradas.length, error: null,
+    });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
@@ -5072,6 +5257,11 @@ app.patch('/solicitacao_correcao/:id', async (req, res) => {
         analista_id: p.analista_id,
         observacao: motivoExec + ` · pedido #${p.id} · ${r.desfezBaixa ? 'DESFEZ A BAIXA' : 'sem baixa a desfazer'}`,
         executado_por: autodec ? null : quem.id,
+        // ⚠️ A FOTO TAMBÉM AQUI. A puxada pelo caminho do coordenador destrói exatamente o
+        // mesmo dado que a puxada direta; guardar a foto só num dos dois faria o desfazer
+        // existir ou não conforme quem clicou. `aplicarCorrecaoSituacao` não devolve foto e
+        // cai em `null` — correção de situação não é o caso deste ciclo.
+        estado_anterior: r.foto ?? null,
       });
     } else {
       await registrarHistorico(cli, {
@@ -5548,6 +5738,27 @@ async function garantirCi() {
 }
 
 // ══════════════════════════════════════
+//  MIGRAÇÃO — a foto do estado anterior no histórico (26/08/2026)
+// ══════════════════════════════════════
+// Rodado com autorização do Richard pelo `migracao_estado_anterior_20260826.js`; fica aqui
+// pelo mesmo motivo do `garantirCi` — para o ambiente nascer pronto e para o boot reparar o
+// que faltar. Idempotente pelo `IF NOT EXISTS` (armadilha 2: `CREATE TABLE IF NOT EXISTS`
+// não alteraria a tabela que já existe).
+//
+// ⚠️ NASCE NULA EM TODAS AS LINHAS, e é assim que tem de ser. Preencher retroativamente as
+// 1.653 linhas antigas exigiria deduzir valor que ninguém gravou — as seis puxadas de 20 a
+// 24/08 ficam sem foto de propósito, e a rota do desfazer as recusa dizendo por quê.
+async function garantirFotoHistorico() {
+  try {
+    await pool.query(
+      `ALTER TABLE parcela_historico ADD COLUMN IF NOT EXISTS estado_anterior jsonb`);
+    console.log('parcela_historico.estado_anterior verificado.');
+  } catch (e) {
+    console.error('Erro ao garantir parcela_historico.estado_anterior:', e.message);
+  }
+}
+
+// ══════════════════════════════════════
 //  MIGRAÇÃO — configuração do sistema (modo preparação)
 // ══════════════════════════════════════
 // Tabela NOVA, então `CREATE TABLE IF NOT EXISTS` basta (a armadilha 2 do CLAUDE.md só vale
@@ -5703,6 +5914,7 @@ const PORT = process.env.PORT || 3000;
 garantirColunasUsuarios()
   .then(garantirTabelaConfigSistema)
   .then(garantirCi)
+  .then(garantirFotoHistorico)
   .then(garantirTabelaSgpe)
   .then(garantirTabelaPreferenciaTr)
   .then(verificarColunaInicioAnalise)

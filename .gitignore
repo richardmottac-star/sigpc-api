@@ -134,3 +134,6 @@ DIAGNOSTICO_CI_16_PROCESSOS_*.md
 # `git add -A`, conferir `git status` — vale aqui a mesma advertencia das planilhas acima.
 /CRUZAMENTO_*.csv
 /PCS_*.csv
+
+# Lista de reversao da dispensa (28/08/2026) — os valores anteriores dos sete cadastros.
+reverter_dispensa_*.json

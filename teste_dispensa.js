@@ -124,7 +124,12 @@ secao('7. A TELA');
   conf(/Substituto<\/span>/.test(html), 'e a tag verde "Substituto"');
   conf(/Números congelados em/.test(html), 'o card do dispensado diz que os numeros congelaram');
   conf(/Designado em/.test(html), 'e o do substituto diz desde quando');
-  conf(/Produtividade apurada até a data da dispensa/.test(html), 'o relatorio traz a observacao');
+    // ⚠️ O TEXTO MUDOU EM 28/08 e a mudanca e o ponto: ele dizia 'Produtividade apurada ate a
+  // data da dispensa', e a conta NAO recorta por data. O texto prometia um recorte que o
+  // codigo nao faz. Agora diz o que a conta faz — a meta encerra, os numeros ficam.
+  conf(/Meta encerrada em/.test(html), 'o relatorio diz que a META encerrou');
+  conf(!/Produtividade apurada até a data da dispensa'/.test(html),
+       'e nao promete mais um recorte por data que nao existe');
   // ⚠️ O anel de meta NAO aparece no card do dispensado: um anel em 0% diria "nao bateu a
   // meta", quando o certo e nao haver meta a bater.
   conf(/\$\{disp \? '' : `/.test(html), 'e o anel de meta some no card do dispensado');

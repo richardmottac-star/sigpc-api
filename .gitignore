@@ -137,3 +137,6 @@ DIAGNOSTICO_CI_16_PROCESSOS_*.md
 
 # Lista de reversao da dispensa (28/08/2026) — os valores anteriores dos sete cadastros.
 reverter_dispensa_*.json
+
+# Lista de reversao da ligacao dos substitutos (28/08/2026).
+reverter_ligar_substitutos_*.json

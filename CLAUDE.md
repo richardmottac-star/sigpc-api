@@ -4,8 +4,52 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 (Fundação Catarinense de Educação Especial, Governo de Santa Catarina).
 
 **Responsável:** Richard Motta Coelho — superadmin e analista do Grupo 3.
-**Última sessão:** 27/08/2026 — ver `SESSAO.md`. **TRÊS escritas em produção em 27/08 — as
-quatro colunas do SIGEF.**
+**Última sessão:** 28/08/2026 — ver `SESSAO.md`. **TRÊS escritas em 27/08 (as quatro colunas
+do SIGEF) e UMA em 28/08 (a dispensa).**
+
+> ## ▶ 28/08/2026 — A DISPENSA, E A PRODUTIVIDADE CONCILIADA COM O SIGEF
+>
+> ### A produtividade mudou de número
+>
+> | | |
+> |---|---|
+> | base (`baixada` OU `enviado_ci`) | **4.078** |
+> | **conciliada** — o número que vale | **3.552** |
+> | descontadas enquanto não declaradas | **526** |
+>
+> ⚠️ **A conta mora em `lib/sigef.js` (`SQL_CONTA_PRODUTIVIDADE`) e a tela SOMA `sigef_conta`.**
+> Isso corrigiu um defeito antigo: a tela contava `status = 'baixada'` para o anel de meta
+> enquanto a regra escrita dizia `baixada OU enviado_ci` — eram dois números, e nada os
+> comparava. **Não reimplementar a conta em lugar nenhum.**
+>
+> ### A dispensa — 7 analistas com `data_saida`
+>
+> ids **38 · 29 · 48 · 43 · 14 · 50 · 40**, com `portaria` preenchida. Tabela nova
+> **`substituicao`** (9 linhas, `GET /substituicao`, só leitura).
+>
+> ⚠️ **`ativo` CONTINUA `true` nos sete** — decisão do Richard: o dispensado precisa terminar o
+> que ficou em curso. **Nunca deduzir dispensa de `ativo`** — são colunas diferentes e podem
+> discordar. Há teste que recusa a dedução.
+>
+> ⚠️ **"CONGELA" É PARAR DE CRESCER E PERDER A META, não recalcular por data.** A alternativa
+> foi medida e descartada: cortar em `data_saida` zeraria Elquier, Samoel e Higor, porque as
+> baixas deles têm `data_baixa = 30/06/2026` — a data do RECARREGAMENTO. E a cronologia real
+> (`data_baixa_sigef`) mostrou que o corte erraria dos dois lados: as 6 do Higor são
+> anteriores à dispensa, as 10 do Samoel são posteriores.
+>
+> ⚠️ **`metas_analistas` NÃO é alterada — só ignorada.** A meta existiu no período em que a
+> pessoa estava designada; `vigente = false` reescreveria o passado.
+>
+> ⚠️ **As metas que chegam à tela são 45, não 46** (soma 5.041); tirando os 7 dispensados,
+> **38 somando 4.398**. A 46ª é a meta id 30 da **Caroline**, com `analista_id` NULO —
+> `fetchMetasVigentes` a descarta, e ela nunca entrou em soma nenhuma.
+>
+> ⚠️ **O Willian (id 50) é dispensado E substituto.** As duas tags aparecem juntas, e o índice
+> de substituto é uma **lista**. A chave de `substituicao` é `(portaria, dispensado_nome)` —
+> **não o id**, porque quatro linhas têm id nulo e NULL não colide com NULL.
+>
+> ⚠️ **Quatro pessoas das portarias não têm cadastro:** Luis Filipe e Caroline (dispensados),
+> **Fabiana Vieira e Carla Goedert Xavier** (as substitutas da portaria mais recente).
 
 > ## ▶ 27/08/2026 — A CONFERÊNCIA COM O SIGEF. Três escritas, nenhuma tocou em baixa.
 >
@@ -365,7 +409,8 @@ a lib é testar a regra.
 | `sgpe-link.js` | o mapa de **183 órgãos** e a URL do SGPe |
 | `sgpe-lote.js` / `sgpe-dwr.js` | o cache de links e a consulta ao SGPe |
 | `datas.js` | `HOJE_BR` — prazo é data civil brasileira, nunca `CURRENT_DATE` |
-| `sigef.js` | as três situações do cruzamento com o SIGEF, e a declaração do analista |
+| `sigef.js` | as três situações do cruzamento com o SIGEF, a declaração, e a PRODUTIVIDADE |
+| `dispensa.js` | quem saiu, quem substituiu, e o que isso faz com a meta |
 | `reversao.js` | escrever o JSON de reversão **sem destruir o de uma gravação anterior** |
 
 ### Rotas que escrevem em bloco — todas transacionais
@@ -387,6 +432,7 @@ GET  /solicitacao_devolucao                 a fila — recorte pelo perfil lido 
 PATCH /solicitacao_devolucao/:id            decide e, se aprovada, DEVOLVE na mesma transação
 
 POST /parcela/sigef_declaracao              a declaração do SIGEF — por PARCELA, uma transação
+GET  /substituicao                          quem substituiu quem — só leitura, sem escrita
 PATCH /usuarios/:id/papel                   troca o papel (só o próprio, só superadmin)
 GET  /usuarios/:id/papel                    o papel de agora e as últimas 20 trocas
 ```
@@ -430,6 +476,7 @@ atualizar_aviso_id6.js           o texto e o fim do aviso id 6 — JA RODADO em 
 migracao_data_baixa_sigef_20260827.js   a data real da baixa no SIGEF — JA RODADO
 migracao_sigef_status_20260827.js       o status do SIGEF — JA RODADO
 migracao_sigef_declaracao_20260827.js   a coluna da declaração — JA RODADO
+migracao_dispensa_20260828.js           portaria, data_saida e substituicao — JA RODADO
 ```
 
 ⚠️ **`atualizar_aviso_id6.js` vai por script e não por `psql` de propósito:** o texto tem

@@ -1,3 +1,117 @@
+# SIGPC-API — ESTADO EM 28/08/2026
+
+Cole no início do chat novo. Este arquivo é o que basta para retomar.
+
+---
+
+## ✅ 28/08/2026 — A DISPENSA, E A PRODUTIVIDADE CONCILIADA. Leia isto antes de tudo.
+
+> **UMA escrita em produção:** `migracao_dispensa_20260828.js`. Sete cadastros ganharam
+> `portaria` e `data_saida`, e nasceu a tabela `substituicao` com 9 linhas. **Nenhuma PC foi
+> transferida** — provado por md5 de `(codigo_pc, analista_id, status, baixada)` nas 14.658.
+
+### 1. A produtividade agora desconta o SIGEF
+
+| | |
+|---|---|
+| base (`baixada` OU `enviado_ci`) | **4.078** |
+| **conciliada** (menos as pendências) | **3.552** |
+| descontadas enquanto não declaradas | **526** |
+
+⚠️ **A conta mora em `lib/sigef.js`, e a tela SOMA `sigef_conta`** — não reimplementa. Isso
+corrigiu um defeito antigo: a tela contava `status = 'baixada'` para o anel de meta enquanto a
+regra escrita dizia `baixada OU enviado_ci`. Eram dois números, e nada os comparava.
+
+⚠️ **`GET /prestacoes_contas/produtividade` passou a ter as DUAS pernas** — `data_baixa` para a
+baixa, `dt_envio_ci` para o C.I. Tinha só a primeira, e perdia estruturalmente a PC que conta
+só por ter ido ao C.I.
+
+### 2. A dispensa — sete analistas
+
+| id | nome no banco | portaria | data_saida |
+|---|---|---|---|
+| 38 | Elquier | 8/2026 | 09/01/2026 |
+| 29 | Marilza | 46/2026 | 02/03/2026 |
+| 48 | Samoel | 95/2026 | 14/05/2026 |
+| 43 | Higor | 122/2026 | 12/06/2026 |
+| 14 | Guilherme | 192/2026 | 11/08/2026 |
+| 50 | Willian | 203/2026 | 21/08/2026 |
+| 40 | Maria Goreti Korb | 203/2026 | 21/08/2026 |
+
+⚠️ **`ativo` CONTINUA `true` nos sete** — decisão do Richard: o dispensado precisa terminar o
+que ficou em curso. **A tela não deduz dispensa de `ativo`**, e há teste que recusa isso.
+
+⚠️ **"CONGELA" É PARAR DE CRESCER E PERDER A META — não recalcular por data.** A alternativa
+foi medida e descartada: cortar em `data_saida` zeraria Elquier, Samoel e Higor, porque as
+baixas deles têm `data_baixa = 30/06/2026`, a data do RECARREGAMENTO. **Zerar alguém por causa
+de um carimbo de carga seria erro grave.**
+
+⚠️ **E a cronologia real mostrou que o corte erraria dos DOIS lados.** Contra
+`data_baixa_sigef`: as 6 do Higor são **anteriores** à dispensa — trabalho legítimo que o corte
+apagaria; as 10 do Samoel têm registro no SIGEF **posterior** (21/05 a 09/06, dispensa em
+14/05). São perguntas diferentes, e nenhuma se responde com `data_baixa`.
+
+### 3. As metas — o número que eu errei e corrigi
+
+| | metas | soma |
+|---|---|---|
+| vigentes na tabela | 46 | 5.068 |
+| **que chegam à tela** (com `analista_id`) | **45** | **5.041** |
+| depois de tirar os 7 dispensados | **38** | **4.398** |
+
+⚠️ **Eu disse "46 → 39, 5.068 → 4.425" e estava errado.** A 46ª é a meta id 30, da **Caroline**
+(27), com `analista_id` NULO — `fetchMetasVigentes` a descarta (`if (m.analista_id)`), então
+ela **nunca entrou em soma nenhuma**. O erro se cancelava na diferença e mentia nos dois
+totais. Corrigido no `lib/dispensa.js` e no `index.html`.
+
+⚠️ **`metas_analistas` NÃO é alterada.** A meta existiu no período em que a pessoa estava
+designada; marcar `vigente = false` reescreveria o passado. Ela é **ignorada**, não apagada.
+
+### 4. A tabela `substituicao` — 9 linhas, 4 ids nulos
+
+Chave natural `(portaria, dispensado_nome)`. ⚠️ **Não pode ser o id:** quatro linhas têm id
+nulo, e **NULL não colide com NULL** num índice único — duas rodadas duplicariam justamente as
+linhas sem cadastro.
+
+⚠️ **Sem cadastro:** Luis Filipe e Caroline (dispensados), **Fabiana Vieira e Carla Goedert
+Xavier** (substitutas da portaria 203/2026, a mais recente). **Não há para quem transferir.**
+
+⚠️ **O Willian (id 50) é dispensado E substituto** — entrou no lugar da Caroline e saiu
+substituído pela Fabiana. Por isso o índice de substituto é uma **lista**, e as duas tags podem
+aparecer juntas na mesma pessoa.
+
+⚠️ **O `grupo` gravado é o da PORTARIA, não o do cadastro.** Divergem em dois casos: Guilherme
+(id 14) e Jeisson (id 72) estão no grupo 1 no cadastro e a portaria diz 2. Registrado na
+`observacao`; o cadastro não foi tocado.
+
+⚠️ **`GET /substituicao` é só leitura, e não há rota de escrita.** Portaria é ato
+administrativo — entra por script com dry-run, não por formulário.
+
+### 5. O que foi publicado em 28/08
+
+| repo | commit | o que é |
+|---|---|---|
+| `sigpc-api` | `13acb2a` | a produtividade conciliada com o SIGEF |
+| `sigpc-api` | `b03b973` | a rota de produtividade ganha as duas pernas |
+| `sigpc-api` | `38574f3` | `migracao_dispensa_20260828.js` |
+| `sigpc-api` | `3812510` | `lib/dispensa.js` e `GET /substituicao` |
+| `sigpc-gt` | `300f592` | a faixa de conferência na Produtividade |
+| `sigpc-gt` | `ea51384` | a âmbar mostra o do SIGEF e leva à parcela |
+| `sigpc-gt` | `bc770c9` | as tags Dispensado/Substituto e o card congelado |
+
+**Testes:** `sigpc-api` **25 suítes · 1.812 checagens · 0 falhas**.
+⚠️ `sigpc-gt`: **19 checagens falham em 7 suítes**, todas anteriores a estas frentes.
+
+### 6. O que ficou registrado e SEM EXECUTAR
+
+- **Fabiana Vieira e Carla Goedert Xavier sem cadastro** — as duas substitutas mais recentes.
+- **Luis Filipe e Caroline sem cadastro** — o Richard decide o que fazer com eles.
+- **As 19 checagens do front**, nunca olhadas uma a uma (10 são do `ci_fila`).
+- **A auditoria planilhas × base**, sem medição.
+- **Nove `.md` de diagnóstico** não versionados na raiz do `sigpc-api`.
+
+---
+
 # SIGPC-API — ESTADO EM 27/08/2026
 
 Cole no início do chat novo. Este arquivo é o que basta para retomar.

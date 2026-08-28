@@ -140,3 +140,6 @@ reverter_dispensa_*.json
 
 # Lista de reversao da ligacao dos substitutos (28/08/2026).
 reverter_ligar_substitutos_*.json
+
+# Lista de reversao da transferencia do Samoel (28/08/2026) — 32 PCs com o estado anterior.
+reverter_transferir_samoel_*.json

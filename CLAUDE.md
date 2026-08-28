@@ -77,13 +77,22 @@ do SIGEF) e UMA em 28/08 (a dispensa).**
 > ⚠️ **Duas funções que só fazem sentido juntas ficam juntas.** O `ciBolha` estava a 1.400
 > linhas do seu único chamador, num bloco de outra tela — foi a distância que deixou apagá-la.
 >
-> ### ⚠️ FRENTE ABERTA: a `rodada` das 129 mensagens
+> ### ✅ A REGRA DA RODADA — decidida em 28/08. NÃO É DEFEITO.
 >
-> **129 de 129 mensagens estão em `rodada = 1` com a PC em `ci_rodada = 2`**, em 46 TRs. A
-> mensagem é gravada antes do `UPDATE` de propósito (`lib/ci.js`), e o `devolver` sobe a rodada
-> logo depois — toda mensagem de devolução fica uma rodada atrás.
-> ⚠️ **Não é o que quebrava a tela** (o `pCiBloco` não filtra por rodada). Qual dos dois lados
-> está certo **é decisão do Richard**, e nada foi tocado.
+> **A mensagem de devolução fica UMA RODADA ATRÁS da PC, e está certa assim.**
+> `ci_mensagem.rodada` é a rodada em que a mensagem foi ESCRITA; `prestacoes_contas.ci_rodada`
+> é onde a PC ESTÁ. O C.I. escreve na rodada corrente e o `devolver` sobe a rodada logo depois.
+> São **129 de 129 mensagens em `rodada = 1` com a PC em `ci_rodada = 2`**, em 46 TRs — e
+> nenhuma deveria bater.
+>
+> ⚠️ **NUNCA CASE `ci_mensagem.rodada = prestacoes_contas.ci_rodada`.** A consulta acha zero, e
+> o zero parece "não há conversa" em vez de "casei errado". Quem quiser a mensagem que abriu a
+> rodada corrente procura `rodada = ci_rodada - 1`; quem quiser a conversa — o caso normal —
+> **não filtra por rodada nenhuma**, e ordena por `criado_em`.
+>
+> ⚠️ **E NÃO "CORRIJA" AS 129** subindo a rodada delas: isso apagaria a única informação que a
+> coluna guarda, que é quando cada uma foi escrita. **Decisão do Richard, 28/08.**
+> `teste_ci.js` seção 21 recusa o filtro por rodada e exige a regra escrita na lib.
 
 > ## ▶ 27/08/2026 — A CONFERÊNCIA COM O SIGEF. Três escritas, nenhuma tocou em baixa.
 >

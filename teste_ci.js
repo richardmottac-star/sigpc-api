@@ -537,6 +537,42 @@ console.log('\n═══ 20. A LISTA E OS NUMEROS CONTAM PARCELA ═══');
        'a media de espera continua por PC — ela responde quanto servico esta parado');
 }
 
+// ⚠️ A REGRA DA RODADA — decisao do Richard, 28/08/2026. Nao e defeito.
+//
+// A mensagem de devolucao fica UMA RODADA ATRAS da PC: `ci_mensagem.rodada` e a rodada em que
+// a mensagem foi ESCRITA, e `prestacoes_contas.ci_rodada` e onde a PC ESTA. O C.I. escreve na
+// rodada corrente e o `devolver` sobe a rodada logo depois. Medido: 129 de 129 mensagens em
+// `rodada = 1` com a PC em `ci_rodada = 2`, em 46 TRs — e nenhuma deveria bater.
+console.log('\n═══ 21. A RODADA DA MENSAGEM FICA UMA ATRAS DA PC — e a regra, nao o defeito ═══');
+{
+  const src = fs.readFileSync('./lib/ci.js', 'utf8');
+
+  // A gravacao le a rodada da PC ANTES do UPDATE. Inverter a ordem poria a mensagem numa
+  // volta que ainda nao aconteceu.
+  conf(/GREATEST\(p\.ci_rodada, 1\)/.test(src), 'a mensagem nasce na rodada ATUAL da PC');
+
+  // ⚠️ A LEITURA NAO PODE FILTRAR POR RODADA. `WHERE rodada = p.ci_rodada` acha ZERO, e zero
+  // mensagem parece "o C.I. nao disse nada" — que e o oposto do que aconteceu.
+  const iMsg = src.indexOf('async function mensagens(');
+  const corpo = iMsg < 0 ? '' : src.slice(iMsg, iMsg + 500);
+  conf(!/rodada\s*=/.test(corpo), 'e a leitura NAO filtra por rodada');
+  conf(/ORDER BY criado_em/.test(corpo), 'a ordem da conversa e o relogio, nao a rodada');
+
+  // A regra tem de estar ESCRITA, e nao so obedecida: e o unico jeito de a proxima pessoa
+  // nao "consertar" as 129.
+  // ⚠️ O acento CONTA: a lib escreve "atrás". Um regex sem acento passaria a nao achar a
+  // frase no dia em que ela fosse reescrita — e este teste existe justamente para exigir que
+  // ela continue la.
+  conf(/uma rodada atr[aá]s/i.test(src), 'a regra esta escrita por extenso na lib');
+  conf(/NUNCA CASE `ci_mensagem\.rodada` = `prestacoes_contas\.ci_rodada`|NUNCA CASE/i.test(src),
+       'e diz para nunca casar as duas colunas');
+
+  // ⚠️ E ninguem mais no servidor pode ter reintroduzido o filtro.
+  const srv = fs.readFileSync('./server.js', 'utf8');
+  conf(!/ci_mensagem[\s\S]{0,200}rodada\s*=\s*[^$]/.test(srv),
+       'nenhuma rota do server casa mensagem com a rodada da PC');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);
 process.exit(falhou ? 1 : 0);
 })();

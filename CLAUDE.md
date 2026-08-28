@@ -48,8 +48,42 @@ do SIGEF) e UMA em 28/08 (a dispensa).**
 > de substituto é uma **lista**. A chave de `substituicao` é `(portaria, dispensado_nome)` —
 > **não o id**, porque quatro linhas têm id nulo e NULL não colide com NULL.
 >
-> ⚠️ **Quatro pessoas das portarias não têm cadastro:** Luis Filipe e Caroline (dispensados),
-> **Fabiana Vieira e Carla Goedert Xavier** (as substitutas da portaria mais recente).
+> ⚠️ **Duas pessoas das portarias não têm cadastro:** Luis Filipe e Caroline (dispensados).
+> A **Fabiana Vieira (74)** e a **Carla Goedert Xavier (75)** foram cadastradas em 28/08 e o
+> `substituto_id` das duas já está ligado.
+>
+> ### A primeira transferência — 32 PCs, ação PONTUAL
+>
+> `migracao_transferir_samoel_20260828.js`: as 32 PCs **abertas** do Samoel (48) passaram ao
+> Richard (4). As 9 baixadas ficaram com ele. Samoel 42 → 9 PCs; Richard 440 → 472, 56 → 76 TRs.
+>
+> ⚠️ **NÃO É ROTINA.** O pedido/aprovação por coordenador (`pedido_transferencia`) foi
+> desenhado e **não implementado** — a especificação chegou cortada. Até existir, toda
+> transferência é script com dry-run.
+>
+> ⚠️ **O `analista_nome` gravado foi `Richard`**, pelo `assumir.nomeCurto()`. Gravar o nome
+> completo daria ao id 4 dois rótulos no próprio acervo.
+>
+> ### ⚠️ A LIÇÃO DE 28/08: uma função apagada derrubou a tela de 22 analistas
+>
+> `pCiConversaHtml` chamava **`ciBolha(m)`, e a função não existia** — levada em `36c6000`
+> (25/08), a rodada que reescreveu 1.454 linhas do `index.html`. Sobrou a chamada órfã.
+>
+> **Ficou três dias invisível** porque `pCiConversaHtml` retorna antes quando não há mensagem,
+> e as únicas mensagens do sistema são as 129 da reabertura do C.I. **Alcance: 46 TRs, 22
+> analistas, 79 parcelas.** A Janaína tinha 13 TRs quebradas e não reportou; quem avisou foi a
+> Marisa, com 1.
+>
+> ⚠️ **Duas funções que só fazem sentido juntas ficam juntas.** O `ciBolha` estava a 1.400
+> linhas do seu único chamador, num bloco de outra tela — foi a distância que deixou apagá-la.
+>
+> ### ⚠️ FRENTE ABERTA: a `rodada` das 129 mensagens
+>
+> **129 de 129 mensagens estão em `rodada = 1` com a PC em `ci_rodada = 2`**, em 46 TRs. A
+> mensagem é gravada antes do `UPDATE` de propósito (`lib/ci.js`), e o `devolver` sobe a rodada
+> logo depois — toda mensagem de devolução fica uma rodada atrás.
+> ⚠️ **Não é o que quebrava a tela** (o `pCiBloco` não filtra por rodada). Qual dos dois lados
+> está certo **é decisão do Richard**, e nada foi tocado.
 
 > ## ▶ 27/08/2026 — A CONFERÊNCIA COM O SIGEF. Três escritas, nenhuma tocou em baixa.
 >
@@ -477,6 +511,8 @@ migracao_data_baixa_sigef_20260827.js   a data real da baixa no SIGEF — JA ROD
 migracao_sigef_status_20260827.js       o status do SIGEF — JA RODADO
 migracao_sigef_declaracao_20260827.js   a coluna da declaração — JA RODADO
 migracao_dispensa_20260828.js           portaria, data_saida e substituicao — JA RODADO
+migracao_ligar_substitutos_20260828.js  liga o substituto_id da Fabiana e da Carla — JA RODADO
+migracao_transferir_samoel_20260828.js  as 32 PCs abertas do Samoel -> Richard — JA RODADO
 ```
 
 ⚠️ **`atualizar_aviso_id6.js` vai por script e não por `psql` de propósito:** o texto tem

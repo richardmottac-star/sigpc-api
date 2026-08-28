@@ -165,6 +165,77 @@ dentro ou para fora do acervo de quem saiu, depois de os números terem sido con
   **Nunca foi especificada**, e nenhuma das rodadas de 28/08 a tocou: todas dizem, com todas
   as letras, "nenhuma PC é transferida".
 
+### 8. A TRANSFERÊNCIA DO SAMOEL — 32 PCs, a primeira do sistema
+
+**Gravada em 28/08** por `migracao_transferir_samoel_20260828.js` (`59b85e7`), 16 conferências.
+As **32 PCs abertas** do Samoel (id 48) passaram ao Richard (id 4). As **9 baixadas dele ficam
+com ele**, e a produtividade dos dois não mudou: as 32 não contavam.
+
+| | antes | depois |
+|---|---|---|
+| Samoel (48) | 42 PCs, 32 abertas | **9 PCs, 0 abertas** |
+| Richard (4) | 440 PCs · 56 TRs | **472 PCs · 76 TRs** |
+
+⚠️ **É AÇÃO PONTUAL, e não é rotina.** O pedido/aprovação por coordenador (tabela
+`pedido_transferencia`) foi desenhado e **não foi implementado** — a especificação chegou
+cortada. Enquanto não existir, toda transferência é script com dry-run.
+
+⚠️ **O `analista_nome` gravado foi `Richard`, não `Richard Motta Coelho`.** Quem traduz é
+`assumir.nomeCurto()`, a mesma função do `POST /tr/assumir`. Gravar o nome completo daria ao id
+4 dois rótulos no próprio acervo — a pendência 6-B, criada no mesmo dia.
+
+⚠️ **A lista das 32 foi capturada com `FOR UPDATE` e virou chave explícita.** O `UPDATE` **não**
+repete `baixada IS NOT TRUE`: se outra sessão baixasse uma delas entre a leitura e a escrita, a
+condição deixaria de casar e o número mudaria em silêncio (armadilha 12).
+
+⚠️ **Reverter devolve as 32 a um dispensado** — é o estado de antes, não um estado bom. E as 32
+linhas de `parcela_historico` não se apagam.
+
+⚠️ **O Samoel ficou com 10 PCs, não 9:** a décima tem `analista_nome = 'Elisandra'`. É a
+pendência 6-B aparecendo — ela é baixada, então não entrou na transferência.
+
+### 9. ⚠️ O `ciBolha` — a tela quebrada de 22 analistas, por três dias
+
+**`pCiConversaHtml` chamava `ciBolha(m)` e a função não existia.** Uma ocorrência no
+`index.html` inteiro: a chamada, órfã. A definição foi levada em **`36c6000` (25/08, 12h15)**,
+a rodada que reescreveu 1.454 linhas para pôr a tela do C.I. por PC.
+
+**Por que ficou três dias invisível:** `pCiConversaHtml` retorna ANTES de tocar em `ciBolha`
+quando a lista de mensagens está vazia. Como as **únicas** mensagens do sistema são as 129 da
+reabertura, o `ReferenceError` só estourava na planilha de quem teve PC devolvida pelo C.I.
+
+**O alcance, medido:** **46 TRs · 22 analistas · 79 parcelas · 129 PCs.**
+A Janaína tinha **13 TRs** quebradas e não reportou. **Quem avisou foi a Marisa, a 18ª em
+tamanho, com 1 TR.** Dois dos 22 são dispensados (Goreti, Higor) — não haveria quem reclamasse.
+
+Corrigido em `d3c0d74`, restaurando de `b86ceda`. ⚠️ **A função passou a viver colada em
+`pCiConversaHtml`** — antes estava a 1.400 linhas, num bloco de outra tela, e foi essa distância
+que deixou apagá-la sem ninguém ver a chamada ficar sem dono.
+
+### 10. ⚠️ FRENTE ABERTA: a `rodada` das 129 mensagens do C.I.
+
+**As 129 mensagens estão em `rodada = 1` e as PCs em `ci_rodada = 2`. Nenhuma bate — 0 de 129,
+em 46 TRs.**
+
+A causa está em `lib/ci.js`: a mensagem é gravada ANTES do `UPDATE` de propósito
+(`gravarMensagem` lê a rodada da PC), e o `devolver` sobe a rodada logo depois
+(`ci_rodada = GREATEST(ci_rodada,1) + 1`). **Toda mensagem de devolução fica uma rodada atrás
+da PC.**
+
+⚠️ **Isto NÃO era o que quebrava a tela** — o `pCiBloco` não filtra por rodada, mostra todas.
+São dois defeitos diferentes no mesmo lugar, e confundi-los custou uma resposta minha.
+
+⚠️ **A decisão de regra ainda não foi tomada:** qual dos dois lados está certo? Subir a
+`rodada` das mensagens para casar com a PC, ou aceitar que a mensagem pertence à rodada em que
+foi escrita e é a leitura que deve procurar `rodada = ci_rodada - 1`? **Decisão do Richard, e
+nada foi tocado.**
+
+### 11. Os cards da Produtividade (28/08)
+
+Card da grade de sete informações para quatro; botão **Abrir** em relevo; card do dispensado em
+cinza com barra vazia; faixa da portaria no bloco aberto. Publicado em `5bc495f`.
+⚠️ **Nada mudou no cálculo** — só a apresentação.
+
 ---
 
 # SIGPC-API — ESTADO EM 27/08/2026

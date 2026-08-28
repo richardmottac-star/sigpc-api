@@ -57,6 +57,7 @@ const correcao = require('./lib/correcao');
 const pcNova = require('./lib/pc-nova');
 const solCor = require('./lib/solicitacao-correcao');
 const sigef = require('./lib/sigef');
+const dispensa = require('./lib/dispensa');
 
 const app = express();
 app.use(cors());
@@ -141,6 +142,29 @@ app.get('/usuarios', async (req, res) => {
     // devolvia as 49 senhas em texto puro a quem pedisse, sem nenhuma credencial.
     res.json({ data: rows.map(auth.semSegredo), error: null });
   } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /substituicao — quem substituiu quem, pelas portarias
+//
+// ⚠️ SÓ LEITURA, E SEM ROTA DE ESCRITA. As linhas entram por script de migração, com dry-run
+// e conferências: são ato administrativo (portaria publicada), não dado que alguém digita na
+// tela. Uma rota de POST aqui seria o caminho por onde a trilha de pessoal vira texto livre.
+//
+// ⚠️ E NÃO HÁ FILTRO DE PERFIL. A tag "Dispensado"/"Substituto" aparece em toda listagem onde
+// há analista, inclusive para o próprio analista — a portaria é pública, e esconder de quem
+// trabalha ao lado não protegeria nada. O que NÃO sai daqui é CPF, senha ou contato: esta
+// tabela não tem nenhum deles.
+app.get('/substituicao', async (req, res) => {
+  try {
+    const { rows } = await pool.query(dispensa.SQL_SUBSTITUICOES);
+    res.json({ data: rows, count: rows.length, error: null });
+  } catch (e) {
+    // Se a tabela ainda não existir (ambiente sem a migração de 28/08), a tela não pode
+    // quebrar: ela simplesmente não pinta tag nenhuma.
+    if (/relation .* does not exist/i.test(e.message))
+      return res.json({ data: [], count: 0, error: null });
     res.status(500).json({ data: null, error: { message: e.message } });
   }
 });

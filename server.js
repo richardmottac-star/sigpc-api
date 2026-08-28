@@ -12,7 +12,7 @@ const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-l
 const { semAcento, condicaoBusca } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
 const notif = require('./lib/notificacao');
-const { HOJE_BR } = require('./lib/datas');
+const { HOJE_BR, CORTE_PRAZO } = require('./lib/datas');
 const faixa = require('./lib/faixa');
 const auth = require('./lib/auth');
 const prep = require('./lib/preparacao');
@@ -1536,7 +1536,21 @@ app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
     const { analista_id, setorial_id } = req.query;
     if (!analista_id)
       return res.status(400).json({ data: null, error: { message: 'analista_id é obrigatório' } });
-    const conditions = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`, `(${HOJE_BR} - dt_limite_pc) >= -30`];
+    // ⚠️ O CORTE DO PRAZO ENTROU AQUI EM 28/08/2026, e é o MESMO do sino — `CORTE_PRAZO`, de
+    // `lib/datas.js`. Até então o `job_notificacoes` calava sobre o acervo antigo e esta rota
+    // mostrava as mesmas PCs ao analista como passivo dele: duas respostas para "isto é
+    // prazo?", e só uma estava certa.
+    //
+    // ⚠️ O QUE ELE TIRA, medido em 28/08: das 9.655 vencidas há mais de um ano, **9.616 (99,6%)
+    // nunca nasceram no sistema**, e **3.253 "vencem" exatamente em 30/01/2021**. São carimbos
+    // de lote, não prazos — decisão do Richard de 10/08. Com o corte, o alerta fica vazio para
+    // TODOS os analistas, e isso é o certo: prazo real só existe quando o analista inserir a
+    // data. O alerta volta a ter conteúdo sozinho, à medida que isso acontecer.
+    //
+    // ⚠️ NÃO REDECLARE A DATA AQUI. Ela mora em `lib/datas.js`, e foi a duplicação em potencial
+    // que deixou o sino e esta tela discordarem por 18 dias.
+    const conditions = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`,
+      `dt_limite_pc >= DATE '${CORTE_PRAZO}'`, `(${HOJE_BR} - dt_limite_pc) >= -30`];
     const values = [parseInt(analista_id)];
     let i = 2;
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
@@ -1552,11 +1566,38 @@ app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
     const vencidaMenos365 = rows.filter(r => r.dias > 0 && r.dias <= 365);
     const aVencer30 = rows.filter(r => r.dias <= 0);
     const top10 = rows.slice(0, 10);
+    // ⚠️ E A CONTAGEM EM TRs VAI JUNTO. A lista da Minha Planilha mostra TR; o botão prometia
+    // PCs e entregava TRs, e o número do botão não reaparecia em lugar nenhum depois do
+    // clique. Quem sabe quantas TRs são é quem já tem as linhas na mão — recontar na tela
+    // seria uma segunda definição do mesmo recorte.
+    const trsDe = (lista) => new Set(lista.map(r => r.tr)).size;
+
+    // ⚠️ O QUE O CORTE TIROU — contado à parte, e mostrado. A faixa não some: ela vira CINZA e
+    // diz o que essas PCs são. Sumir deixaria o analista sem saber se o alerta foi conferido
+    // ou se parou de rodar, e apagaria da tela dele um acervo que continua no nome dele.
+    //
+    // ⚠️ NÃO É "vencida": é PRESTAÇÃO SEM PRAZO DEFINIDO. O `dt_limite_pc` dela veio da carga,
+    // e chamá-la de vencida é o que o alerta fazia até 28/08 — dizia ao analista que ele tinha
+    // 214 atrasos quando ninguém nunca definiu aqueles prazos.
+    const impCond = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`,
+      `dt_limite_pc < DATE '${CORTE_PRAZO}'`];
+    const impValues = [parseInt(analista_id)];
+    if (setorial_id) { impCond.push(`setorial_id = $2`); impValues.push(setorial_id); }
+    const { rows: imp } = await pool.query(
+      `SELECT COUNT(*)::int AS pcs, COUNT(DISTINCT tr)::int AS trs
+         FROM prestacoes_contas WHERE ${impCond.join(' AND ')}`, impValues);
+
     // Só as 10 linhas que a tela mostra — as demais nunca são renderizadas.
     const links = await linksDeLinhas(pool, top10, ['processo_pc']);
     res.json({
       data: {
         contagem: { vencida365: vencida365.length, vencidaMenos365: vencidaMenos365.length, aVencer30: aVencer30.length },
+        trs: { vencida365: trsDe(vencida365), vencidaMenos365: trsDe(vencidaMenos365), aVencer30: trsDe(aVencer30) },
+        // ⚠️ O CORTE VIAJA COM A RESPOSTA. A tela precisa dele para recortar a lista pelo MESMO
+        // critério — e recebê-lo evita a tela ter a própria cópia da data, que foi o que
+        // deixou o sino e o alerta discordarem por 18 dias.
+        corte_prazo: CORTE_PRAZO,
+        importado: { pcs: imp[0].pcs, trs: imp[0].trs },
         top10
       },
       links,

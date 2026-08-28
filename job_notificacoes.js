@@ -48,7 +48,7 @@
 // nas primeiras rodadas.
 
 const { Pool } = require('pg');
-const { HOJE_BR } = require('./lib/datas');
+const { HOJE_BR, CORTE_PRAZO } = require('./lib/datas');
 const notificacao = require('./lib/notificacao');
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -67,9 +67,15 @@ const notificacao = require('./lib/notificacao');
 // abertura para a equipe. Baixar o corte faria o sino cobrar prazo que ninguém definiu — e
 // avisar sobre 4.490 PCs de uma vez, o que mataria o sino no primeiro dia.
 //
-// ⚠️ O CORTE É SÓ DO SINO. Essas PCs continuam aparecendo normalmente no Estoque e na Minha
-// Planilha, e o cálculo de `dias_atraso` não muda. Nada aqui escreve em `prestacoes_contas`.
-const CORTE_PRAZO = '2026-08-01';
+// ⚠️ O CORTE DEIXOU DE SER "SÓ DO SINO" EM 28/08/2026. O alerta de prazo da Minha Planilha
+// passou a usar o MESMO valor — até então o sino calava sobre o acervo antigo e a tela do
+// analista mostrava as mesmas PCs como passivo dele. Eram duas respostas para "isto é prazo?".
+//
+// ⚠️ E O VALOR MORA EM `lib/datas.js`, NUM LUGAR SÓ. Ele estava aqui, e foi essa duplicação em
+// potencial que deixou as duas respostas conviverem. Não redeclarar aqui.
+//
+// Essas PCs continuam aparecendo normalmente no Estoque e na Minha Planilha, e o cálculo de
+// `dias_atraso` não muda. Nada aqui escreve em `prestacoes_contas`.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════

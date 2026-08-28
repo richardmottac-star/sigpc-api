@@ -102,13 +102,68 @@ administrativo — entra por script com dry-run, não por formulário.
 **Testes:** `sigpc-api` **25 suítes · 1.812 checagens · 0 falhas**.
 ⚠️ `sigpc-gt`: **19 checagens falham em 7 suítes**, todas anteriores a estas frentes.
 
-### 6. O que ficou registrado e SEM EXECUTAR
+### 6. ⚠️ OS NOMES — DUAS PENDÊNCIAS DIFERENTES, e não uma
 
-- **Fabiana Vieira e Carla Goedert Xavier sem cadastro** — as duas substitutas mais recentes.
+> Medido em 28/08 nos 56 cadastros. Detalhe em `DIAGNOSTICO_NOMES_CADASTRO_2026-08-28.md`.
+> **Decisão do Richard, 28/08: NÃO MEXER NOS NOMES AGORA.** Ficam registradas separadas
+> porque **uma é cosmética e a outra move produtividade** — tratá-las juntas faria a segunda
+> parecer tão adiável quanto a primeira.
+
+#### 6-A. Nome curto no cadastro — **23 casos · cosmético**
+
+`usuarios.nome` guarda o **apelido de trabalho**, não o nome da pessoa. São 23 cadastros em que
+o nome do cadastro é **idêntico** ao rótulo curto que o acervo usa (4.834 PCs): 21 de uma
+palavra e dois de duas — `Grace Oliveira` (27) e `Sandra Paul` (18).
+
+Os 22 de uma palavra: `Aline`(7) `Andressa`(8) `Cris`(9) `Daiana`(10) `Daniela`(11)
+`Franciani`(12) `Gabriele`(13) **`Guilherme`(14)** `Ivonete`(15) `Marcelo`(16) `Marisa`(17)
+`Tatiana`(20) `Valderi`(21) **`Marilza`(29)** `Claudia`(36) **`Elquier`(38)** `Everaldo`(39)
+`Grazielly`(42) **`Higor`(43)** `Rafael`(47) **`Samoel`(48)** **`Willian`(50)`**
+— em negrito, os **seis dispensados** (o sétimo, Maria Goreti Korb, tem nome completo).
+
+⚠️ **É cosmético, mas NÃO é trivial de consertar.** O `MAPA_NOME` de `lib/assumir.js` tem como
+chave o `usuarios.nome` **exato**: trocar `Willian` por `Willian Ferreira Coelho` **quebra a
+entrada do mapa** e muda o rótulo dele no acervo sozinho. **Nome e mapa mudam na mesma rodada,
+ou nenhum dos dois.** É a armadilha 1 pelo avesso.
+
+⚠️ **E o sistema não tem o nome completo de ninguém.** Ele está na portaria, na matrícula ou no
+RH — não há de onde deduzir. Qualquer correção começa por uma lista que o Richard fornece.
+
+#### 6-B. `analista_nome` contradiz `analista_id` — **4 analistas · AFETA PRODUTIVIDADE**
+
+| id | nome no cadastro | rótulos encontrados no acervo dele |
+|---|---|---|
+| 47 | Rafael | **Guilherme \| Rafael \| Samoel** |
+| 45 | Juliana de Souza | **Juliana \| Marlene \| Tanimeri** |
+| 41 | Graciane Mondardo Constantino | Graciane \| Juliana |
+| 48 | Samoel | Elisandra \| Samoel |
+
+⚠️ **Aqui a PC está no acervo de um analista com o NOME DE OUTRO.** Não é rótulo feio: é dado
+errado, e toda contagem que agrupe por nome — ou qualquer tela que exiba `analista_nome` —
+atribui trabalho à pessoa errada. **A produtividade agrupa por `analista_id` e por isso não
+erra hoje**; o que erra é o que alguém lê na linha.
+
+⚠️ **NÃO CORRIGIR PELO NOME.** Reescrever `analista_nome` para casar com o rótulo esperado
+moveria PC entre acervos. A pergunta certa é **de quem é a PC** — e a resposta é o
+`analista_id`, ou a planilha do analista, não o texto.
+
+⚠️ **O id 48 é o Samoel, DISPENSADO.** Uma correção que olhe só o nome pode mover PC para
+dentro ou para fora do acervo de quem saiu, depois de os números terem sido congelados.
+
+### 7. O que mais ficou registrado e SEM EXECUTAR
+
 - **Luis Filipe e Caroline sem cadastro** — o Richard decide o que fazer com eles.
+  (⚠️ **Fabiana Vieira (74) e Carla Goedert Xavier (75) foram cadastradas em 28/08** e o
+  `substituto_id` das duas já está ligado.)
+- **Três formatos de portaria na mesma coluna:** `FCEE nº 203/2026` (cadastros 74 e 75),
+  `FCEE n 227/2025` (id 4), `FCEE n 95/2026` (id 56) e `203/2026` (a tabela `substituicao`).
+  Não normalizado — qual formato vale é decisão do Richard.
 - **As 19 checagens do front**, nunca olhadas uma a uma (10 são do `ci_fila`).
 - **A auditoria planilhas × base**, sem medição.
 - **Nove `.md` de diagnóstico** não versionados na raiz do `sigpc-api`.
+- **A transferência das PCs dos dispensados** — 353 PCs em 106 TRs continuam no nome deles.
+  **Nunca foi especificada**, e nenhuma das rodadas de 28/08 a tocou: todas dizem, com todas
+  as letras, "nenhuma PC é transferida".
 
 ---
 

@@ -154,3 +154,8 @@ reverter_transferir_samoel_*.json
 # escreve AO LADO com carimbo de tempo quando ja existe uma gravacao no destino. Sao esses os
 # que mais aparecem: cada `--gravar` repetido cria um.
 reverter_sgpe_*.json
+
+# ⚠️ ARTEFATO DE EXECUCAO, nunca versionado: a lista das PCs inseridas pela importacao do
+# SIGEF de 30/08/2026, e o texto extraido dos PDFs (que sao fonte externa, nao codigo).
+reverter_import_sigef_*.json
+.sigef_tmp/

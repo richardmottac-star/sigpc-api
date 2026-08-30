@@ -7,7 +7,7 @@
     "start": "node server.js",
     "job:sgpe": "node job_sgpe_links.js",
     "job:notif": "node job_notificacoes.js",
-    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js && node teste_limite_tr.js && node teste_notificacao.js && node teste_faixa.js && node teste_auth.js && node teste_http_auth.js && node teste_preparacao.js && node teste_manutencao.js && node teste_devolucao.js && node teste_processo_edit.js && node teste_assumir.js && node teste_busca_global.js && node teste_ci.js && node teste_duplicata.js && node teste_devolucao_pedido.js && node teste_autoria.js && node teste_papel.js && node teste_correcao.js && node teste_ci_fila.js && node teste_novidades.js && node teste_sigef.js && node teste_reversao.js && node teste_dispensa.js"
+    "teste": "node teste_sgpe_link.js && node teste_sgpe_lote.js && node teste_busca.js && node teste_limite_tr.js && node teste_notificacao.js && node teste_faixa.js && node teste_auth.js && node teste_http_auth.js && node teste_preparacao.js && node teste_manutencao.js && node teste_devolucao.js && node teste_processo_edit.js && node teste_assumir.js && node teste_busca_global.js && node teste_ci.js && node teste_duplicata.js && node teste_devolucao_pedido.js && node teste_autoria.js && node teste_papel.js && node teste_correcao.js && node teste_ci_fila.js && node teste_novidades.js && node teste_sigef.js && node teste_reversao.js && node teste_dispensa.js && node teste_sgpe_portal.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

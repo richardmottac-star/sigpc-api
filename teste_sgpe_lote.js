@@ -150,12 +150,24 @@ const URL_2146 = 'https://sgpe.sea.sc.gov.br/cpav/visualizarDocumentosProcesso.d
   {
     // Banco de mentira que devolve 30 processos como acervo e cache vazio.
     const acervo = Array.from({ length: 30 }, (_, i) => ({ v: `SCC${1000 + i}/2020` }));
-    const dbFalso = () => ({
+    // ⚠️ O DUBLÊ PRECISOU DE `connect` A PARTIR DE 30/08: `rodar()` passou a tomar a trava de
+    // rodada única (lib/trava.js), e a trava vive numa CONEXÃO própria, tomada do pool. Um
+    // dublê só com `query` deixou de ser um pool. Foi o teste que apanhou a mudança — que é o
+    // que se espera dele; o `travas` abaixo guarda o que a trava fez, para o caso (c).
+    const travas = [];
+    const dbFalso = (pegaTrava = true) => ({
       query: async (sql) => {
         if (/FROM prestacoes_contas/.test(sql)) return { rows: acervo };
         if (/FROM sgpe_processo_ref/.test(sql)) return { rows: [] };
         return { rows: [] };                                  // os INSERTs
       },
+      connect: async () => ({
+        query: async (sql, p) => {
+          travas.push(sql.replace(/\s+/g, ' ').trim() + '|' + (p || []).join(','));
+          return { rows: [{ ok: /try_advisory/.test(sql) ? pegaTrava : true }] };
+        },
+        release: () => travas.push('release'),
+      }),
     });
     const calado = () => {};
 
@@ -186,6 +198,53 @@ const URL_2146 = 'https://sgpe.sea.sc.gov.br/cpav/visualizarDocumentosProcesso.d
     });
     conf(e3.abortadoPorErros === false, '30 "não encontrado" seguidos não abortam');
     conf(e3.naoEncontrados === 30, 'todos viraram negativa', `naoEncontrados=${e3.naoEncontrados}`);
+  }
+
+  console.log('\n═══ 10. A TRAVA DE RODADA ÚNICA (30/08/2026) ═══');
+  {
+    // ⚠️ ATÉ 30/08 NÃO HAVIA TRAVA NENHUMA aqui. Uma rodada que passasse da hora era
+    // atropelada pela do cron seguinte, e as duas resolviam os MESMOS processos — a fila sai
+    // de `montarFila`, que lê o cache, e o cache só muda quando cada processo termina.
+    const acervo = Array.from({ length: 5 }, (_, i) => ({ v: `SCC${2000 + i}/2020` }));
+    const feito = [];
+    const db = (pega) => ({
+      query: async (sql) => {
+        if (/FROM prestacoes_contas/.test(sql)) return { rows: acervo };
+        return { rows: [] };
+      },
+      connect: async () => ({
+        query: async (sql, p) => {
+          feito.push(sql.replace(/\s+/g, ' ').trim().split('(')[0] + '|' + (p || []).join(','));
+          return { rows: [{ ok: /try_advisory/.test(sql) ? pega : true }] };
+        },
+        release: () => feito.push('release'),
+      }),
+    });
+    const calado = () => {};
+    let resolveu = 0;
+
+    // (a) trava livre: a rodada corre, e a trava é tomada e devolvida.
+    feito.length = 0; resolveu = 0;
+    const a = await rodar({ pool: db(true), log: calado, resolver: async () => { resolveu++; return { nuProcesso: 1, cdOrgaosetor: 1, ano: 2020 } } });
+    conf(a.semTrava === false, 'com a trava livre, a rodada corre');
+    conf(resolveu === 5, 'e resolve os 5', `resolveu=${resolveu}`);
+    conf(feito[0].startsWith('SELECT pg_try_advisory_lock'), 'tomou a trava ANTES de qualquer trabalho');
+    conf(feito.some(x => x.startsWith('SELECT pg_advisory_unlock')), 'e a devolveu no fim');
+
+    // (b) trava ocupada: DESISTE, e não toca em nada.
+    feito.length = 0; resolveu = 0;
+    const b = await rodar({ pool: db(false), log: calado, resolver: async () => { resolveu++; return {} } });
+    conf(b.semTrava === true, 'com a trava ocupada, a rodada desiste');
+    // ⚠️ É AQUI QUE A TRAVA VALE: zero consultas ao SGPe, e não "as mesmas de novo".
+    conf(resolveu === 0, 'e NÃO consulta o SGPe nenhuma vez', `resolveu=${resolveu}`);
+    conf(b.processados === 0 && b.resolvidos === 0, 'nem grava nada');
+    conf(feito.includes('release'), 'e devolve a conexão ao pool na hora');
+
+    // (c) o dry-run não toma a trava — olhar a fila enquanto o job corre tem de funcionar.
+    feito.length = 0;
+    const c = await rodar({ pool: db(false), log: calado, dryRun: true });
+    conf(c.semTrava === false, 'o dry-run roda mesmo com a trava ocupada');
+    conf(!feito.some(x => x.includes('advisory')), 'e nem chega a pedir a trava');
   }
 
   console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

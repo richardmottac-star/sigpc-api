@@ -26,6 +26,7 @@ const { resolverNoSgpe } = require('./lib/sgpe-dwr');
 const {
   chavesDeValores, gravarResolvido, gravarNegativa, gravarErro,
 } = require('./lib/sgpe-lote');
+const trava = require('./lib/trava');
 
 // Depois de 5 falhas de REDE o processo sai da fila automática — só volta com --retentar-erros.
 // Não é negativa: a negativa vem do SGPe dizendo que o processo não existe, e essa não volta nunca.
@@ -119,8 +120,32 @@ async function rodar(opts = {}) {
   const estado = {
     alvos: 0, fila: 0, processados: 0,
     resolvidos: 0, naoEncontrados: 0, erros: 0, restantes: 0,
-    interrompido: false, abortadoPorErros: false,
+    interrompido: false, abortadoPorErros: false, semTrava: false,
   };
+
+  // ⚠️ TRAVA DE RODADA ÚNICA (30/08/2026). Até hoje NÃO HAVIA NENHUMA: uma rodada que
+  // passasse da hora era atropelada pela do cron seguinte, e as duas resolviam os MESMOS
+  // processos — porque a fila sai de `montarFila`, que lê o cache, e o cache só muda quando
+  // cada processo termina. O resultado era o dobro de tráfego num sistema de terceiro e o
+  // contador `tentativas` somado duas vezes. Ver lib/trava.js.
+  //
+  // ⚠️ É `pg_try_advisory_lock`, então a rodada nova DESISTE em vez de entrar na fila: quem
+  // está correndo é justamente quem ainda vai fazer o trabalho, e esperar por ela só
+  // empilharia processos.
+  //
+  // ⚠️ O DRY-RUN NÃO TOMA A TRAVA. Ele não escreve nem consulta o SGPe, e recusar um dry-run
+  // porque há rodada correndo tiraria a única ferramenta de olhar a fila enquanto o job
+  // trabalha — que é exatamente quando se quer olhar.
+  const t = dryRun ? { pegou: true, soltar: async () => {} }
+                   : await trava.tomar(db, trava.CHAVES.SGPE_LINKS);
+  if (!t.pegou) {
+    estado.semTrava = true;
+    log('\n  OUTRA RODADA JA ESTA CORRENDO (advisory lock ' + trava.CHAVES.SGPE_LINKS + ').');
+    log('  Esta desiste em vez de atropelar. O que ficar volta na proxima.');
+    process.removeListener('SIGINT', aoInterromper);
+    if (proprio) await db.end();
+    return estado;
+  }
 
   try {
     // ── 1. o acervo ──
@@ -226,6 +251,7 @@ async function rodar(opts = {}) {
     return estado;
   } finally {
     process.removeListener('SIGINT', aoInterromper);
+    await t.soltar();
     if (proprio) await db.end();
   }
 }

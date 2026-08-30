@@ -11,6 +11,7 @@
 // da rodada de 30/08, com três processos reais.
 
 const fs = require('fs');
+const path = require('path');
 const p = require('./lib/sgpe-portal');
 
 let ok = 0, falhou = 0;
@@ -174,6 +175,142 @@ secao('8. A CONSULTA — com fetch dublê, sem tocar no portal');
     let chamou = false;
     await roda(async () => { chamou = true; return resposta({})(); }, 'XPTO');
     conf(chamou === false, 'e com sigla fora do mapa o fetch NAO e chamado');
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log('\n=== 9. A ROTA E A TELA — FASE 2 ===');
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Leitura de arquivo, sem rede e sem banco: prova a LIGACAO entre a lib, a rota e a tela.
+    // E a ligacao que o dublê nao pega e que o teste de unidade nao ve — foi uma funcao
+    // apagada e uma chamada orfa que quebraram a tela de 22 analistas em 28/08.
+    const srv = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+    const idx = fs.readFileSync(path.join(__dirname, '..', 'sigpc-gt', 'index.html'), 'utf8');
+
+    conf(/app\.get\('\/sgpe\/consulta'/.test(srv), 'existe GET /sgpe/consulta');
+    conf(/require\('\.\/lib\/sgpe-portal'\)/.test(srv), 'e a rota usa a lib, nao reimplementa');
+    // ⚠️ NENHUMA ESCRITA. A FASE 2 e so leitura — a rota nao grava consulta nenhuma.
+    {
+      const i = srv.indexOf("app.get('/sgpe/consulta'");
+      const bloco = srv.slice(i, i + 2200);
+      conf(!/INSERT|UPDATE|DELETE/i.test(bloco), 'a rota nao escreve no banco');
+      // Os quatro retornos da lib, cada um com o seu caminho.
+      conf(/ENTRADA_INVALIDA/.test(bloco) && /status\(400\)/.test(bloco), 'entrada ilegivel -> 400');
+      conf(/ERROS\.REDE/.test(bloco) && /status\(502\)/.test(bloco), 'portal fora do ar -> 502, e nao "nao encontrado"');
+      conf(/if \(r\.erro\) return res\.json/.test(bloco),
+           'sigla, nao encontrado e sigiloso saem em 200 — sao respostas, nao falhas');
+      conf(/montarLinks/.test(bloco), 'o link vem do CACHE, nunca do portal (armadilha 20)');
+      conf(/link: null/.test(bloco) || /catch \(_\) \{ link = null/.test(bloco),
+           'e a ausencia do link nao derruba a consulta');
+    }
+
+    conf(/function sgpeConsultaAbrir\(bruto\)/.test(idx), 'a tela tem a janela de consulta');
+    conf(/function sgpeIconeConsulta\(bruto\)/.test(idx), 'e o icone que a abre ja consultada');
+    conf(/if\(procVazio\(bruto\)\) return ''/.test(idx), 'o icone SOME onde nao ha processo cadastrado');
+    conf(/id="sgpeBtnTopo"/.test(idx), 'ha o botao no cabecalho do sistema');
+    conf(/Consultar SGPe/.test(idx), 'com o texto');
+    conf(/>F4<\/kbd>/.test(idx), 'e a tecla numa kbd ao lado — nao so no title');
+
+    // ⚠️ F4, E NAO F2: o F2 ja e a busca da fila do C.I. Duas telas na mesma tecla dariam a
+    // pessoa uma tecla que faz coisas diferentes conforme onde ela esta.
+    conf(/e\.key !== 'F4'/.test(idx), 'o atalho global e o F4');
+    {
+      const i = idx.indexOf("if(e.key !== 'F4'");
+      const bloco = idx.slice(i, i + 500);
+      conf(/tag === 'INPUT'/.test(bloco) && /tag === 'TEXTAREA'/.test(bloco),
+           'e nao dispara com o foco num campo de texto');
+      conf(/isContentEditable/.test(bloco), 'nem numa area editavel');
+    }
+
+    // ⚠️ CLICAR FORA NAO FECHA — a janela tem campo digitavel. Todos os outros modais do
+    // sistema fecham no clique fora (`e.target === el`); a AUSENCIA disso aqui e a decisao.
+    {
+      const i = idx.indexOf('function sgpeConsultaAbrir(bruto)');
+      const bloco = idx.slice(i, idx.indexOf('function sgpeIconeConsulta'));
+      conf(!/e\.target === el/.test(bloco), 'clicar fora NAO fecha — a janela tem campo digitavel');
+      conf(/e\.key === 'Escape'/.test(bloco), 'mas o Esc fecha');
+      conf(/removeEventListener\('keydown', tecla, true\)/.test(bloco),
+           'e o ouvinte do teclado sai junto — senao o Esc seguiria armado com a janela fechada');
+      conf(/el\.style\.zIndex = '1300'/.test(bloco), 'o modal sobe acima do cabecalho');
+      conf(/document\.body\.appendChild\(el\)/.test(bloco), 'e vai portalizado para o body');
+      // Os seis estados.
+      conf(/SIGLA_NAO_CADASTRADA/.test(bloco), 'estado: sigla nao cadastrada');
+      conf(/nao esta no mapa de orgaos do sistema|não está no mapa de órgãos do sistema/.test(bloco),
+           'com o texto que diz de quem e o mapa');
+      conf(/NAO_ENCONTRADO/.test(bloco) && /a sigla esta cadastrada|a sigla está cadastrada/.test(bloco),
+           'estado: nao encontrado — e o texto ja descarta a sigla');
+      conf(/SIGILOSO/.test(bloco) && /nao sao publicos|não são públicos/.test(bloco), 'estado: sigiloso');
+      conf(/Consultando o portal do SGPe/.test(bloco), 'estado: buscando');
+      conf(/bt\.style\.opacity = '\.5'/.test(bloco), 'com o botao em opacidade reduzida');
+      conf(/bt\.style\.boxShadow = 'none'/.test(bloco),
+           'e SEM o relevo — botao em relevo e apagado parece clicavel e nao e (armadilha 15)');
+    }
+
+    // A faixa de posicao — as duas cores dizem coisas diferentes.
+    conf(/#EAF3DE/.test(idx) && /#3B6D11/.test(idx), 'a faixa de ONDE ESTA e verde');
+    conf(/#FAEEDA/.test(idx) && /#BA7517/.test(idx), 'e a de EM TRANSITO e ambar');
+    conf(/ONDE ESTÁ AGORA/.test(idx) && /EM TRÂNSITO PARA/.test(idx), 'com os dois rotulos');
+    conf(/dias aqui/.test(idx), 'e o numero de dias');
+    {
+      const i = idx.indexOf('function sgpeFaixaPosicao');
+      const bloco = idx.slice(i, idx.indexOf('function sgpeDado'));
+      // ⚠️ `dias` NULO NAO E ZERO — e o transito sem tramite anterior, de onde nao ha de
+      // quando contar. "0 dias" ali afirmaria que o processo saiu hoje.
+      conf(/a\.dias !== null/.test(bloco), 'e dias NULO nao vira zero na tela');
+    }
+
+    // A linha do tempo — invertida, com o atual em cima.
+    {
+      const i = idx.indexOf('function sgpeLinhaTempo');
+      const bloco = idx.slice(i, idx.indexOf('function sgpeData'));
+      conf(/t\.slice\(\)\.reverse\(\)/.test(bloco), 'a linha do tempo vem invertida');
+      conf(/const atual   = i === 0/.test(bloco), 'e o atual e o primeiro da lista');
+      conf(/p\.ordem === 1/.test(bloco), 'a etiqueta "abertura" sai da ORDEM, nao da posicao');
+      conf(/permanencia_dias === null \? 'ainda aqui'/.test(bloco),
+           'e o tramite aberto diz "ainda aqui", nao "0 dias"');
+      conf(/quem_encaminhou/.test(bloco), 'cada passo diz quem encaminhou');
+    }
+
+    // ⚠️ O BOTAO "ABRIR NO SGPe" E CONDICIONAL, e o caso que obriga isso e REAL: o
+    // SCC 2049/2025 e um dos 7 que o cache marca NAO_ENCONTRADO, e o portal publico ACHA.
+    // Botao sempre visivel levaria a um endereco quebrado.
+    conf(/\$\{d\.link \? `<a href=/.test(idx), 'o botao "Abrir no SGPe" so aparece se houver link no cache');
+
+    // As recentes — no navegador de quem consultou, com validade por ITEM.
+    conf(/SGPE_RECENTES_MAX   = 5/.test(idx), 'as recentes sao 5');
+    conf(/SGPE_RECENTES_DIAS  = 7/.test(idx), 'e valem 7 dias');
+    {
+      const i = idx.indexOf('function sgpeRecentesLer');
+      const bloco = idx.slice(i, idx.indexOf('function sgpeRecentesLimpar'));
+      // ⚠️ A VALIDADE E POR ITEM, nao da lista: uma validade da lista faria a consulta de
+      // hoje morrer junto com a da semana passada.
+      conf(/Number\(x\.em\) >= limite/.test(bloco), 'e a validade e conferida item a item');
+      conf(/catch\(_\) \{ return \[\] \}/.test(bloco),
+           'e o localStorage e sempre protegido — no modo anonimo ele LANCA, e a janela nao abriria');
+    }
+    conf(/function sgpeRecentesLimpar/.test(idx), 'ha o botao de limpar');
+
+    conf(/F4<\/kbd>\n?\s*abre esta janela de qualquer tela/.test(idx)
+      || /abre esta janela de qualquer tela/.test(idx), 'o rodape ensina o F4');
+    conf(/Esc<\/kbd> fecha/.test(idx), 'e o Esc');
+
+    // Os dois pontos de acesso nas listas — e SO os dois.
+    conf(/procHtml\(l\.processo_pc, l\.codigo_pc, 'processo_pc'\) \+ sgpeIconeConsulta\(l\.processo_pc\)/.test(idx),
+         'o icone esta na fila do C.I.');
+    conf(/\$\{procHtml\(p\.processo_pc, p\.codigo_pc\)\}\$\{sgpeIconeConsulta\(p\.processo_pc\)\}/.test(idx),
+         'e no cartao da parcela da Minha Planilha');
+    // ⚠️ E NAO ENTROU NO `procHtml`. Se tivesse entrado, o icone apareceria nas 11 telas que
+    // desenham processo — inclusive nas colunas estreitas de tabela, onde 26 px quebram a
+    // linha. O pedido foi DOIS lugares.
+    {
+      const i = idx.indexOf('function procHtml(bruto, codigo_pc, campo)');
+      const bloco = idx.slice(i, i + 1600);
+      conf(!/sgpeIconeConsulta/.test(bloco), 'e o icone NAO entrou no procHtml — sao dois lugares, nao onze');
+    }
+    conf((idx.match(/sgpeIconeConsulta\(/g) || []).length === 3,
+         'sao 3 ocorrencias: a definicao e os dois pontos de acesso');
+
+    // O logo — SVG, e nao imagem.
+    conf(/function sgpeLogoSvg\(tam\)/.test(idx), 'ha UM componente de logo do SGPe');
+    conf(/#009640/.test(idx) && /#E30613/.test(idx), 'com o verde e o vermelho do SGPe');
 
     console.log(`\n=== RESULTADO: ${ok} passaram · ${falhou} falharam ===\n`);
     process.exit(falhou ? 1 : 0);

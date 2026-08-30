@@ -122,8 +122,15 @@ secao('7. A TELA');
   conf(/function tagPessoa\(u, opts\)/.test(html), 'ha UM componente de tag de pessoa');
   conf(/Dispensado<\/span>/.test(html), 'com a tag cinza "Dispensado"');
   conf(/Substituto<\/span>/.test(html), 'e a tag verde "Substituto"');
-  conf(/Números congelados em/.test(html), 'o card do dispensado diz que os numeros congelaram');
-  conf(/Designado em/.test(html), 'e o do substituto diz desde quando');
+  // ⚠️ OS DOIS TEXTOS MUDARAM EM 29/08, e o card nao e mais o lugar deles. O aviso saiu de
+  // dentro do card e virou FAIXA — a mesma faixa cinza logo abaixo do cabecalho, no lugar
+  // onde a linha do SIGEF ja aparecia. O card ficou so com o numero.
+  //   'Numeros congelados em'   ->  '... publicada em DD/MM/AAAA. Numeros congelados nessa data.'
+  //   'Designado em'            ->  'Designado pela Portaria N, publicada em DD/MM/AAAA'
+  // A checagem continua sendo a mesma: o dispensado tem de LER que os numeros pararam, e o
+  // substituto tem de LER desde quando. O que mudou foi onde isso esta escrito.
+  conf(/Números congelados nessa data/.test(html), 'a faixa do dispensado diz que os numeros congelaram');
+  conf(/Designado pela Portaria/.test(html), 'e a do substituto diz desde quando');
     // ⚠️ O TEXTO MUDOU EM 28/08 e a mudanca e o ponto: ele dizia 'Produtividade apurada ate a
   // data da dispensa', e a conta NAO recorta por data. O texto prometia um recorte que o
   // codigo nao faz. Agora diz o que a conta faz — a meta encerra, os numeros ficam.

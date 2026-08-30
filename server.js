@@ -7,7 +7,8 @@ const {
   ProcessoNaoEncontrado, SessaoExpirada,
 } = require('./lib/sgpe-link');
 const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
-const { linksDeLinhas, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
+const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
+const sgpePortal = require('./lib/sgpe-portal');
 
 const { semAcento, condicaoBusca } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
@@ -3675,6 +3676,50 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
   } finally { cli.release(); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /sgpe/consulta?sigla=SCC&numero=9622&ano=2024
+//
+// A consulta ao portal PÚBLICO do SGPe — situação e caminho do processo, sem sair do sistema.
+// A regra inteira mora em lib/sgpe-portal.js; aqui só se lê a query, se chama a lib e se
+// acrescenta o link do cache. FASE 2: SEM CACHE DE CONSULTA — cada chamada vai ao portal.
+//
+// ⚠️ OS QUATRO RETORNOS DA LIB SÃO RESPOSTAS, NÃO FALHAS, e por isso saem em HTTP 200 com
+// `data.erro` preenchido. "Não encontrei o processo" é uma resposta correta à pergunta do
+// analista; devolvê-la como 404 faria a tela tratar de erro o que é informação, e o front
+// teria de ler o status para saber o que desenhar. Quem sai com status próprio são os dois
+// que NÃO respondem à pergunta: 400 quando a entrada não dá para ler, e 502 quando o portal
+// não respondeu — a falha aí é de terceiro, e dizer "não encontrado" seria mentira.
+//
+// ⚠️ O `link` NÃO VEM DO PORTAL. Ele sai do cache sgpe_processo_ref, que é o que faz o botão
+// "Abrir no SGPe" existir (armadilha 20). Processo achado no portal e ausente do cache é caso
+// REAL e medido — o SCC 2049/2025 é um dos 7 que o cache marca NAO_ENCONTRADO e o portal acha.
+// Por isso o botão é condicional, e a ausência do link nunca invalida a consulta.
+app.get('/sgpe/consulta', async (req, res) => {
+  try {
+    const q = req.query || {};
+    const r = await sgpePortal.consultar(q.sigla, q.numero, q.ano);
+
+    if (r.erro === sgpePortal.ERROS.ENTRADA_INVALIDA)
+      return res.status(400).json({ data: null, error: { message: 'Informe sigla, número e ano.' } });
+    if (r.erro === sgpePortal.ERROS.REDE)
+      return res.status(502).json({ data: null, error: {
+        message: 'O portal do SGPe não respondeu. Tente de novo em instantes.', detalhe: r.motivo || null } });
+    if (r.erro) return res.json({ data: r, error: null });
+
+    // Só cache, nunca rede — a mesma regra do resto do sistema (ver lib/sgpe-lote.js).
+    let link = null;
+    try {
+      const { links } = await montarLinks(pool,
+        [`${r.processo.sigla} ${r.processo.numero}/${r.processo.ano}`]);
+      link = Object.values(links)[0] || null;
+    } catch (_) { link = null; }   // sem link a consulta continua valendo
+
+    res.json({ data: { ...r, link }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
 });
 
 // POST /sgpe/link_manual  body { processo, url, usuario_id, codigo_pc? }

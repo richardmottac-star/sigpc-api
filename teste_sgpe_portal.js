@@ -308,9 +308,60 @@ secao('8. A CONSULTA — com fetch dublê, sem tocar no portal');
     conf((idx.match(/sgpeIconeConsulta\(/g) || []).length === 3,
          'sao 3 ocorrencias: a definicao e os dois pontos de acesso');
 
-    // O logo — SVG, e nao imagem.
-    conf(/function sgpeLogoSvg\(tam\)/.test(idx), 'ha UM componente de logo do SGPe');
-    conf(/#009640/.test(idx) && /#E30613/.test(idx), 'com o verde e o vermelho do SGPe');
+    // ⚠️ O LOGO E A IMAGEM OFICIAL, E MORA NUMA CONSTANTE SO. Ate 30/08 era um SVG desenhado
+    // de memoria — duas setas verdes e um traco vermelho: parecia o logo e nao era. Marca de
+    // orgao publico nao se aproxima. E a constante e unica porque sao TRES pontos que a
+    // desenham (cabecalho do sistema, cabecalho do modal, icone das listas); tres copias do
+    // mesmo base64 seriam tres coisas para atualizar, e copia que ninguem compara diverge sem
+    // dar erro — a mesma razao do MAPA_NOME ter uma dona so.
+    conf(/const SGPE_LOGO = 'data:image\/png;base64,/.test(idx), 'o logo e a imagem oficial, em PNG');
+    conf(!/sgpeLogoSvg/.test(idx), 'e o SVG desenhado saiu — nao ficou chamada orfa');
+    conf((idx.match(/SGPE_LOGO/g) || []).length === 4,
+         'a constante e usada nos tres lugares — definicao + modal/icone + o src do cabecalho');
+    // ⚠️ O CABECALHO DO SISTEMA E HTML ESTATICO: ali nao ha template literal, e a chamada da
+    // funcao sairia como TEXTO na barra verde. Por isso o `src` e preenchido pelo script.
+    conf(/id="sgpeLogoTopo"/.test(idx) && /_lg\.src = SGPE_LOGO/.test(idx),
+         'e o cabecalho estatico recebe o src pelo script, sem repetir o base64');
+
+    // ── O TAMANHO DA JANELA (30/08) ──────────────────────────────────────────
+    conf(/width:860px;max-width:96vw;max-height:90vh/.test(idx), 'a janela e 860px por 90vh');
+    // ⚠️ SO O MIOLO ROLA. O `.mc` do sistema tem overflow-y:auto no bloco inteiro; aqui ele e
+    // sobrescrito para hidden e a rolagem desce um nivel. Sem isso, num processo de 34
+    // tramites o cabecalho e a identificacao saem da tela junto com o resto.
+    conf(/overflow:hidden;display:flex;flex-direction:column/.test(idx), 'a caixa e flex e nao rola inteira');
+    conf(/id="sgpeRolagem" style="overflow-y:auto;flex:1;min-height:0/.test(idx), 'so o miolo rola');
+    conf(/class="mch" style="background:#F4F8F2;gap:11px;flex-shrink:0;"/.test(idx), 'o cabecalho e fixo');
+    conf(/border-bottom:1px solid var\(--cl\);flex-shrink:0;/.test(idx), 'e a linha da busca tambem');
+
+    // ⚠️ A IDENTIFICACAO SUBIU PARA A PARTE FIXA, e por isso saiu do sgpeEncontradoHtml para
+    // funcao propria: o que identifica nao pode rolar para fora enquanto se le o detalhe.
+    conf(/function sgpeIdentHtml\(d\)/.test(idx), 'a identificacao do processo tem funcao propria');
+    conf(/id="sgpeIdent"/.test(idx), 'e vive na linha da busca');
+    {
+      const i = idx.indexOf('function sgpeEncontradoHtml(d) {');
+      const bloco = idx.slice(i, idx.indexOf('// ── OS SEIS ESTADOS'));
+      conf(!/numero_oficial/.test(bloco), 'e NAO se repete no corpo que rola');
+      conf(/repeat\(4,1fr\)/.test(bloco), 'a grade de dados e de QUATRO colunas');
+    }
+    // ⚠️ LIMPA A CADA CONSULTA: sem isso o numero do processo anterior ficaria em cima de uma
+    // resposta "nao encontrado" — a parte fixa mentiria sobre o miolo.
+    conf(/ident\.innerHTML = ''/.test(idx), 'a identificacao e limpa a cada consulta nova');
+
+    // ── EXPANDIR ─────────────────────────────────────────────────────────────
+    conf(/id="sgpeExp"/.test(idx), 'ha o botao de expandir, ao lado do fechar');
+    conf(/function sgpeAplicarTamanho\(mc, bt, cheia\)/.test(idx),
+         'e UMA funcao aplica o tamanho — abertura e troca pelo mesmo caminho');
+    // ⚠️ A ESCOLHA E DE SESSAO, nao de sempre: quem expande esta expandindo para o processo de
+    // 34 tramites que tem na frente agora. No localStorage, a janela abriria em tela cheia
+    // semanas depois para uma consulta de duas linhas.
+    conf(/SGPE_CHEIA_CHAVE = 'sigpc_sgpe_tela_cheia'/.test(idx), 'a escolha tem chave propria');
+    {
+      const i = idx.indexOf('function sgpeCheiaLer()');
+      const bloco = idx.slice(i, idx.indexOf('function sgpeAplicarTamanho'));
+      conf(/sessionStorage/.test(bloco) && !/localStorage/.test(bloco),
+           'e vive na SESSAO, nao para sempre');
+      conf(/catch\(_\)/.test(bloco), 'protegida — no modo anonimo o sessionStorage LANCA');
+    }
 
     console.log(`\n=== RESULTADO: ${ok} passaram · ${falhou} falharam ===\n`);
     process.exit(falhou ? 1 : 0);

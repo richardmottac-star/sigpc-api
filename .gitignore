@@ -143,3 +143,14 @@ reverter_ligar_substitutos_*.json
 
 # Lista de reversao da transferencia do Samoel (28/08/2026) — 32 PCs com o estado anterior.
 reverter_transferir_samoel_*.json
+
+# Lista de reversao da sincronizacao do SGPe (30/08/2026) — o DDL das duas tabelas e as
+# chaves de cada rodada do job. Artefato de EXECUCAO, nao codigo: o job roda de hora em hora
+# e reescreve o arquivo da rodada a cada vez, entao versiona-lo encheria o historico de
+# commits que nao dizem nada.
+#
+# ⚠️ O PADRAO COBRE OS DOIS NOMES — o do DDL (reverter_sgpe_situacao_AAAAMMDD.json) e o da
+# rodada (reverter_sgpe_situacao_rodada.json) —, e cobre tambem os que o lib/reversao.js
+# escreve AO LADO com carimbo de tempo quando ja existe uma gravacao no destino. Sao esses os
+# que mais aparecem: cada `--gravar` repetido cria um.
+reverter_sgpe_*.json

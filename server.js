@@ -3393,12 +3393,14 @@ app.get('/busca_global', async (req, res) => {
     const setCasaram = new Set(casaram.map(r => r.codigo_pc));
 
     const { rows } = await cli.query(
-      `SELECT codigo_pc, codigo_nl, tipo, tr, parcial_num, processo_pc, processo_mae, entidade,
-              cnpj_cpf, status, situacao_atual, parecer_tipo, baixada, analista_id, analista_nome,
-              grupo, dt_assumida, dt_inicio_analise, dt_limite_pc,
-              ci_situacao, ci_rodada, dt_envio_ci, ci_encerrado_em
-         FROM prestacoes_contas
-        WHERE setorial_id='FCEE' AND tr = ANY($1)
+      `SELECT p.codigo_pc, p.codigo_nl, p.tipo, p.tr, p.parcial_num, p.processo_pc, p.processo_mae, p.entidade,
+              p.cnpj_cpf, p.status, p.situacao_atual, p.parecer_tipo, p.baixada, p.analista_id, p.analista_nome,
+              p.grupo, p.dt_assumida, p.dt_inicio_analise, p.dt_limite_pc,
+              p.ci_situacao, p.ci_rodada, p.dt_envio_ci, p.ci_encerrado_em,
+              ${sigef.SQL_PRE_GT} AS sigef_pre_gt,
+              ${sigef.SQL_NL_RESIDUAL} AS nl_residual
+         FROM prestacoes_contas p
+        WHERE p.setorial_id='FCEE' AND p.tr = ANY($1)
         ORDER BY tr, parcial_num, codigo_pc`, [trs]);
 
     const hoje = (await cli.query(`SELECT ${HOJE_BR}::text d`)).rows[0].d;

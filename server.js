@@ -9,6 +9,7 @@ const {
 const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
 const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
 const sgpePortal = require('./lib/sgpe-portal');
+const vinculo = require('./lib/sgpe-vinculo');
 
 const { semAcento, condicaoBusca, condicaoTr, condicaoProcesso } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
@@ -3734,6 +3735,62 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
   } finally { cli.release(); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /sgpe/vinculo?processo=SCC%203538/2020
+//
+// A faixa de vinculação do modal do SGPe: este processo é a MÃE de uma TR ou uma PARCIAL
+// dela, e o que mais existe nessa TR. Só leitura, nenhuma coluna nova, nenhuma tabela nova.
+//
+// ⚠️ A MÃE VEM PRIMEIRO, e a ordem é a resposta. Um mesmo texto pode estar nos dois campos —
+// há TRs em que o processo mãe também é o de uma parcial —, e perguntar `processo_pc` antes
+// devolveria "parcial" para o que é mãe. Quem abre a faixa quer saber o papel do processo que
+// tem na mão, e "mãe" é a informação mais forte das duas.
+//
+// ⚠️ NÃO ACHOU É NÃO ACHOU. Sem TR aproximada, sem "processo parecido", sem devolver a TR do
+// prefixo. `encontrado: false` é uma resposta correta e barata de entender; uma TR errada
+// apresentada com confiança é o tipo de coisa que faz alguém corrigir o processo certo.
+//
+// ⚠️ E DEVOLVE **TODAS** AS PCs DA TR — sem filtro de analista, sem filtro de baixada, sem
+// `LIMIT`. A faixa diz o tamanho da TR; qualquer recorte aqui daria um número menor que a
+// pessoa leria como o total. É o oposto do resto do sistema, onde o recorte por analista é a
+// regra, e é intencional: aqui a pergunta é sobre o PROCESSO, não sobre a carteira de alguém.
+app.get('/sgpe/vinculo', async (req, res) => {
+  try {
+    const bruto = String(req.query.processo == null ? '' : req.query.processo).trim();
+    if (!bruto)
+      return res.status(400).json({ data: null, error: { message: 'Informe o processo.' } });
+
+    const k = vinculo.chave(bruto);
+    if (!k) return res.json({ data: vinculo.NAO_ENCONTRADO, error: null });
+
+    // ⚠️ A CHAVE É APLICADA AOS DOIS LADOS PELA MESMA EXPRESSÃO — a da lib, uma vez só. O
+    // `$1::text` não é enfeite: sem o tipo, o Postgres não sabe resolver `upper($1)` e recusa
+    // a consulta com "could not determine data type of parameter".
+    const achar = async (coluna) => {
+      const { rows } = await pool.query(
+        `SELECT tr FROM prestacoes_contas
+          WHERE ${vinculo.CHAVE_SQL(coluna)} = ${vinculo.CHAVE_SQL('$1::text')}
+          LIMIT 1`, [bruto]);
+      return rows[0] ? rows[0].tr : null;
+    };
+
+    let papel = 'mae';
+    let tr = await achar('processo_mae');
+    if (!tr) { papel = 'parcial'; tr = await achar('processo_pc'); }
+    if (!tr) return res.json({ data: vinculo.NAO_ENCONTRADO, error: null });
+
+    const { rows } = await pool.query(
+      `SELECT tr, entidade, processo_mae, processo_pc, parcial_num, tipo
+         FROM prestacoes_contas
+        WHERE tr = $1
+        ORDER BY codigo_pc`, [tr]);
+
+    res.json({ data: vinculo.montar(rows, k, papel), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

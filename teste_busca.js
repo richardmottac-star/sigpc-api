@@ -216,5 +216,66 @@ console.log('\n═══ GET /prestacoes_contas/resumo_tr — como a rota usa as
   conf(/const r = condicaoBusca\(busca, values, i\)/.test(bloco), 'o `busca` continua exatamente como era');
 }
 
+console.log('\n═══ o prefixo de tabela — nem toda consulta tem uma tabela só ═══');
+{
+  // ⚠️ SEM QUALIFICAR, O POSTGRES ESCOLHE SOZINHO OU RECUSA POR AMBIGUIDADE, e o primeiro
+  // caso é o que estraga calado. O C.I. chama a coluna de `p.tr`; o Acompanhamento alcança o
+  // processo por `x.` dentro de um EXISTS, porque o histórico não tem essa coluna.
+  const v1 = [], v2 = [];
+  conf(condicaoTr('2021TR', v1, 1).condicao === 'tr ILIKE $1', 'sem prefixo, a coluna sai nua');
+  conf(condicaoTr('2021TR', v2, 1, 'p.').condicao === 'p.tr ILIKE $1', 'com prefixo, sai qualificada');
+  const cp = condicaoProcesso('SCC 197/2021', [], 1, 'x.');
+  conf(cp.condicao.includes('x.processo_pc') && cp.condicao.includes('x.processo_mae'),
+       'e o processo qualifica os DOIS campos', cp.condicao.slice(0, 80));
+  conf(!condicaoProcesso('SCC 197/2021', [], 1).condicao.includes('x.'), 'o padrão continua sem prefixo');
+}
+
+console.log('\n═══ as outras três rotas — como cada uma liga tr e processo ═══');
+{
+  const leia = (arq) => fs.readFileSync(path.join(__dirname, arq), 'utf8');
+  const src = leia('server.js');
+
+  // ── GET /prestacoes_contas ────────────────────────────────────────────────
+  const iPc = src.indexOf("app.get('/prestacoes_contas'");
+  const bPc = src.slice(iPc, src.indexOf('const where =', iPc));
+  conf(/tr, processo, codigo_pc/.test(bPc), '/prestacoes_contas lê `processo` junto do `tr`');
+  conf(/const cTr = condicaoTr\(tr, values, i\)/.test(bPc), 'e o `tr` passou a sair da lib');
+  // ⚠️ O `tr = $n` EXATO SAIU. A barra de filtro precisa aceitar o pedaço — só o ano —, e a
+  // igualdade devolveria zero calado. Medido em 31/08: das 1.560 TRs do acervo, ZERO são
+  // substring de outra, então quem manda o código inteiro recebe as mesmas linhas de antes.
+  conf(!/conditions\.push\(`tr = \$/.test(bPc), 'e a igualdade exata não ficou para trás');
+  // ⚠️ AQUI SEM SUBCONSULTA, ao contrário da resumo_tr: a lista é de PCs, não agregada.
+  conf(/const cProc = condicaoProcesso\(processo, values, i\);\s*\n\s*if \(cProc\) \{ i = cProc\.proximo; conditions\.push\(cProc\.condicao\); \}/.test(bPc),
+       'e o processo entra DIRETO, sem subconsulta — não há GROUP BY para estragar');
+  conf(/conditions\.join\(' AND '\)/.test(src.slice(iPc, iPc + 4000)), 'os filtros somam com AND');
+
+  // ── GET /ci/fila ──────────────────────────────────────────────────────────
+  const ci = leia('lib/ci-fila.js');
+  conf(/function montarFiltro\(\{ chip, meuId, q, sgpe, tr, processo, analista_id, espera \}\)/.test(ci),
+       '/ci/fila recebe `tr` e `processo`');
+  conf(/condicaoTr\(tr, params, params\.length \+ 1, 'p\.'\)/.test(ci), 'com o prefixo `p.`');
+  conf(/condicaoProcesso\(processo, params, params\.length \+ 1, 'p\.'\)/.test(ci), 'nos dois');
+  // ⚠️ ELES SOMAM COM O `q`, E NÃO COM O `sgpe`. O bloco do `sgpe` tem um `return` antecipado
+  // — é o "leve-me a este processo", que ignora o chip por decisão do Richard (25/08) e
+  // continua ignorando. Os novos entram DEPOIS dele: são as caixas da barra de filtro, que
+  // estreitam o recorte aberto. Se entrassem antes, mudariam o `sgpe` sem ninguém pedir.
+  const iSg = ci.indexOf('if (sgpe) {'), iTr = ci.indexOf('condicaoTr(tr, params');
+  conf(iSg > 0 && iTr > iSg, 'e entram DEPOIS do return antecipado do `sgpe`');
+  conf(/const t = String\(q \?\? ''\)\.trim\(\);/.test(ci), 'o `q` continua exatamente como era');
+
+  // ── GET /acompanhamento ───────────────────────────────────────────────────
+  const ac = leia('lib/acompanhamento.js');
+  conf(/condicaoTr\(q\.tr, params, params\.length \+ 1, 'h\.'\)/.test(ac),
+       '/acompanhamento passou a usar a lib no `tr`, com o prefixo `h.`');
+  conf(!/h\.tr ILIKE \$\{p\$\('%' \+ String\(q\.tr\)/.test(ac), 'e a regra escrita à mão saiu');
+  // ⚠️ O PROCESSO ATRAVESSA POR `EXISTS`: o histórico guarda (tr, parcial_num) e NÃO tem
+  // processo. Com um JOIN a linha do histórico se multiplicaria por PC da parcela.
+  conf(/condicaoProcesso\(q\.processo, params, params\.length \+ 1, 'x\.'\)/.test(ac),
+       'e o processo entra com o prefixo `x.`');
+  conf(/EXISTS \(SELECT 1 FROM prestacoes_contas x[\s\S]{0,200}\$\{cProc\.condicao\}\)/.test(ac),
+       'dentro de um EXISTS, e não de um JOIN');
+  conf(/const t = String\(q\.q \?\? ''\)\.trim\(\);/.test(ac), 'a busca livre `q` continua igual');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);
 process.exit(falhou ? 1 : 0);

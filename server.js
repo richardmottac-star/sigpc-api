@@ -1388,7 +1388,7 @@ app.post('/migracao/planilha-analista', async (req, res) => {
 app.get('/prestacoes_contas', async (req, res) => {
   try {
     const {
-      tr, codigo_pc, codigo_nl, analista_id, analista_nome, grupo,
+      tr, processo, codigo_pc, codigo_nl, analista_id, analista_nome, grupo,
       status, baixada, setorial_id, conflito, estornada, enviado_ci, busca,
       limit = 9999, offset = 0
     } = req.query;
@@ -1396,7 +1396,24 @@ app.get('/prestacoes_contas', async (req, res) => {
     const values = [];
     let i = 1;
 
-    if (tr) { conditions.push(`tr = $${i++}`); values.push(tr); }
+    // ⚠️ O `tr` DEIXOU DE SER IGUALDADE EXATA e passou a ser o `condicaoTr` da lib, o MESMO
+    // que a `resumo_tr` usa (31/08/2026). A barra de filtro precisa aceitar o pedaço — só o
+    // ano, para ver as TRs de 2020 —, e um `tr = $1` devolveria zero calado. Ter o mesmo nome
+    // de parâmetro querendo dizer coisas diferentes em duas rotas é pior que a mudança.
+    //
+    // ⚠️ E ISTO NÃO MEXE EM QUEM JÁ CHAMAVA, o que foi MEDIDO, não presumido: das 1.560 TRs
+    // do acervo, ZERO são substring de outra (conferido no banco em 31/08). Quem manda o
+    // código inteiro — e o único chamador é o detalhe da TR — recebe exatamente as mesmas
+    // linhas. O `ILIKE` só amplia, e aqui não havia o que ampliar.
+    const cTr = condicaoTr(tr, values, i);
+    if (cTr) { i = cTr.proximo; conditions.push(cTr.condicao); }
+
+    // ⚠️ AQUI SEM SUBCONSULTA, ao contrário da `resumo_tr`: esta lista é de PCs, uma linha por
+    // PC, e não há `GROUP BY` para uma condição direta estragar. Lá o filtro tinha de
+    // preservar a contagem da TR inteira; aqui filtrar a linha É o que se quer.
+    const cProc = condicaoProcesso(processo, values, i);
+    if (cProc) { i = cProc.proximo; conditions.push(cProc.condicao); }
+
     if (codigo_pc) { conditions.push(`codigo_pc = $${i++}`); values.push(codigo_pc); }
     if (codigo_nl) { conditions.push(`codigo_nl = $${i++}`); values.push(codigo_nl); }
     if (analista_id) { conditions.push(`analista_id = $${i++}`); values.push(parseInt(analista_id)); }
@@ -2436,6 +2453,7 @@ app.get('/ci/fila', async (req, res) => {
     const chip = ciFila.CHIPS.includes(req.query.chip) ? req.query.chip : 'fila';
     const { sql, params } = ciFila.montarFiltro({
       chip, meuId: quem.id, q: req.query.q, sgpe,
+      tr: req.query.tr, processo: req.query.processo,
       analista_id: req.query.analista_id, espera: req.query.espera,
     });
 

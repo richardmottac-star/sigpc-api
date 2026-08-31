@@ -5148,9 +5148,15 @@ app.get('/parcela/acoes', async (req, res) => {
     const pe = papel.perfilEfetivo(quem);
 
     const { rows } = await cli.query(
+      // ⚠️ AS TRÊS DA ENGENHARIA ENTRARAM EM 31/08/2026, no fim e sem mexer na ordem das que já
+      // estavam. Sem elas o menu de Ações perguntava `d.eng_situacao` e recebia `undefined`
+      // SEMPRE: "Registrar envio" nunca virava "Registrar retorno", o "Desfazer" não aparecia e
+      // o "Registrar parecer" não era bloqueado — tudo isso enquanto a pílula, que lê de
+      // `GET /prestacoes_contas` (`SELECT p.*`), mostrava "Na engenharia" na mesma linha.
       `SELECT codigo_pc, tr, parcial_num, setorial_id, tipo, baixada, status, situacao_atual,
               parecer_tipo, origem_baixa, baixado_por, analista_id, enviado_ci, enviado_ci_por,
-              ci_situacao FROM prestacoes_contas WHERE codigo_pc = $1`, [req.query.codigo_pc]);
+              ci_situacao, eng_situacao, eng_enviada_em, eng_retorno_em
+         FROM prestacoes_contas WHERE codigo_pc = $1`, [req.query.codigo_pc]);
     if (!rows.length) return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
     const pc = rows[0];
 
@@ -5204,6 +5210,12 @@ app.get('/parcela/acoes', async (req, res) => {
       data: {
         codigo_pc: pc.codigo_pc, tr: pc.tr, tipo: pc.tipo, baixada: pc.baixada,
         enviado_ci: pc.enviado_ci, destinos: correcao.DESTINOS,
+        // ⚠️ E AQUI TAMBÉM — o SELECT sozinho não resolve. Esta rota MONTA um objeto explícito,
+        // campo a campo: coluna que não for nomeada aqui é descartada em silêncio, e a resposta
+        // volta 200 do mesmo jeito. Foi por isso que a conferência desta mudança testou a CHAVE
+        // existir no objeto, e não o código HTTP.
+        eng_situacao: pc.eng_situacao, eng_enviada_em: pc.eng_enviada_em,
+        eng_retorno_em: pc.eng_retorno_em,
         corrigir_situacao: { ...corr, pendente: pendentes.includes('corrigir_situacao') },
         puxar_ci: { ...puxar, pendente: pendentes.includes('puxar_ci') },
         // Desfazer a puxada — só superadmin, e só quando há foto. PC sem foto vem com

@@ -4633,6 +4633,112 @@ app.post('/parcela/situacao', async (req, res) => {
 
 // POST /parcela/ci — body { tr, parcial_num, analista_id, observacao, parecer_ci?, setorial_id? }
 // D2: CI e campo proprio. Exige parecer previo e NAO apaga parecer_tipo.
+// ══════════════════════════════════════════════════════════════════════════════
+//  POST /pc/:id/engenharia  { acao: 'enviar' | 'retornar', usuario_id }
+//
+//  Registra que a PC foi encaminhada à FCEE/DIAD/SEENG, ou que voltou de lá.
+//
+//  ⚠️ O SISTEMA NÃO MOVE PROCESSO. Quem move é o SGPe. Esta rota REGISTRA que alguém moveu —
+//  e é por isso que ela não fala com o SGPe nem valida nada lá: não teria o que validar.
+//
+//  ⚠️ A PC NÃO MUDA DE DONO. `analista_id`, `analista_nome`, `grupo`, `situacao_atual`, os
+//  `ci_*` e a `sigef_declaracao` NÃO aparecem no SET — a PC sai da fila de análise, não do
+//  acervo do analista. Há teste que falha se um desses nomes voltar a este UPDATE.
+//
+//  ⚠️ E NÃO MEXE EM PRODUTIVIDADE nesta rodada. O desconto entra depois, em `lib/sigef.js`,
+//  junto com a regra — aqui só se grava o estado.
+// ══════════════════════════════════════════════════════════════════════════════
+app.post('/pc/:id/engenharia', async (req, res) => {
+  const b = req.body || {};
+  const acao = String(b.acao || '').trim();
+  if (acao !== 'enviar' && acao !== 'retornar')
+    return res.status(400).json({ data: null, error: { message: "acao deve ser 'enviar' ou 'retornar'." } });
+  if (await barrouPreparacao(res, b.usuario_id)) return;
+
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, b.usuario_id);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+
+    // ⚠️ ACEITA `codigo_pc` OU o `id` numérico. A identidade do projeto é o `codigo_pc`, e é
+    // ele que a tela tem na mão; o id numérico entra porque o caminho da rota se chama `:id` e
+    // recusá-lo seria surpresa. `FOR UPDATE` porque a decisão depende do estado atual.
+    const chave = String(req.params.id || '').trim();
+    const { rows: achadas } = await cli.query(
+      `SELECT id, codigo_pc, tr, parcial_num, setorial_id, analista_id, eng_situacao,
+              eng_enviada_em, eng_retorno_em
+         FROM prestacoes_contas
+        WHERE codigo_pc = $1 OR ($1 ~ '^[0-9]+$' AND id = $1::int)
+        FOR UPDATE`, [chave]);
+    if (!achadas.length) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: `PC ${chave} não encontrada.` } }); }
+    const pc = achadas[0];
+
+    // ── a ordem do fluxo ──────────────────────────────────────────────────────
+    // ⚠️ AÇÃO FORA DE ORDEM NÃO GRAVA, e a mensagem diz o estado em que a PC está — "erro ao
+    // registrar" mandaria o analista tentar de novo o que nunca vai funcionar.
+    if (acao === 'enviar' && pc.eng_situacao) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message:
+        `Esta prestação já está na engenharia desde ${pc.eng_enviada_em ? new Date(pc.eng_enviada_em).toLocaleDateString('pt-BR') : 'data não registrada'}. Registre o retorno antes de enviar de novo.` } });
+    }
+    if (acao === 'retornar' && pc.eng_situacao !== 'na_engenharia') {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message:
+        'Esta prestação não está na engenharia — não há retorno a registrar.' } });
+    }
+
+    // ⚠️ `NOW() AT TIME ZONE 'America/Sao_Paulo'` — a coluna é `timestamp` SEM fuso, e `NOW()`
+    // puro gravaria UTC. Às 21h de Brasília o UTC já virou o dia seguinte, e o contador de
+    // dias da tela mostraria um dia a mais na mesma noite. É a armadilha 18 do projeto.
+    const AGORA_BR = "(NOW() AT TIME ZONE 'America/Sao_Paulo')";
+    const { rows: gravadas } = acao === 'enviar'
+      ? await cli.query(
+          `UPDATE prestacoes_contas
+              SET eng_situacao = 'na_engenharia', eng_enviada_em = ${AGORA_BR},
+                  eng_retorno_em = NULL, atualizado_em = NOW()
+            WHERE id = $1
+        RETURNING id, codigo_pc, tr, parcial_num, eng_situacao, eng_enviada_em, eng_retorno_em`, [pc.id])
+      : await cli.query(
+          `UPDATE prestacoes_contas
+              SET eng_situacao = NULL, eng_retorno_em = ${AGORA_BR}, atualizado_em = NOW()
+            WHERE id = $1
+        RETURNING id, codigo_pc, tr, parcial_num, eng_situacao, eng_enviada_em, eng_retorno_em`, [pc.id]);
+
+    if (gravadas.length !== 1) { await cli.query('ROLLBACK');
+      return res.status(500).json({ data: null, error: { message: `Esperava gravar 1 linha e gravou ${gravadas.length}.` } }); }
+
+    // ⚠️ `executado_por` PREENCHIDO. Ele está NULO nas 1.765 linhas antigas do histórico, e
+    // cada evento novo sem ele aumenta um buraco que ninguém consegue fechar depois — não dá
+    // para descobrir quem clicou meses atrás.
+    await cli.query(
+      `INSERT INTO parcela_historico
+         (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id,
+          observacao, executado_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [pc.tr, pc.parcial_num, pc.setorial_id || 'FCEE',
+       acao === 'enviar' ? 'engenharia_envio' : 'engenharia_retorno',
+       pc.eng_situacao || null,
+       acao === 'enviar' ? 'na_engenharia' : null,
+       // ⚠️ `analista_id` é o DONO da PC, e `executado_por` é quem clicou. São colunas
+       // diferentes de propósito: no "agir pela conta de outro" as duas divergem, e foi
+       // trocá-las que gravaria a ação na produtividade de quem está dando suporte.
+       pc.analista_id ?? null,
+       acao === 'enviar'
+         ? `${pc.codigo_pc} encaminhada à engenharia (FCEE/DIAD/SEENG)`
+         : `${pc.codigo_pc} retornou da engenharia (FCEE/DIAD/SEENG)`,
+       quem.id]);
+
+    await cli.query('COMMIT');
+    res.json({ data: gravadas[0], error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK') } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release() }
+});
+
 app.post('/parcela/ci', async (req, res) => {
   const b = req.body || {};
   if (await barrouPreparacao(res, b.analista_id)) return;

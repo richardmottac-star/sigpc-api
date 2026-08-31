@@ -159,3 +159,4 @@ reverter_sgpe_*.json
 # SIGEF de 30/08/2026, e o texto extraido dos PDFs (que sao fonte externa, nao codigo).
 reverter_import_sigef_*.json
 .sigef_tmp/
+reverter_engenharia_*.json

@@ -4648,11 +4648,60 @@ app.post('/parcela/situacao', async (req, res) => {
 //  ⚠️ E NÃO MEXE EM PRODUTIVIDADE nesta rodada. O desconto entra depois, em `lib/sigef.js`,
 //  junto com a regra — aqui só se grava o estado.
 // ══════════════════════════════════════════════════════════════════════════════
+// ⚠️ `NOW() AT TIME ZONE 'America/Sao_Paulo'` — as colunas são `timestamp` SEM fuso, e `NOW()`
+// puro gravaria UTC. Às 21h de Brasília o UTC já virou o dia seguinte, e o contador de dias da
+// tela mostraria um dia a mais na mesma noite. É a armadilha 18 do projeto.
+const ENG_AGORA_BR = "(NOW() AT TIME ZONE 'America/Sao_Paulo')";
+
+// ── AS TRÊS AÇÕES, NUM ÍNDICE SÓ ─────────────────────────────────────────────
+//
+// ⚠️ RETORNAR E DESFAZER NÃO SÃO A MESMA COISA, e a diferença é o que este índice guarda:
+//   · RETORNAR  preserva `eng_enviada_em` e grava `eng_retorno_em`. O período EXISTIU.
+//   · DESFAZER  zera os TRÊS campos. O período NÃO existiu — foi registro por engano, e o que
+//     se apaga é o registro, não uma passagem que houve.
+// Depois de gravado não dá para distinguir os dois olhando a linha, então a distinção tem de
+// estar aqui, escrita, e não na cabeça de quem chamar a rota.
+//
+// ⚠️ UM CAMINHO DE CÓDIGO, TRÊS TEXTOS — o mesmo desenho do `ENG_ACOES` do `index.html`. Três
+// blocos `if` fariam a terceira ação divergir das outras duas no primeiro ajuste, que é
+// exatamente o que aconteceu com o mapa de nomes curtos (chegou a ter três cópias).
+const ENG_ACOES = {
+  enviar: {
+    // `exige: null` = a PC NÃO pode estar na engenharia.
+    exige: null,
+    recusa: (pc) => `Esta prestação já está na engenharia desde ${pc.eng_enviada_em ? new Date(pc.eng_enviada_em).toLocaleDateString('pt-BR') : 'data não registrada'}. Registre o retorno antes de enviar de novo.`,
+    set: `eng_situacao = 'na_engenharia', eng_enviada_em = ${ENG_AGORA_BR}, eng_retorno_em = NULL`,
+    evento: 'engenharia_envio',
+    valor_novo: 'na_engenharia',
+    texto: (pc) => `${pc.codigo_pc} encaminhada à engenharia (FCEE/DIAD/SEENG)`,
+  },
+  retornar: {
+    exige: 'na_engenharia',
+    recusa: () => 'Esta prestação não está na engenharia — não há retorno a registrar.',
+    set: `eng_situacao = NULL, eng_retorno_em = ${ENG_AGORA_BR}`,
+    evento: 'engenharia_retorno',
+    valor_novo: null,
+    texto: (pc) => `${pc.codigo_pc} retornou da engenharia (FCEE/DIAD/SEENG)`,
+  },
+  desfazer: {
+    exige: 'na_engenharia',
+    recusa: () => 'Esta prestação não está na engenharia — não há envio a desfazer. Se ela já voltou, o registro do período fica como está.',
+    // ⚠️ OS TRÊS A NULL, inclusive `eng_retorno_em`. Guardar qualquer data aqui afirmaria que
+    // houve passagem pela engenharia — e o que esta ação diz é justamente que não houve.
+    set: 'eng_situacao = NULL, eng_enviada_em = NULL, eng_retorno_em = NULL',
+    evento: 'engenharia_desfeito',
+    valor_novo: null,
+    texto: (pc) => `${pc.codigo_pc} — registro de envio à engenharia apagado (lançado por engano)`,
+  },
+};
+
 app.post('/pc/:id/engenharia', async (req, res) => {
   const b = req.body || {};
   const acao = String(b.acao || '').trim();
-  if (acao !== 'enviar' && acao !== 'retornar')
-    return res.status(400).json({ data: null, error: { message: "acao deve ser 'enviar' ou 'retornar'." } });
+  const cfg = ENG_ACOES[acao];
+  if (!cfg)
+    return res.status(400).json({ data: null, error: { message:
+      `acao deve ser uma de: ${Object.keys(ENG_ACOES).join(', ')}.` } });
   if (await barrouPreparacao(res, b.usuario_id)) return;
 
   const cli = await pool.connect();
@@ -4676,36 +4725,23 @@ app.post('/pc/:id/engenharia', async (req, res) => {
       return res.status(404).json({ data: null, error: { message: `PC ${chave} não encontrada.` } }); }
     const pc = achadas[0];
 
-    // ── a ordem do fluxo ──────────────────────────────────────────────────────
+    // ── a ordem do fluxo, pelo índice ────────────────────────────────────────
     // ⚠️ AÇÃO FORA DE ORDEM NÃO GRAVA, e a mensagem diz o estado em que a PC está — "erro ao
     // registrar" mandaria o analista tentar de novo o que nunca vai funcionar.
-    if (acao === 'enviar' && pc.eng_situacao) {
+    if ((pc.eng_situacao || null) !== cfg.exige) {
       await cli.query('ROLLBACK');
-      return res.status(409).json({ data: null, error: { message:
-        `Esta prestação já está na engenharia desde ${pc.eng_enviada_em ? new Date(pc.eng_enviada_em).toLocaleDateString('pt-BR') : 'data não registrada'}. Registre o retorno antes de enviar de novo.` } });
-    }
-    if (acao === 'retornar' && pc.eng_situacao !== 'na_engenharia') {
-      await cli.query('ROLLBACK');
-      return res.status(409).json({ data: null, error: { message:
-        'Esta prestação não está na engenharia — não há retorno a registrar.' } });
+      return res.status(409).json({ data: null, error: { message: cfg.recusa(pc) } });
     }
 
-    // ⚠️ `NOW() AT TIME ZONE 'America/Sao_Paulo'` — a coluna é `timestamp` SEM fuso, e `NOW()`
-    // puro gravaria UTC. Às 21h de Brasília o UTC já virou o dia seguinte, e o contador de
-    // dias da tela mostraria um dia a mais na mesma noite. É a armadilha 18 do projeto.
-    const AGORA_BR = "(NOW() AT TIME ZONE 'America/Sao_Paulo')";
-    const { rows: gravadas } = acao === 'enviar'
-      ? await cli.query(
-          `UPDATE prestacoes_contas
-              SET eng_situacao = 'na_engenharia', eng_enviada_em = ${AGORA_BR},
-                  eng_retorno_em = NULL, atualizado_em = NOW()
-            WHERE id = $1
-        RETURNING id, codigo_pc, tr, parcial_num, eng_situacao, eng_enviada_em, eng_retorno_em`, [pc.id])
-      : await cli.query(
-          `UPDATE prestacoes_contas
-              SET eng_situacao = NULL, eng_retorno_em = ${AGORA_BR}, atualizado_em = NOW()
-            WHERE id = $1
-        RETURNING id, codigo_pc, tr, parcial_num, eng_situacao, eng_enviada_em, eng_retorno_em`, [pc.id]);
+    // ⚠️ O `SET` VEM DO ÍNDICE, e `atualizado_em` é o único campo que a rota acrescenta por
+    // fora. Nada mais entra aqui: `analista_id`, `analista_nome`, `grupo`, `situacao_atual`, os
+    // `ci_*` e a `sigef_declaracao` NÃO aparecem em `set` nenhum — a PC sai da fila de análise,
+    // não do acervo do analista.
+    const { rows: gravadas } = await cli.query(
+      `UPDATE prestacoes_contas
+          SET ${cfg.set}, atualizado_em = NOW()
+        WHERE id = $1
+    RETURNING id, codigo_pc, tr, parcial_num, eng_situacao, eng_enviada_em, eng_retorno_em`, [pc.id]);
 
     if (gravadas.length !== 1) { await cli.query('ROLLBACK');
       return res.status(500).json({ data: null, error: { message: `Esperava gravar 1 linha e gravou ${gravadas.length}.` } }); }
@@ -4713,22 +4749,23 @@ app.post('/pc/:id/engenharia', async (req, res) => {
     // ⚠️ `executado_por` PREENCHIDO. Ele está NULO nas 1.765 linhas antigas do histórico, e
     // cada evento novo sem ele aumenta um buraco que ninguém consegue fechar depois — não dá
     // para descobrir quem clicou meses atrás.
+    // ⚠️ O EVENTO FICA MESMO QUANDO OS CAMPOS VÃO A NULL. No `desfazer` a linha da PC não guarda
+    // vestígio nenhum — é o histórico que permite ver, depois, que houve um envio lançado por
+    // engano e desfeito, e por quem. Sem ele o engano some junto com o registro.
     await cli.query(
       `INSERT INTO parcela_historico
          (tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id,
           observacao, executado_por)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [pc.tr, pc.parcial_num, pc.setorial_id || 'FCEE',
-       acao === 'enviar' ? 'engenharia_envio' : 'engenharia_retorno',
+       cfg.evento,
        pc.eng_situacao || null,
-       acao === 'enviar' ? 'na_engenharia' : null,
+       cfg.valor_novo,
        // ⚠️ `analista_id` é o DONO da PC, e `executado_por` é quem clicou. São colunas
        // diferentes de propósito: no "agir pela conta de outro" as duas divergem, e foi
        // trocá-las que gravaria a ação na produtividade de quem está dando suporte.
        pc.analista_id ?? null,
-       acao === 'enviar'
-         ? `${pc.codigo_pc} encaminhada à engenharia (FCEE/DIAD/SEENG)`
-         : `${pc.codigo_pc} retornou da engenharia (FCEE/DIAD/SEENG)`,
+       cfg.texto(pc),
        quem.id]);
 
     await cli.query('COMMIT');

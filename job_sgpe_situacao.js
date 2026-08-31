@@ -6,9 +6,13 @@
 //
 // USO
 //   node job_sgpe_situacao.js                       # dry-run: mostra a rodada e não toca em nada
+//   node job_sgpe_situacao.js --dry-run             # o mesmo, dito por escrito
 //   node job_sgpe_situacao.js --limite=20 --gravar  # a primeira rodada de verdade, pequena
-//   node job_sgpe_situacao.js --gravar              # a rodada normal: 300
+//   node job_sgpe_situacao.js --gravar              # a rodada normal: 600
 //   node job_sgpe_situacao.js --pausa=300 --gravar  # mais devagar
+//
+// ⚠️ `--dry-run` VENCE `--gravar` quando os dois vêm juntos. Num cron o comando é montado por
+// quem configura o serviço, e a combinação sem querer tem de cair no lado que não escreve.
 //
 // ⚠️ DRY-RUN É O PADRÃO, e no dry-run ele NÃO VAI À REDE. Mostrar quem entraria na rodada não
 // exige consultar o portal — e um "dry-run" que faz 300 chamadas a sistema de terceiro é
@@ -32,7 +36,10 @@ const sit = require('./lib/sgpe-situacao');
 const trava = require('./lib/trava');
 const { escreverReversao } = require('./lib/reversao');
 
-const LOTE_PADRAO = 300;
+// ⚠️ 600 POR RODADA, para o cron de hora em hora. A 180 ms mais o tempo de resposta, dá ~9
+// minutos de rodada — cabe folgado na hora, e o universo inteiro gira em poucas rodadas. Quem
+// muda o tamanho é o `--limite`, e não uma edição aqui.
+const LOTE_PADRAO = 600;
 const PAUSA_PADRAO = 180;
 const REVERSAO = 'reverter_sgpe_situacao_rodada.json';
 
@@ -45,14 +52,17 @@ const log = (s) => console.log(s);
 const esperar = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function rodar(opc = {}) {
-  const { limite = LOTE_PADRAO, pausaMs = PAUSA_PADRAO, gravar = false, pool = null } = opc;
+  const { limite = LOTE_PADRAO, pausaMs = PAUSA_PADRAO, dryRun = false, pool = null } = opc;
+  // ⚠️ UM SÓ LUGAR DECIDE SE ESCREVE. `--dry-run` vence `--gravar`, e daqui para baixo só
+  // existe `gravar` — nenhum ramo volta a perguntar pelos dois.
+  const gravar = !!opc.gravar && !dryRun;
   const db = pool || new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   const proprio = !pool;
 
   const e = {
     universo: 0, nunca: 0, rodada: 0, consultados: 0,
     ok: 0, naoEncontrado: 0, sigiloso: 0, siglaNaoCadastrada: 0, rede: 0,
-    tramitesGravados: 0, situacoesGravadas: 0,
+    tramitesGravados: 0, situacoesGravadas: 0, mudancas: 0,
     interrompido: false, abortadoPorErros: false, semTrava: false,
   };
 
@@ -64,8 +74,11 @@ async function rodar(opc = {}) {
   const t = await trava.tomar(db, trava.CHAVES.SGPE_SITUACAO);
   if (!t.pegou) {
     e.semTrava = true;
-    log('\n  OUTRA RODADA JA ESTA CORRENDO (advisory lock ' + trava.CHAVES.SGPE_SITUACAO + ').');
-    log('  Esta desiste em vez de atropelar. O que ficar volta na proxima.\n');
+    // ⚠️ ISTO NAO E ERRO, E A SAIDA E 0. Num cron de hora em hora, a rodada anterior passando
+    // da hora e situacao esperada — sair diferente de zero encheria o alerta do serviço de
+    // falha que nao aconteceu.
+    log('  RESUMO job_sgpe_situacao | ja havia execucao em curso (advisory lock '
+        + trava.CHAVES.SGPE_SITUACAO + ') — esta rodada nao fez nada e encerra em 0');
     process.removeListener('SIGINT', aoInterromper);
     if (proprio) await db.end();
     return e;
@@ -118,8 +131,18 @@ async function rodar(opc = {}) {
 
     if (!gravar) {
       log('\n  ── DRY-RUN: o portal NAO foi consultado e NADA foi gravado. ──');
-      log(`  os 15 primeiros: ${fila.slice(0, 15).map(f => f.chave).join(' · ') || '(nenhum)'}`);
-      log('\n  Para valer:  node job_sgpe_situacao.js --limite=20 --gravar\n');
+      // ⚠️ COM A DATA DE CADA UM, e nao so a chave: e a data que prova que a fila vem do mais
+      // antigo para o mais novo. Uma lista de chaves sozinha nao mostra a ordem, e foi lista
+      // cortada sem legenda que ja produziu leitura errada neste projeto.
+      const MOSTRA = 20;
+      const amostra = fila.slice(0, MOSTRA);
+      log(`  selecionados: ${fila.length}${fila.length > MOSTRA ? `  (mostrando os ${MOSTRA} primeiros)` : ''}`);
+      amostra.forEach((f, i) => log(
+        `   ${String(i + 1).padStart(3)}. ${f.chave.padEnd(22)} `
+        + (f.checadoEm ? new Date(f.checadoEm).toISOString().slice(0, 16).replace('T', ' ')
+                       : 'NUNCA SINCRONIZADO')));
+      log('\n  Para valer:  node job_sgpe_situacao.js --limite=20 --gravar');
+      log(`\n  RESUMO job_sgpe_situacao | DRY-RUN selecionados=${fila.length} consultados=0 falhas=0 mudancas=0 tempo=0s\n`);
       return e;
     }
     if (!fila.length) { log('\n  Nada a fazer.'); return e; }
@@ -141,10 +164,22 @@ async function rodar(opc = {}) {
       // ate 34 tramites cada; uma transacao de 10 mil linhas segurada por um minuto de rede
       // prenderia os registros o tempo todo e perderia TUDO num erro no fim. Aqui, o processo
       // que falha nao leva junto os que ja deram certo — e o rodizio ja e a retomada.
+      // ⚠️ A MUDANCA E MEDIDA CONTRA O QUE ESTAVA GRAVADO, e a chave sai do MESMO
+      // `paramsSituacao` do upsert — montar a chave a mao aqui seria uma segunda forma de
+      // escrever a mesma coisa, e a segunda e sempre a que fica velha.
+      const ps = sit.paramsSituacao(linha);
+      let antes = null;
+      try {
+        const { rows: ant } = await db.query(
+          'SELECT situacao_portal, setor_sigla FROM sgpe_situacao WHERE sigla=$1 AND numero_oficial=$2 AND ano=$3',
+          [ps[0], ps[1], ps[2]]);
+        antes = ant[0] || null;
+      } catch (_) { antes = null; }
+
       const cli = await db.connect();
       try {
         await cli.query('BEGIN');
-        await cli.query(sit.SQL_GRAVAR_SITUACAO, sit.paramsSituacao(linha));
+        await cli.query(sit.SQL_GRAVAR_SITUACAO, ps);
         e.situacoesGravadas++;
         if (r && r.ok) {
           for (const tr of (r.tramitacoes || [])) {
@@ -158,6 +193,12 @@ async function rodar(opc = {}) {
         log(`  ERRO DE BANCO  ${chave}  ${err.message}`);
         throw err;   // erro de banco derruba a rodada: nao e coisa de insistir
       } finally { cli.release() }
+
+      // ⚠️ SO CONTA MUDANCA QUANDO JA HAVIA LINHA. A primeira sincronizacao de um processo nao
+      // e "mudou de situacao" — e "passou a ter situacao", e somar as duas faria a primeira
+      // rodada do dia parecer um dia de muita movimentacao.
+      if (r && r.ok && antes && (antes.situacao_portal !== linha.situacao_portal
+                                 || antes.setor_sigla !== linha.setor_sigla)) e.mudancas++;
 
       if (r && r.ok) {
         e.ok++; errosSeguidos = 0;
@@ -203,6 +244,14 @@ async function rodar(opc = {}) {
     log(`  tempo ................... ${Math.floor(seg / 60)}min ${seg % 60}s`);
     if (e.interrompido) log('  RODADA INTERROMPIDA — o que ficou volta na proxima.');
 
+    // ⚠️ UMA LINHA SO, e no fim: e a linha que o log do serviço guarda. As falhas somam REDE e
+    // sigla fora do mapa; NAO_ENCONTRADO e SIGILOSO nao sao falha — sao o portal respondendo,
+    // e respondendo certo.
+    const falhas = e.rede + e.siglaNaoCadastrada;
+    log(`\n  RESUMO job_sgpe_situacao | selecionados=${e.rodada} consultados=${e.consultados}`
+      + ` sucesso=${e.ok} falhas=${falhas} mudancas=${e.mudancas} tempo=${seg}s`
+      + (e.interrompido ? ' INTERROMPIDA' : ''));
+
     escreverReversao(REVERSAO, {
       modo: 'gravacao',
       script: 'job_sgpe_situacao.js',
@@ -233,6 +282,7 @@ function lerArgumentos(argv) {
   };
   return {
     gravar: argv.includes('--gravar'),
+    dryRun: argv.includes('--dry-run'),
     limite: num('limite', LOTE_PADRAO),
     pausaMs: num('pausa', PAUSA_PADRAO),
   };
@@ -242,7 +292,8 @@ if (require.main === module) {
   if (!process.env.DATABASE_URL) { console.error('DATABASE_URL não definida.'); process.exit(1) }
   const o = lerArgumentos(process.argv.slice(2));
   console.log('\n═══ JOB — situação dos processos no SGPe ═══');
-  console.log(o.gravar ? '  MODO: GRAVAÇÃO\n' : '  MODO: DRY-RUN — sem rede e sem escrita\n');
+  console.log(o.gravar && !o.dryRun ? '  MODO: GRAVAÇÃO\n' : '  MODO: DRY-RUN — sem rede e sem escrita\n');
+  if (o.gravar && o.dryRun) console.log('  ⚠️ --dry-run e --gravar juntos: vale o dry-run.\n');
   rodar(o)
     .then(e => { console.log(''); process.exit(e.abortadoPorErros ? 1 : 0) })
     .catch(err => { console.error('ERRO:', err.message); process.exit(1) });

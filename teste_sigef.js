@@ -212,6 +212,33 @@ secao('4B. BAIXA ANTERIOR AO GT, E NL COM RESIDUAL (30/08/2026)');
        'e a ordem compara a parcela como NUMERO, senao 10 vem antes de 2');
 }
 
+secao('4C. A RESPOSTA QUE NEGA O REGISTRO NAO TEM DATA (30/08/2026)');
+{
+  // A terceira resposta afirma que o SIGEF nao baixou. Nao existe registro, logo nao existe
+  // data de registro — exigi-la seria pedir a data de um fato que a resposta acabou de negar.
+  conf(s.validarDeclaracao({ resposta: 'nao_baixada' }) === null,
+       'nao_baixada passa SEM data');
+  conf(typeof s.validarDeclaracao({ resposta: 'nao_baixada', data_registro: '2026-08-20' }) === 'string',
+       'e RECUSA data mandada por engano — a trilha nao pode se contradizer');
+
+  // ⚠️ E A DATA CONTINUA OBRIGATORIA NAS OUTRAS DUAS: sao elas que afirmam que o registro
+  // existe, e e a data delas que responde a CGE meses depois.
+  conf(typeof s.validarDeclaracao({ resposta: 'ja_estava' }) === 'string',
+       'ja_estava SEM data continua recusando');
+  conf(s.validarDeclaracao({ resposta: 'registrei_agora', data_registro: '2026-08-20' }) === null,
+       'registrei_agora com data passa');
+  conf(typeof s.validarDeclaracao({ resposta: 'registrei_agora', data_registro: '2026-02-30' }) === 'string',
+       'e 30 de fevereiro continua sendo data inexistente');
+  conf(s.RESPOSTAS_SEM_DATA.length === 1 && s.RESPOSTAS_SEM_DATA[0] === 'nao_baixada',
+       'so a terceira dispensa a data');
+
+  // ⚠️ null EXPLICITO no jsonb: undefined some na gravacao, e a chave faltando faria a
+  // leitura da trilha adivinhar se a data nao existia ou se a gravacao a perdeu.
+  const d = s.montarDeclaracao({ resposta: 'nao_baixada', quem: { id: 4, nome: 'Richard' } });
+  conf(d.data_registro === null && 'data_registro' in d,
+       'a declaracao guarda data_registro null, e a chave existe');
+}
+
 secao('5. ONDE A DECLARACAO VALE');
 {
   conf(s.aceitaDeclaracao(VERMELHA) === true, 'a vermelha aceita');

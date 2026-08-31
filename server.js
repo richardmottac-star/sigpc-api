@@ -1510,8 +1510,13 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
 
     // ⚠️ A TR ENTRA DIRETO NO `WHERE`, e o PROCESSO por subconsulta — e a diferença não é
     // estilo. Todas as linhas de uma TR têm o mesmo `tr`, então filtrar por ele tira TRs
-    // inteiras. O processo NÃO: numa TR de 44 PCs, o processo procurado está em 3 delas, e
-    // filtrar direto deixaria o `total_pcs` contar 3 — um número menor, plausível e errado.
+    // inteiras. O processo NÃO: ele casa ALGUMAS linhas da TR, e filtrar direto faria o
+    // `GROUP BY` contar só essas.
+    //
+    // Medido em produção, 31/08/2026: a `2020TR000637` tem **45 PCs**, e o processo
+    // `SCC 3538/2020` casa **44** delas. Com a subconsulta o `total_pcs` vem 45, que é o que a
+    // tela precisa dizer; sem ela viria 44 — um número menor, plausível, e que ninguém
+    // desconfia. É a mesma razão pela qual o `busca` sempre foi envolvido assim.
     const cTr = condicaoTr(tr, values, i);
     if (cTr) { i = cTr.proximo; conditions.push(cTr.condicao); }
 

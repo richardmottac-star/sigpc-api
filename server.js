@@ -1433,9 +1433,16 @@ app.get('/prestacoes_contas', async (req, res) => {
     // própria conta que criou a divergência achada em 27/08: o `mapaStats` somava
     // `status = 'baixada'` para o anel enquanto a regra escrita dizia `baixada OU enviado_ci`.
     const { rows } = await pool.query(
+      // ⚠️ `sigef_pre_gt` e `nl_residual` VÊM PRONTOS TAMBÉM, pelo mesmo motivo do `sigef_tag`:
+      // a tela pinta a pílula, não decide quem é. A `nl_primeira_parcela` acompanha a residual
+      // porque o texto da pílula precisa dizer EM QUAL parcela a NL aparece antes — sem ela a
+      // tela teria de varrer as irmãs, e varreria só as que estivessem na página.
       `SELECT p.*, ${sigef.SQL_TAG} AS sigef_tag,
               ${sigef.SQL_CONTA_PRODUTIVIDADE} AS sigef_conta,
-              ${sigef.SQL_DESCONTADA} AS sigef_descontada
+              ${sigef.SQL_DESCONTADA} AS sigef_descontada,
+              ${sigef.SQL_PRE_GT} AS sigef_pre_gt,
+              ${sigef.SQL_NL_RESIDUAL} AS nl_residual,
+              ${sigef.SQL_NL_PRIMEIRA_PARCELA} AS nl_primeira_parcela
          FROM prestacoes_contas p ${where} ORDER BY p.tr LIMIT $${i++} OFFSET $${i++}`,
       [...values, parseInt(limit), parseInt(offset)]
     );

@@ -62,8 +62,8 @@ secao('3. O CINZA — declarada, aguardando a proxima extracao');
 
   // ⚠️ O CINZA NAO COBRE O AMBAR. La o pendente e o parecer NESTE sistema, e nada que o
   // analista declare sobre o SIGEF resolve — os proprios textos dizem isso.
-  conf(s.classificar({ ...AMBAR, sigef_declaracao: decl }) === s.TAGS.ABERTA_COM_BAIXA_SIGEF,
-       'ambar declarada CONTINUA ambar');
+  conf(s.classificar({ ...AMBAR, sigef_declaracao: decl }) === s.TAGS.REGISTRO_DECLARADO,
+       'ambar declarada vira cinza — as tres declaram desde 30/08/2026');
 
   // Array vazio nao e declaracao.
   conf(s.classificar({ ...VERMELHA, sigef_declaracao: [] }) === s.TAGS.SEM_REGISTRO_SIGEF, 'array vazio nao conta');
@@ -182,11 +182,41 @@ secao('4. QUEM PODE DECLARAR');
   conf(s.podeDeclarar(dono, { ...pc, analista_id: '51' }, 'analista') === true, 'id como texto tambem casa');
 }
 
+secao('4B. BAIXA ANTERIOR AO GT, E NL COM RESIDUAL (30/08/2026)');
+{
+  const base = { baixada: true, tipo: 'parcial', sigef_status: 'SV', data_baixa: '2026-06-30' };
+  // A data e a data_baixa_sigef, NUNCA a data_baixa: esta ultima e 30/06/2026 em 3.604 PCs
+  // (o dia da carga) e classificaria o acervo inteiro pelo dia da importacao.
+  conf(s.INICIO_GT === '2025-08-12', 'o GT comecou em 12/08/2025 — Portaria FCEE no 227');
+  conf(s.ehPreGt({ ...base, data_baixa_sigef: '2025-08-11' }) === true, '11/08/2025 e anterior ao GT');
+  conf(s.ehPreGt({ ...base, data_baixa_sigef: '2025-08-12' }) === false, 'o proprio 12/08/2025 NAO e anterior');
+  conf(s.ehPreGt({ ...base, data_baixa_sigef: null }) === false, 'sem data_baixa_sigef NAO classifica — nao inventa');
+  conf(s.ehPreGt({ ...base, baixada: false, data_baixa_sigef: '2020-01-01' }) === false, 'e so vale para PC baixada');
+
+  // A pre-GT SAI da produtividade; a residual NAO. Sao coisas diferentes.
+  conf(s.contaProdutividade({ ...base, data_baixa_sigef: '2025-01-10' }) === false,
+       'a baixa anterior ao GT nao conta produtividade');
+  conf(s.contaProdutividade({ ...base, data_baixa_sigef: '2026-01-10' }) === true,
+       'a baixa posterior conta normal');
+  conf(s.SQL_CONTA_PRODUTIVIDADE.includes('data_baixa_sigef'),
+       'e o SQL da produtividade exclui a pre-GT tambem');
+  conf(s.sqlContaAte('$1').includes('data_baixa_sigef'),
+       'a conta ate-a-data exclui igual — senao o relatorio diverge do card');
+
+  // A RESIDUAL E SO PILULA. Descontar tiraria 1.289 PCs da contagem, e nao e a regra.
+  conf(!s.SQL_CONTA_PRODUTIVIDADE.includes('q.codigo_nl'),
+       'a NL com residual NAO entra na conta de produtividade');
+  conf(/EXISTS/.test(s.SQL_NL_RESIDUAL) && !/ROW_NUMBER/.test(s.SQL_NL_RESIDUAL),
+       'a residual e EXISTS, nao janela — janela nao entra em WHERE nem em FILTER');
+  conf(s.SQL_NL_RESIDUAL.includes('::int') && s.SQL_NL_RESIDUAL.includes('parcial_num'),
+       'e a ordem compara a parcela como NUMERO, senao 10 vem antes de 2');
+}
+
 secao('5. ONDE A DECLARACAO VALE');
 {
   conf(s.aceitaDeclaracao(VERMELHA) === true, 'a vermelha aceita');
   conf(s.aceitaDeclaracao(AZUL) === true, 'a azul aceita');
-  conf(s.aceitaDeclaracao(AMBAR) === false, 'a ambar NAO aceita — la o conserto e o parecer aqui');
+  conf(s.aceitaDeclaracao(AMBAR) === true, 'a ambar TAMBEM aceita, desde 30/08/2026');
   conf(s.aceitaDeclaracao(OK_PC) === false, 'a que esta certa nao tem o que declarar');
   // ⚠️ A REDECLARACAO E PERMITIDA: "se o analista errar, ele declara de novo".
   conf(s.aceitaDeclaracao({ ...VERMELHA, sigef_declaracao: [{ resposta: 'ja_estava' }] }) === true,
@@ -222,7 +252,9 @@ secao('7. O QUE FICA GRAVADO');
   conf(d.data_registro === '2026-08-20', 'a data informada');
   conf(d.declarado_por === 51 && d.declarado_por_nome === 'Janaina Frederico Dittrich', 'quem declarou');
   conf(d.declarado_em === '2026-08-27T13:00:00.000Z', 'e quando');
-  conf(Object.keys(s.RESPOSTAS).length === 2, 'sao duas respostas, e so duas');
+  conf(Object.keys(s.RESPOSTAS).length === 3, 'sao tres respostas, e so tres');
+  conf(/análise/.test(s.RESPOSTAS.nao_baixada),
+       'a terceira diz que o SIGEF nao baixou — em analise, diligencia ou outra');
 }
 
 secao('7-B. A DECLARACAO E POR PARCELA — e a tag entra na chave');

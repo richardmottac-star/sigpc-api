@@ -4,7 +4,7 @@ const cors = require('cors');
 const compression = require('compression');
 const {
   normalizarProcesso, formatarProcesso, siglaConhecida, montarUrlSgpe,
-  ProcessoNaoEncontrado, SessaoExpirada,
+  ProcessoNaoEncontrado, SessaoExpirada, ORGAOS, SIGLAS_AMBIGUAS,
 } = require('./lib/sgpe-link');
 const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
 const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
@@ -3685,6 +3685,28 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
   } finally { cli.release(); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /sgpe/siglas
+//
+// As siglas de órgão do SGPe, para a tela conferir o que a pessoa digita ANTES de mandar.
+// Só leitura, sem banco, sem rede: a lista sai de `lib/sgpe-link.js`, que é onde ela sempre
+// morou — este endpoint é uma JANELA para aquele arquivo, nunca uma segunda cópia.
+//
+// ⚠️ NÃO COPIAR ESTA LISTA PARA O `index.html`. O cabeçalho do `sgpe-link.js` já registra três
+// cópias do mapa `ORGAOS` espalhadas por dois repositórios, e o que se aprendeu com o mapa de
+// nomes curtos (armadilha 1 do assumir) vale igual aqui: a segunda cópia não erra no dia em
+// que nasce, erra no dia em que alguém mexe numa e esquece a outra. A tela busca daqui uma
+// vez ao carregar e guarda em memória.
+//
+// ⚠️ `ambiguas` VAI JUNTO, e não é enfeite: são siglas que EXISTEM no cadastro do SGPe, com
+// mais de um órgão. Contam como conhecidas para a tela não marcar de vermelho o que existe —
+// quem recusa gerar link para elas é `orgaoDaSigla`, com mensagem própria, no momento em que
+// o link é pedido.
+app.get('/sgpe/siglas', (req, res) => {
+  const siglas = Object.keys(ORGAOS).sort();
+  res.json({ data: { siglas, ambiguas: SIGLAS_AMBIGUAS.slice(), total: siglas.length }, error: null });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

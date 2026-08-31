@@ -314,7 +314,12 @@ secao('8. A CONSULTA — com fetch dublê, sem tocar no portal');
     // desenham (cabecalho do sistema, cabecalho do modal, icone das listas); tres copias do
     // mesmo base64 seriam tres coisas para atualizar, e copia que ninguem compara diverge sem
     // dar erro — a mesma razao do MAPA_NOME ter uma dona so.
-    conf(/const SGPE_LOGO = 'data:image\/png;base64,/.test(idx), 'o logo e a imagem oficial, em PNG');
+    // ⚠️ DESDE 31/08 O BASE64 MORA NO TOPO DO ARQUIVO, em `LOGO_SGPE_B64`, porque os campos
+    // novos de TR e de processo tambem o desenham. `SGPE_LOGO` ficou como o NOME ANTIGO da
+    // mesma constante — apelido, nao copia. O que este teste guarda nao mudou: existe UM
+    // base64 do logo no arquivo inteiro, e nao um por ponto de desenho.
+    conf(/const LOGO_SGPE_B64  = 'data:image\/png;base64,/.test(idx), 'o logo e a imagem oficial, em PNG');
+    conf(/const SGPE_LOGO = LOGO_SGPE_B64/.test(idx), 'e SGPE_LOGO e apelido dela, nao uma segunda copia');
     conf(!/sgpeLogoSvg/.test(idx), 'e o SVG desenhado saiu — nao ficou chamada orfa');
     conf((idx.match(/SGPE_LOGO/g) || []).length === 4,
          'a constante e usada nos tres lugares — definicao + modal/icone + o src do cabecalho');

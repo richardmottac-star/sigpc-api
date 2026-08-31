@@ -140,7 +140,13 @@ console.log('\n=== 4. A CHAVE DO TRAMITE ===');
   conf(sit.paramsTramite(p, { ...t, parecer: null })[11] === null, 'e parecer nulo continua nulo');
 
   const ps = sit.paramsSituacao(sit.linhaDaSituacao(p, { erro: 'REDE' }));
-  conf(ps.length === 14 && Array.isArray(ps[13]), 'o ultimo parametro da situacao e a lista dos que substituem');
+  // ⚠️ A LISTA CONTINUA NO INDICE 13 — ou seja, `$14` —, E E ISSO QUE IMPORTA. O `assunto`
+  // entrou em 31/08/2026 e foi para o FIM (`$15`) de proposito: posto na posicao 14, ele
+  // empurraria o `RESULTADOS_QUE_SUBSTITUEM`, que aparece ONZE vezes no SQL do upsert — onze
+  // `CASE` passariam a comparar contra a coluna errada, e sem erro nenhum.
+  conf(Array.isArray(ps[13]), 'a lista dos que substituem segue no $14');
+  conf(ps.length === 15, 'e o assunto e o $15, no fim', ps.length);
+  conf(ps[14] === null, 'que num erro de REDE vem nulo', ps[14]);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

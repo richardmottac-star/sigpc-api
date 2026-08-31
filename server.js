@@ -11,7 +11,7 @@ const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa } = require(
 const sgpePortal = require('./lib/sgpe-portal');
 const vinculo = require('./lib/sgpe-vinculo');
 
-const { semAcento, condicaoBusca, condicaoTr, condicaoProcesso } = require('./lib/busca');
+const { semAcento, condicaoBusca, condicaoTr, condicaoProcesso, CHAVE_PROC_SQL } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
 const notif = require('./lib/notificacao');
 const { HOJE_BR, CORTE_PRAZO } = require('./lib/datas');
@@ -3781,11 +3781,40 @@ app.get('/sgpe/vinculo', async (req, res) => {
     if (!tr) { papel = 'parcial'; tr = await achar('processo_pc'); }
     if (!tr) return res.json({ data: vinculo.NAO_ENCONTRADO, error: null });
 
+    // ⚠️ DUAS CHAVES NESTA ROTA, E É DE PROPÓSITO (31/08/2026, decisão do Richard).
+    //
+    // Achar a TR usa a chave do `lib/sgpe-vinculo`. Juntar a situação usa a do `lib/busca`.
+    // Não são a mesma, e a diferença foi MEDIDA antes de escolher: a `sgpe_situacao` guarda o
+    // número SEM zeros à esquerda (`817`) e o acervo guarda COM (`00000817`), e a chave do
+    // vínculo tira o zero uma vez só sobre TODOS os dígitos juntos — o que quebra justamente
+    // as regionais, onde a região é dígito colado à sigla:
+    //
+    //   pela chave do vínculo ....... 7.538 de 7.839  ·  295 ADR/SDR sem par
+    //   pela chave da lib/busca ..... 7.829 de 7.839  ·    4 ADR/SDR sem par
+    //
+    // Com a primeira, 295 processos regionais diriam "ainda não sincronizado" ESTANDO
+    // sincronizados. Trocar a chave da rota inteira mudaria o que o `encontrado` responde, e
+    // é outra frente; aqui o join usa a que casa, e a de achar a TR fica como está.
+    //
+    // ⚠️ E A DA `lib/busca` NÃO É UMA CHAVE NOVA: é a mesma de quatro rotas
+    // (`/prestacoes_contas`, `resumo_tr`, `/ci/fila`, `/acompanhamento`). Nenhuma quinta
+    // nasceu aqui.
+    //
+    // ⚠️ LEFT JOIN, NUNCA INNER: processo sem linha na `sgpe_situacao` continua na faixa, com
+    // `assunto` e `situacao_portal` nulos. Um INNER faria a PC sumir da lista por não ter sido
+    // sincronizada — e a faixa existe justamente para dizer o que a TR tem.
+    const sitTexto = (al) => `(${al}.sigla || ' ' || ${al}.numero_oficial::text || '/' || ${al}.ano::text)`;
     const { rows } = await pool.query(
-      `SELECT tr, entidade, processo_mae, processo_pc, parcial_num, tipo
-         FROM prestacoes_contas
-        WHERE tr = $1
-        ORDER BY codigo_pc`, [tr]);
+      `SELECT p.tr, p.entidade, p.processo_mae, p.processo_pc, p.parcial_num, p.tipo,
+              s.assunto, s.situacao_portal,
+              m.assunto AS mae_assunto, m.situacao_portal AS mae_situacao_portal
+         FROM prestacoes_contas p
+         LEFT JOIN sgpe_situacao s
+                ON ${CHAVE_PROC_SQL(sitTexto('s'))} = ${CHAVE_PROC_SQL("coalesce(p.processo_pc,'')")}
+         LEFT JOIN sgpe_situacao m
+                ON ${CHAVE_PROC_SQL(sitTexto('m'))} = ${CHAVE_PROC_SQL("coalesce(p.processo_mae,'')")}
+        WHERE p.tr = $1
+        ORDER BY p.codigo_pc`, [tr]);
 
     res.json({ data: vinculo.montar(rows, k, papel), error: null });
   } catch (e) {

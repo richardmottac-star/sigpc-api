@@ -21,9 +21,13 @@ const conf = (passou, rotulo, detalhe) => {
 const S = (t) => console.log(`\n═══ ${t} ═══`);
 
 // ── uma TR de mentira, com os casos que o acervo tem ────────────────────────
-const pc = (processo_pc, parcial_num, tipo) =>
+const pc = (processo_pc, parcial_num, tipo, extra) =>
   ({ tr: '2020TR000637', entidade: 'APAE DE PINHALZINHO', processo_mae: 'SCC3538/2020',
-     processo_pc, parcial_num, tipo: tipo || 'parcial' });
+     processo_pc, parcial_num, tipo: tipo || 'parcial',
+     // ⚠️ Vem do LEFT JOIN com `sgpe_situacao` (31/08/2026). `null` significa "ainda nao
+     // sincronizado", e nao "sem assunto" — o job so preenche quando o rodizio passa.
+     assunto: null, situacao_portal: null, mae_assunto: null, mae_situacao_portal: null,
+     ...(extra || {}) });
 const TR = [
   pc('SCC 00011126/2024', '1'), pc('SCC 00011126/2024', '1'),   // 2 PCs, mesma parcial
   pc('SCC11126/2024', '2'),                                     // a MESMA grafia, sem zeros
@@ -107,6 +111,35 @@ conf(v.NAO_ENCONTRADO.encontrado === false, 'encontrado: false');
 conf(Object.keys(v.NAO_ENCONTRADO).length === 1, 'e SO isso — sem tr, sem entidade, sem palpite',
      Object.keys(v.NAO_ENCONTRADO).join(','));
 
+S('7b. O ASSUNTO E A SITUACAO');
+{
+  // ⚠️ SAO LIDOS DA PRIMEIRA LINHA DE CADA PROCESSO, e nao somados: todas as PCs de um mesmo
+  // `processo_pc` casam a MESMA linha da `sgpe_situacao` — a chave e o processo, nao a PC.
+  const TR2 = [
+    pc('SCC9460/2021', '1', 'parcial', { assunto: 'PRESTACAO DE CONTAS', situacao_portal: 'ABERTO',
+                                         mae_assunto: 'CONVENIO', mae_situacao_portal: 'ARQUIVADO' }),
+    pc('SCC9460/2021', '2', 'parcial', { assunto: 'PRESTACAO DE CONTAS', situacao_portal: 'ABERTO',
+                                         mae_assunto: 'CONVENIO', mae_situacao_portal: 'ARQUIVADO' }),
+    pc('SCC1111/2021', '3'),                       // sem par na sgpe_situacao
+  ];
+  const d2 = v.montar(TR2, '', 'parcial');
+  const a = d2.processos.find((x) => x.processo === 'SCC9460/2021');
+  const b = d2.processos.find((x) => x.processo === 'SCC1111/2021');
+  conf(a.assunto === 'PRESTACAO DE CONTAS', 'o processo sincronizado traz o assunto', a.assunto);
+  conf(a.situacao_portal === 'ABERTO', 'e a situacao_portal', a.situacao_portal);
+  conf(a.qtd === 2, 'e as duas PCs dele seguem contando 2 — o join nao duplica linha', a.qtd);
+  // ⚠️ `null` E RESPOSTA: quer dizer "ainda nao sincronizado", nao "sem assunto".
+  conf(b.assunto === null && b.situacao_portal === null, 'o nao sincronizado vem com os dois null');
+  conf('assunto' in b && 'situacao_portal' in b, 'e os campos EXISTEM na resposta, nulos');
+  // ⚠️ A MAE TEM OS SEUS PROPRIOS, do join dela — nao os do processo_pc da primeira linha.
+  conf(d2.mae_assunto === 'CONVENIO', 'a mae traz o assunto DELA', d2.mae_assunto);
+  conf(d2.mae_situacao_portal === 'ARQUIVADO', 'e a situacao DELA', d2.mae_situacao_portal);
+  conf(d2.mae_assunto !== a.assunto, 'que e outro processo, e outro assunto');
+  // Sem nada vindo do banco, tudo null — nunca `undefined`, que a tela leria diferente.
+  const d3 = v.montar([pc('SCC1/2020', '1')], '', 'parcial');
+  conf(d3.processos[0].assunto === null && d3.mae_assunto === null, 'ausencia vira null, nunca undefined');
+}
+
 S('8. A ROTA, NO server.js');
 {
   const src = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
@@ -129,6 +162,67 @@ S('8. A ROTA, NO server.js');
   conf(/\$1::text/.test(bloco), 'e o parametro vai tipado');
   conf(/vinculo\.montar\(rows, k, papel\)/.test(bloco), 'e quem monta o bloco e a lib');
   conf(!/INSERT|UPDATE|DELETE/.test(bloco), 'a rota e SO LEITURA');
+
+  // ── O JOIN DA SITUACAO (31/08/2026) ──────────────────────────────────────
+  // ⚠️ DUAS CHAVES NESTA ROTA, DE PROPOSITO. Achar a TR usa a do `sgpe-vinculo`; juntar a
+  // situacao usa a do `busca`. Medido: a primeira casa 7.538 de 7.839 e deixa 295 regionais
+  // sem par; a segunda casa 7.829 e deixa 4. Com a primeira, 295 processos diriam "ainda nao
+  // sincronizado" ESTANDO sincronizados.
+  conf(/LEFT JOIN sgpe_situacao s/.test(bloco) && /LEFT JOIN sgpe_situacao m/.test(bloco),
+       'ha dois LEFT JOIN — um para a parcial, outro para a mae');
+  // ⚠️ LEFT, NUNCA INNER: um INNER faria a PC nao sincronizada SUMIR da faixa.
+  conf(!/\bINNER JOIN sgpe_situacao/.test(bloco), 'e sao LEFT, nunca INNER');
+  conf((bloco.match(/CHAVE_PROC_SQL\(/g) || []).length === 4,
+       'o join usa a chave da lib/busca nos quatro lados',
+       (bloco.match(/CHAVE_PROC_SQL\(/g) || []).length);
+  conf(/s\.assunto, s\.situacao_portal/.test(bloco), 'e traz assunto e situacao_portal');
+  conf(/m\.assunto AS mae_assunto/.test(bloco), 'com os da mae em campos proprios');
+  // ⚠️ A COLUNA CHAMA-SE `situacao_portal`, e nao `situacao`.
+  conf(!/s\.situacao\b(?!_portal)/.test(bloco), 'e o nome da coluna e situacao_portal');
+}
+
+S('9. O JOB GRAVA O ASSUNTO');
+{
+  const sit = fs.readFileSync(path.join(__dirname, 'lib', 'sgpe-situacao.js'), 'utf8');
+  // ⚠️ DO MESMO LUGAR DE ONDE O MODAL DO F4 JA LIA: `pr.assunto`, que a lib do portal monta
+  // do `nmAssunto`. Nunca foi gravado ate 31/08/2026.
+  conf(/assunto: pr\.assunto \? String\(pr\.assunto\)\.slice\(0, 120\) : null/.test(sit),
+       'a linha leva o assunto do portal, cortado em 120');
+  conf(/\(sigla, numero_oficial, ano, resultado, situacao_portal, estado_portal, posicao,[\s\S]{0,160}assunto, checado_em\)/.test(sit),
+       'a coluna entra no INSERT');
+  // ⚠️ A MESMA PROTECAO DOS DEMAIS: num resultado de REDE o assunto NAO e apagado. O portal
+  // fora do ar por uma hora nao pode zerar o assunto de 300 processos.
+  conf(/assunto\s+= CASE WHEN EXCLUDED\.resultado = ANY\(\$14::text\[\]\) THEN EXCLUDED\.assunto/.test(sit),
+       'e o upsert protege o valor antigo num erro de rede');
+  // ⚠️ `$15` NO FIM: po-lo na posicao 14 renumeraria o RESULTADOS_QUE_SUBSTITUEM, que aparece
+  // onze vezes no SQL — onze lugares para errar um, em silencio.
+  conf(/l\.erro_motivo, RESULTADOS_QUE_SUBSTITUEM,[\s\S]{0,320}l\.assunto\]/.test(sit),
+       'e o parametro novo e o ultimo, sem renumerar os que ja existiam');
+  conf(/VALUES \(\$1,\$2,\$3,\$4,\$5,\$6,\$7,\$8,\$9,\$10,\$11::date,\$12,\$13,\$15, NOW\(\)\)/.test(sit),
+       'o VALUES usa $15 para o assunto');
+}
+
+S('10. A MIGRACAO');
+{
+  const mig = fs.readFileSync(path.join(__dirname, 'migracao_assunto_situacao_20260831.js'), 'utf8');
+  conf(/const EXECUTAR = process\.argv\.includes\('--executar'\)/.test(mig), 'dry-run por padrao');
+  conf(/ADD COLUMN IF NOT EXISTS/.test(mig), 'idempotente no proprio ALTER');
+  conf(/await cli\.query\('BEGIN'\)/.test(mig), 'roda em transacao');
+  conf(/if \(falhas\.length\) \{[\s\S]{0,80}ROLLBACK/.test(mig), 'e faz ROLLBACK se alguma conferencia falhar');
+  // ⚠️ AS CONFERENCIAS SAO DEPOIS DE GRAVAR, contra a foto — conferir so antes prova o que se
+  // esperava, nao o que aconteceu.
+  const iAlter = mig.indexOf('await cli.query(SQL)');
+  const iConf = mig.indexOf('CONFERÊNCIAS (depois do ALTER');
+  conf(iAlter > 0 && iConf > iAlter, 'as conferencias vem DEPOIS do ALTER');
+  conf(/para_reverter/.test(mig) && /JSON\.stringify/.test(mig), 'e a reversao vai para um JSON');
+  // ⚠️ O `DROP COLUMN` APARECE NO ARQUIVO — no cabecalho e no JSON de reversao —, e tem de
+  // aparecer: e o registro de como desfazer. O que nao pode e alguem EXECUTAR. Entao a
+  // checagem olha as chamadas ao banco, uma a uma, e nao o texto solto.
+  const chamadas = mig.match(/cli\.query\(([\s\S]*?)\)/g) || [];
+  conf(chamadas.length > 0, 'o script fala com o banco', chamadas.length);
+  conf(!chamadas.some((c) => /DROP/i.test(c)), 'e NENHUMA chamada executa um DROP',
+       chamadas.filter((c) => /DROP/i.test(c)).join(' | '));
+  conf(/DROP COLUMN IF EXISTS/.test(mig), 'o comando de reversao esta REGISTRADO no JSON');
 }
 
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

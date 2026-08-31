@@ -1,0 +1,12 @@
+{
+  "gerado_em": "2026-08-31T22:38:12.204Z",
+  "modo": "EXECUTAR",
+  "o_que_foi_feito": "ALTER TABLE sgpe_situacao ADD COLUMN IF NOT EXISTS assunto varchar(120)",
+  "foto_antes": {
+    "linhas": 7768,
+    "com_situacao": 7492,
+    "ok": 7492
+  },
+  "para_reverter": "ALTER TABLE sgpe_situacao DROP COLUMN IF EXISTS assunto",
+  "aviso": "Reverter APAGA a coluna e tudo o que o job tiver gravado nela. Este arquivo é registro, não gatilho: nada neste repositório o executa."
+}

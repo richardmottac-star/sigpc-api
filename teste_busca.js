@@ -10,7 +10,10 @@
 
 const {
   semAcento, chaveProcesso, CHAVE_PROC_SQL, CAMPOS_BUSCA, CAMPOS_PROCESSO, condicaoBusca,
+  condicaoTr, condicaoProcesso,
 } = require('./lib/busca');
+const fs = require('fs');
+const path = require('path');
 
 let ok = 0, falhou = 0;
 const conf = (passou, rotulo, detalhe) => {
@@ -125,6 +128,92 @@ console.log('\n═══ 8. PARIDADE COM O SQL (formas reais do acervo) ══�
     conf(chaveProcesso(v) === k, `"${v}" -> ${k}`, chaveProcesso(v));
   }
   conf(chaveProcesso('ADR03 395/2017') === chaveProcesso('ADR3 395/2017'), 'ADR03 e ADR3 colidem — mesma regional, duas grafias');
+}
+
+console.log('\n═══ condicaoTr e condicaoProcesso — os filtros próprios (31/08/2026) ═══');
+{
+  // ⚠️ AUSENTE OU VAZIO NÃO FILTRA, e devolver `null` é o que garante isso: quem chama só
+  // acrescenta condição quando vem algo. Um `''` virando `LIKE '%%'` casaria tudo, o que
+  // parece inofensivo e é o começo de um filtro que não filtra.
+  for (const vazio of [undefined, null, '', '   ']) {
+    conf(condicaoTr(vazio, [], 1) === null, `condicaoTr(${JSON.stringify(vazio)}) não filtra`);
+    conf(condicaoProcesso(vazio, [], 1) === null, `condicaoProcesso(${JSON.stringify(vazio)}) não filtra`);
+  }
+  // E o que não sobra chave também não filtra — `position('' in x)` devolve 1 e casaria tudo.
+  conf(condicaoProcesso('///', [], 1) === null, 'processo sem nada aproveitável não filtra');
+
+  {
+    const v = [];
+    const r = condicaoTr('2021TR000411', v, 1);
+    conf(r.condicao === 'tr ILIKE $1', 'a TR é uma condição direta na coluna', r.condicao);
+    conf(v[0] === '%2021TR000411%', 'com % dos dois lados, para aceitar o pedaço', v[0]);
+    conf(r.proximo === 2, 'e consome UM parâmetro');
+  }
+  {
+    // ⚠️ `%` e `_` do usuário são ESCAPADOS: sem isso, digitar "%" no filtro de TR devolveria
+    // o acervo inteiro — um curinga que ninguém pediu.
+    const v = [];
+    condicaoTr('20%TR_1', v, 1);
+    conf(v[0] === '%20\\%TR\\_1%', 'e o curinga digitado é escapado', v[0]);
+  }
+  {
+    const v = [];
+    const r = condicaoProcesso('SCC 197/2021', v, 1);
+    conf(v[0] === chaveProcesso('SCC 197/2021'), 'o processo vai pela CHAVE, não pelo texto cru', v[0]);
+    conf(v[0] === chaveProcesso('SCC197/2021') && v[0] === chaveProcesso('SCC 00000197/2021'),
+         'e as quatro grafias do acervo caem na mesma chave');
+    // Só os dois campos de processo — nunca entidade, NL ou código de PC.
+    for (const c of CAMPOS_PROCESSO) conf(r.condicao.includes(c), `cobre ${c}`);
+    for (const c of ['entidade', 'codigo_nl', 'codigo_pc'])
+      conf(!r.condicao.includes(c), `e NÃO cobre ${c} — para isso existe o campo livre`);
+    conf(r.proximo === 2, 'e consome UM parâmetro');
+  }
+  {
+    // Os três somam, e cada um continua com o seu próprio $N.
+    const v = [];
+    let i = 1;
+    const b = condicaoBusca('creche', v, i); i = b.proximo;
+    const t = condicaoTr('2021TR000411', v, i); i = t.proximo;
+    const p = condicaoProcesso('SCC 197/2021', v, i); i = p.proximo;
+    conf(v.length === i - 1, 'os três empilham parâmetros sem se atropelar', `${v.length} vs ${i - 1}`);
+    // ⚠️ Os índices são DERIVADOS, não escritos à mão: o `condicaoBusca` consome um ou dois
+    // parâmetros conforme sobre chave do termo, e cravar "$4" aqui faria este teste reprovar
+    // no dia em que aquela regra mudasse — por um motivo que não é o desta checagem.
+    conf(t.condicao.includes(`$${b.proximo}`), 'a TR usa o $N seguinte ao do busca', t.condicao);
+    conf(p.condicao.includes(`$${t.proximo}`), 'e o processo, o seguinte ao da TR', p.condicao);
+  }
+}
+
+console.log('\n═══ GET /prestacoes_contas/resumo_tr — como a rota usa as três ═══');
+{
+  const src = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+  const i = src.indexOf("app.get('/prestacoes_contas/resumo_tr'");
+  // ⚠️ O RECORTE PARA NO `const where`, e não num "GROUP BY": um comentário da própria rota
+  // cita o GROUP BY, e cortar ali deixava o bloco terminar ANTES do código a conferir — as
+  // checagens reprovavam por estarem olhando um pedaço curto, não por defeito no código.
+  const bloco = src.slice(i, src.indexOf('const where =', i));
+
+  conf(/const \{ analista_id, setorial_id, busca, tr, processo \} = req\.query/.test(bloco),
+       'a rota lê `tr` e `processo` além do `busca`');
+  // ⚠️ AND, NUNCA OR: preencher mais campos tem de RESTRINGIR.
+  conf(/conditions\.join\(' AND '\)/.test(bloco), 'e as condições se combinam com AND');
+
+  // ⚠️ O PONTO QUE ESTRAGA EM SILÊNCIO: o processo TEM de entrar por subconsulta. Aplicado
+  // direto no WHERE de um GROUP BY tr, ele deixaria passar só as LINHAS cujo processo casou,
+  // e o `total_pcs` de uma TR de 44 PCs viraria 3. Número menor, plausível e errado.
+  conf(/condicaoProcesso\(processo, values, i\)/.test(bloco), 'o processo usa a condição da lib');
+  const trechoProc = bloco.slice(bloco.indexOf('condicaoProcesso(processo'));
+  conf(/tr IN \(SELECT tr FROM prestacoes_contas WHERE \$\{escopoSub\}\$\{cProc\.condicao\}\)/.test(trechoProc),
+       'e entra por SUBCONSULTA, para o GROUP BY continuar contando a TR inteira');
+  // A TR não precisa, e o teste diz por quê — todas as linhas da TR têm o mesmo `tr`.
+  const trechoTr = bloco.slice(bloco.indexOf('condicaoTr(tr'), bloco.indexOf('condicaoProcesso(processo'));
+  conf(/conditions\.push\(cTr\.condicao\)/.test(trechoTr), 'a TR entra direto, sem subconsulta');
+
+  // ⚠️ O ESCOPO VALE DENTRO DA SUBCONSULTA: filtrar não pode revelar TR de fora do recorte.
+  conf((bloco.match(/\$\{escopoSub\}/g) || []).length === 2,
+       'e o escopo do usuário entra nas DUAS subconsultas', (bloco.match(/\$\{escopoSub\}/g) || []).length);
+  // O `busca` não mudou de forma.
+  conf(/const r = condicaoBusca\(busca, values, i\)/.test(bloco), 'o `busca` continua exatamente como era');
 }
 
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);

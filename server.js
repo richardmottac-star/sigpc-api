@@ -10,7 +10,7 @@ const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
 const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
 const sgpePortal = require('./lib/sgpe-portal');
 
-const { semAcento, condicaoBusca } = require('./lib/busca');
+const { semAcento, condicaoBusca, condicaoTr, condicaoProcesso } = require('./lib/busca');
 const limiteTr = require('./lib/limite-tr');
 const notif = require('./lib/notificacao');
 const { HOJE_BR, CORTE_PRAZO } = require('./lib/datas');
@@ -1472,7 +1472,17 @@ app.get('/prestacoes_contas', async (req, res) => {
 // agregações continuam vendo todas as linhas de cada TR.
 app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
   try {
-    const { analista_id, setorial_id, busca } = req.query;
+    // ⚠️ `tr` E `processo` SÃO FILTROS PRÓPRIOS, E SOMAM COM O `busca` (31/08/2026). A barra
+    // do Estoque passou a ter uma caixa para cada coisa, e antes só havia UM termo: com TR e
+    // processo preenchidos ao mesmo tempo, a tela teria de mandar "2021TR000411 SCC 197/2021"
+    // num campo só, que não casa com nada — a busca voltaria vazia justamente quando a pessoa
+    // foi MAIS específica. A alternativa era o navegador filtrar o resto, e a lista é
+    // PAGINADA: ele filtraria uma página e os contadores mentiriam (armadilha 16).
+    //
+    // ⚠️ OS TRÊS COMBINAM COM `AND` — preencher mais campos RESTRINGE mais, nunca amplia. É o
+    // `conditions.join(' AND ')` lá embaixo. E o `busca` continua idêntico ao que era: quem
+    // manda só ele recebe o que sempre recebeu, campo a campo.
+    const { analista_id, setorial_id, busca, tr, processo } = req.query;
     // Escopo: recorta o universo de linhas e, portanto, também as contagens. É intencional —
     // um analista vê os números das SUAS PCs.
     const escopo = [];
@@ -1482,6 +1492,10 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
     if (setorial_id) { escopo.push(`setorial_id = $${i++}`); values.push(setorial_id); }
 
     const conditions = [...escopo];
+    // O mesmo escopo vale dentro de toda subconsulta: filtrar não pode revelar TR de fora do
+    // recorte do usuário.
+    const escopoSub = escopo.length ? `${escopo.join(' AND ')} AND ` : '';
+
     if (busca) {
       // Mesma condição do GET /prestacoes_contas — a mesma palavra tem de achar a mesma coisa
       // nas duas rotas. Buscar a NL "2022NL008336", a PC "2020PC000845" ou "SCC 2511" traz a
@@ -1489,11 +1503,23 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
       // todas as linhas dela (ver o aviso sobre o GROUP BY acima).
       const r = condicaoBusca(busca, values, i);
       i = r.proximo;
-      // O mesmo escopo vale dentro da subconsulta: buscar não pode revelar TR de fora do
-      // recorte do usuário.
-      const escopoSub = escopo.length ? `${escopo.join(' AND ')} AND ` : '';
       conditions.push(
         `tr IN (SELECT tr FROM prestacoes_contas WHERE ${escopoSub}${r.condicao})`
+      );
+    }
+
+    // ⚠️ A TR ENTRA DIRETO NO `WHERE`, e o PROCESSO por subconsulta — e a diferença não é
+    // estilo. Todas as linhas de uma TR têm o mesmo `tr`, então filtrar por ele tira TRs
+    // inteiras. O processo NÃO: numa TR de 44 PCs, o processo procurado está em 3 delas, e
+    // filtrar direto deixaria o `total_pcs` contar 3 — um número menor, plausível e errado.
+    const cTr = condicaoTr(tr, values, i);
+    if (cTr) { i = cTr.proximo; conditions.push(cTr.condicao); }
+
+    const cProc = condicaoProcesso(processo, values, i);
+    if (cProc) {
+      i = cProc.proximo;
+      conditions.push(
+        `tr IN (SELECT tr FROM prestacoes_contas WHERE ${escopoSub}${cProc.condicao})`
       );
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';

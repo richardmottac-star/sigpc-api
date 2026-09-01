@@ -160,3 +160,7 @@ reverter_sgpe_*.json
 reverter_import_sigef_*.json
 .sigef_tmp/
 reverter_engenharia_*.json
+
+# Reversao da correcao de analista_nome (01/09/2026).
+# Sao DOIS nomes de proposito — o `_DRYRUN` e o da gravacao —, e o padrao cobre os dois.
+reverter_analista_nome_*.json

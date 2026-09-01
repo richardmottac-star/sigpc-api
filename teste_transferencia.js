@@ -266,5 +266,23 @@ conf(/executado_por_nome/.test(rotaL), 'e devolve o nome de quem executou');
 // ⚠️ UMA CONSULTA SO para os nomes: um SELECT por linha viraria N+1 sem ninguem perceber.
 conf(/WHERE id = ANY\(\$1::int\[\]\)/.test(rotaL), 'por UMA consulta, nao uma por linha');
 
+S('16. A ROTA DAS DEVOLVIDAS, PARA A PILULA DO ESTOQUE');
+// ⚠️ ROTA DE NOME FIXO ANTES DA ROTA COM :id — armadilha 13. Declarada depois,
+// /transferencias/devolvidas cairia em /transferencias/:id com id "devolvidas" e
+// devolveria 404 em producao. Ja aconteceu com /usuarios/pendentes.
+conf(rota.indexOf("app.get('/transferencias/devolvidas'") < rota.indexOf("app.get('/transferencias/:id'"),
+     'a rota de nome fixo vem ANTES da rota com :id');
+// ⚠️ A MARCA E DERIVADA, NAO GRAVADA: nao ha coluna veio_de_dispensado, e nao pode haver —
+// ela mudaria sozinha a cada desfazer e ficaria mentindo ate alguem rodar um script.
+const rotaDev = rota.slice(rota.indexOf("app.get('/transferencias/devolvidas'"), rota.indexOf("app.get('/transferencias/:id'"));
+conf(/transf.EVENTO_DESFEITA/.test(rotaDev), 'ela le o historico do desfazer');
+// ⚠️ E NADA DE COLUNA NOVA EM prestacoes_contas para esta frente: a marca sai do historico.
+conf(!/ALTER TABLE prestacoes_contas[sS]{0,120}(veio_de|devolvida)/.test(rota),
+     'e nenhuma coluna de "veio de dispensado" foi criada');
+// ⚠️ SO VALE ENQUANTO A TR CONTINUAR NO ESTOQUE: se alguem ja assumiu de volta, a pilula
+// mentiria — a TR tem dono e nao esta livre.
+conf(/analista_id IS NULL/.test(rotaDev), 'e so devolve TR que continua sem dono');
+conf(/portaria/.test(rotaDev), 'trazendo a portaria de quem saiu, para o balao');
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

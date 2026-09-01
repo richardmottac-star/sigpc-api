@@ -3569,6 +3569,61 @@ app.get('/transferencias', async (req, res) => {
   }
 });
 
+
+// GET /transferencias/devolvidas — as TRs que voltaram ao estoque por um desfazer
+//
+// ⚠️ ROTA SEPARADA, E NÃO UM JOIN NO ESTOQUE. A alternativa era a `resumo_tr` carregar um
+// LEFT JOIN com o histórico para cada linha — e ela é a lista quente do sistema, paginada e
+// chamada em seis telas. Aqui a tela do Estoque pede UMA vez o conjunto das devolvidas (são
+// poucas, e por construção continuam poucas) e casa pela TR no navegador. O custo fica na
+// tela que precisa da pílula, e não em todas as que não precisam.
+//
+// ⚠️ E A MARCA É DERIVADA, NÃO GRAVADA — decisão do Richard, 01/09/2026. Não há coluna
+// `veio_de_dispensado` em `prestacoes_contas`, e não pode haver: ela mudaria sozinha a cada
+// desfazer e ficaria mentindo até alguém rodar um script. É o mesmo motivo pelo qual não
+// existe `sigef_tag`. A verdade é o histórico; a pílula é uma leitura dele.
+app.get('/transferencias/devolvidas', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (h.tr)
+             h.tr,
+             h.criado_em                          AS devolvida_em,
+             h.estado_anterior->>'veio_de'        AS veio_de,
+             h.estado_anterior->>'repasse_em'     AS repasse_em
+        FROM parcela_historico h
+       WHERE h.evento = $1
+       ORDER BY h.tr, h.criado_em DESC`, [transf.EVENTO_DESFEITA]);
+
+    // ⚠️ SÓ VALE ENQUANTO A TR CONTINUAR NO ESTOQUE. Se alguém já assumiu de volta, a pílula
+    // "Analista dispensado" mentiria — a TR tem dono e não está livre. O corte é aqui, contra
+    // o estado de agora, e não no histórico, que só sabe do passado.
+    const trs = rows.map((r) => r.tr);
+    const { rows: livres } = trs.length
+      ? await pool.query(`SELECT DISTINCT tr FROM prestacoes_contas
+                           WHERE tr = ANY($1::text[]) AND analista_id IS NULL`, [trs])
+      : { rows: [] };
+    const noEstoque = new Set(livres.map((l) => l.tr));
+
+    // A portaria de quem saiu, para o balão. O `veio_de` é "48 · Samoel"; o id é o que casa.
+    const ids = [...new Set(rows.map((r) => {
+      const p = transf.partirRotulo(r.veio_de); return p ? p.id : null;
+    }).filter(Boolean))];
+    const { rows: quem } = ids.length
+      ? await pool.query(`SELECT id, nome, portaria, data_saida FROM usuarios WHERE id = ANY($1::int[])`, [ids])
+      : { rows: [] };
+    const porId = new Map(quem.map((q) => [q.id, q]));
+
+    res.json({ data: rows.filter((r) => noEstoque.has(r.tr)).map((r) => {
+      const p = transf.partirRotulo(r.veio_de);
+      const u = p ? porId.get(p.id) : null;
+      return { tr: r.tr, devolvida_em: r.devolvida_em, repasse_em: r.repasse_em,
+               de_id: p ? p.id : null, de_nome: u ? u.nome : (p ? p.nome : null),
+               portaria: u ? u.portaria : null, data_saida: u ? u.data_saida : null };
+    }), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
 // GET /transferencias/:id — o detalhe, com as PCs movidas
 //
 // ⚠️ ROTA DE NOME FIXO ANTES DA ROTA COM `:id` — armadilha 13. Aqui não há conflito porque

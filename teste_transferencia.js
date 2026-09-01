@@ -425,5 +425,133 @@ conf(/'coordenador' && !quem\.data_saida/.test(rota),
 conf(!/GET \/transferencias\/:id[\s\S]{0,400}Acesso restrito ao superadmin/.test(rota),
      'e a rota do detalhe deixou de ser so do superadmin');
 
+
+S('23. A CIENCIA DO REPASSE (01/09/2026)');
+// ⚠️ NENHUMA TABELA NOVA: a ciencia e uma LINHA do parcela_historico, como o desfazer. A
+// coluna evento nao tem CHECK, e estado_anterior e jsonb e ja existe.
+{
+  const LOTE = { criado_em: new Date(2026, 8, 1), evento: 'transferencia',
+                 valor_anterior: '48 · Samoel', valor_novo: '7 · Aline' };
+
+  const destino = { id: 7, nome: 'Aline', perfil: 'analista', grupo: '2', data_saida: null };
+  conf(transf.condicaoCiencia(destino, LOTE) === 'analista de destino',
+       'o analista de destino da ciencia nessa condicao', transf.condicaoCiencia(destino, LOTE));
+
+  // ⚠️ O GRUPO DO COORDENADOR E O **DELE**, nao o do repasse — ordem do Richard. Um repasse do
+  // Grupo 2 assinado pela coordenacao do Grupo 1 e exatamente isso; escrever "Grupo 2" ali
+  // poria no documento um cargo que a pessoa nao ocupa.
+  const coord1 = { id: 8, nome: 'Nayara', perfil: 'coordenador', grupo: '1', data_saida: null };
+  conf(transf.condicaoCiencia(coord1, LOTE) === 'coordenação do Grupo 1',
+       'e a coordenacao assina pelo grupo DELA, mesmo num repasse de outro grupo',
+       transf.condicaoCiencia(coord1, LOTE));
+
+  // ⚠️ DISPENSADO NAO DA CIENCIA, pelo mesmo data_saida que o tira do aviso.
+  const coordFora = { id: 9, nome: 'X', perfil: 'coordenador', grupo: '3', data_saida: '2026-07-01' };
+  conf(transf.condicaoCiencia(coordFora, LOTE) === null, 'coordenador dispensado nao da ciencia');
+
+  // ⚠️ A ORIGEM NAO DA CIENCIA: ela abre o termo, porque o acervo foi dela, mas nao ha o que
+  // declare assumir — o repasse TIRA PCs dela.
+  const origem = { id: 48, nome: 'Samoel', perfil: 'analista', grupo: '2', data_saida: null };
+  conf(transf.condicaoCiencia(origem, LOTE) === null, 'a origem NAO da ciencia');
+  const outro = { id: 99, nome: 'Outro', perfil: 'analista', grupo: '1', data_saida: null };
+  conf(transf.condicaoCiencia(outro, LOTE) === null, 'e um analista qualquer tampouco');
+  conf(transf.condicaoCiencia(null, LOTE) === null && transf.condicaoCiencia(destino, null) === null,
+       'nulo nao estoura');
+
+  // A ancora e o MIN(id) do lote, a mesma chave das rotas — sem coluna e sem contador novo.
+  conf(transf.ancoraCiencia(412) === 'repasse:412', 'a ancora e repasse:{id}', transf.ancoraCiencia(412));
+
+  const pc = transf.paramsCiencia({ repasseId: 412, condicao: 'analista de destino', quem: destino });
+  conf(pc[1] === transf.EVENTO_CIENCIA && pc[1] === 'transferencia_ciencia',
+       'o evento e transferencia_ciencia', pc[1]);
+  conf(pc[2] === 'repasse:412', 'e o valor_anterior ancora no repasse', pc[2]);
+  conf(pc[3] === 'analista de destino', 'o valor_novo guarda a CONDICAO', pc[3]);
+  conf(pc[4] === 7, 'e o analista_id e quem deu a ciencia', String(pc[4]));
+  // ⚠️ O NOME VIAJA JUNTO, alem do id: o termo e reemitido anos depois e a pessoa pode ter
+  // saido do cadastro. Mesmo motivo pelo qual a portaria viaja no estado_anterior do repasse.
+  const jb = JSON.parse(pc[6]);
+  conf(jb.nome === 'Aline' && jb.usuario_id === 7 && jb.repasse_id === 412,
+       'o estado_anterior guarda nome, id e repasse');
+
+  // ⚠️ tr E parcial_num FICAM NULOS. Toda outra linha desta tabela fala de UMA parcela; a
+  // ciencia fala do REPASSE. Ancora-la numa TR do lote faria a linha afirmar que a pessoa deu
+  // ciencia daquela TR — falso — e ainda a poria no historico da parcela.
+  conf(/SELECT NULL::text, NULL::text/.test(transf.SQL_CIENCIA_GRAVAR),
+       'tr e parcial_num vao NULOS: a ciencia nao e sobre parcela');
+  // ⚠️ O "NAO SE REPETE" VIVE DENTRO DO INSERT. Conferir antes e inserir depois deixa a fresta
+  // de dois cliques simultaneos passarem os dois — mesma escolha do dedupe da notificacao.
+  conf(/WHERE NOT EXISTS/.test(transf.SQL_CIENCIA_GRAVAR), 'o nao-repetir vive DENTRO do INSERT');
+  conf(/x\.analista_id = \$5::int/.test(transf.SQL_CIENCIA_GRAVAR),
+       'e a chave e (evento, repasse, quem)');
+  conf(/NULL::int, \$7::jsonb/.test(transf.SQL_CIENCIA_GRAVAR),
+       'executado_por vai NULO — quem da ciencia e sempre o dono dela');
+
+  // ⚠️ O EVENTO FICA DE FORA DAS DUAS LISTAS QUE JA EXISTEM. Em EVENTOS_REPASSE ele viraria
+  // uma linha da lista de repasses; em EVENTOS_TRAVA impediria desfazer um repasse errado
+  // justamente depois de alguem ter lido que ele existe.
+  conf(!transf.EVENTOS_REPASSE.includes(transf.EVENTO_CIENCIA), 'a ciencia NAO e um repasse na lista');
+  conf(!transf.EVENTOS_TRAVA.includes(transf.EVENTO_CIENCIA), 'e NAO trava o desfazer');
+}
+
+S('24. AS ROTAS DA CIENCIA');
+{
+  // ⚠️ ROTA DE NOME FIXO ANTES DA ROTA COM :id — armadilha 13, e aqui ela morde: declarada
+  // depois, /ciencia_pendente casaria com /:id, o parseInt daria NaN e a resposta seria
+  // "Repasse nao encontrado" para uma rota que existe.
+  const iPend = rota.indexOf("app.get('/transferencias/ciencia_pendente'");
+  const iId = rota.indexOf("app.get('/transferencias/:id'");
+  conf(iPend > 0 && iId > 0 && iPend < iId, 'ciencia_pendente e declarada ANTES de /:id');
+
+  const iPost = rota.indexOf("app.post('/transferencias/:id/ciencia'");
+  conf(iPost > 0, 'ha POST /transferencias/:id/ciencia');
+  const post = rota.slice(iPost, rota.indexOf("app.get('/transferencias/:id'", iPost));
+
+  // ⚠️ QUEM AGE PELA CONTA DE OUTRO NAO DA CIENCIA POR ELE. E a quinta trava da familia de
+  // estornar, devolver TR, pedir devolucao e decidir no C.I. — decisoes SOBRE o trabalho da
+  // pessoa, nao trabalho. Uma ciencia registrada por terceiro nao prova que alguem leu nada.
+  conf(/b\.executado_por != null && String\(b\.executado_por\) !== String\(b\.usuario_id\)/.test(post),
+       'a rota RECUSA quem age pela conta de outro');
+  conf(/status\(403\)/.test(post), 'e a recusa e 403');
+  conf(rota.indexOf('b.executado_por != null', iPost) < rota.indexOf('SELECT id, nome, perfil, grupo, papel_ativo, data_saida FROM usuarios WHERE id = $1', iPost),
+       'e ela vem ANTES de qualquer consulta — nao ha o que gravar para conferir depois');
+
+  // ⚠️ SO O PROPRIO DESTINATARIO REGISTRA A DELE: nao ha "de_quem" no corpo, de proposito. Um
+  // parametro "por quem" existiria justamente para ser preenchido com o id de outra pessoa.
+  conf(!/de_quem|destinatario_id|em_nome_de/.test(post), 'nao ha parametro "por quem" no corpo');
+  conf(/transf\.condicaoCiencia\(quem, l\)/.test(post), 'a condicao sai de quem esta autenticado');
+
+  // ⚠️ "NAO SE APAGA" NAO E UMA TRAVA A ESCREVER: e a ausencia deliberada de um DELETE. Uma
+  // ciencia retiravel nao seria ciencia de coisa nenhuma.
+  conf(!/app\.delete\(['"]\/transferencias/.test(rota), 'nao existe rota que apague ciencia');
+  conf(!/DELETE FROM parcela_historico/.test(rota), 'e nada apaga do parcela_historico');
+
+  // ⚠️ ZERO LINHAS NAO E ERRO: e a ciencia que ja existia. Quem clicou duas vezes fez a mesma
+  // coisa duas vezes, e o resultado e o mesmo — o 200 e honesto.
+  conf(/repetida: !gravou\.length/.test(post), 'a repetida devolve 200 com repetida:true');
+
+  // ⚠️ O REPASSE VELHO NAO PEDE CIENCIA E POR ISSO NAO A ACEITA: os 32 registros de 28/08 nao
+  // avisaram ninguem, e uma ciencia sobre eles afirmaria uma leitura que nao houve.
+  conf(/l\.evento !== transf\.EVENTO/.test(post), 'o repasse anterior ao registro nao aceita ciencia');
+
+  // A lista de quem DEVE ciencia e a MESMA que recebeu o aviso — se divergirem, alguem recebe
+  // modal sem ter sido avisado, ou e avisado e nao consegue registrar.
+  conf(/async function devemCiencia/.test(rota), 'ha uma funcao unica de quem deve ciencia');
+  conf(/notif\.coordenadoresEmExercicio\(db\)/.test(rota.slice(rota.indexOf('async function devemCiencia'))),
+       'e ela usa a MESMA lista do aviso do sino');
+  // ⚠️ O PENDENTE E DERIVADO, nunca gravado: uma lista de "fulano deve" envelheceria — o
+  // coordenador novo nao apareceria e o dispensado continuaria cobrado.
+  conf(/pendentes: esperados\.filter\(\(e\) => !jaDeram\.has\(e\.id\)\)/.test(rota),
+       'e o pendente sai por subtracao, nao de uma lista gravada');
+
+  // O detalhe devolve as duas listas, e o Historico os dois numeros.
+  const det = rota.slice(iId, rota.indexOf("app.post('/transferencias/:id/desfazer'"));
+  conf(/ciencias: cie\.ciencias/.test(det) && /ciencias_pendentes: cie\.pendentes/.test(det),
+       'GET /transferencias/:id devolve as ciencias e quem falta');
+  const lista = rota.slice(rota.indexOf("app.get('/transferencias',"), rota.indexOf("app.get('/transferencias/devolvidas'"));
+  conf(/ciencias: porAncora\.get/.test(lista) && /ciencias_esperadas:/.test(lista),
+       'e a lista do Historico traz quantas foram e quantas se espera');
+  // ⚠️ UMA consulta para a lista inteira, nunca N+1.
+  conf(/SQL_CIENCIAS_CONTA/.test(lista), 'a contagem da lista e UMA consulta, nao uma por linha');
+}
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

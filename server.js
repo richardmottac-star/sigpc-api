@@ -3707,6 +3707,50 @@ async function podeVerRepasse(quem, lote) {
   return papel.perfilEfetivo(quem) === 'coordenador' && !quem.data_saida;
 }
 
+/**
+ * QUEM DEVE CIÊNCIA DE UM REPASSE: o analista de destino e a coordenação em exercício.
+ *
+ * ⚠️ É A MESMA LISTA QUE RECEBEU O AVISO NO SINO, e tem de continuar sendo — as duas saem da
+ * `notif.coordenadoresEmExercicio`. Se divergirem, alguém recebe um modal de ciência sem ter
+ * sido avisado, ou é avisado e não consegue registrar: os dois lados do mesmo defeito.
+ *
+ * ⚠️ "EM EXERCÍCIO" É DE HOJE, e não da data do repasse. Um coordenador dispensado depois do
+ * repasse deixa de ser cobrado — a pendência existe para ser resolvida por quem está lá, e não
+ * para ficar aberta para sempre no nome de quem saiu.
+ *
+ * ⚠️ A ORIGEM NÃO ENTRA. Ela abre o termo, porque o acervo foi dela, mas não há o que declare
+ * assumir: o repasse tira PCs dela, não lhe entrega nenhuma.
+ */
+async function devemCiencia(db, lote) {
+  const para = transf.partirRotulo(lote.valor_novo);
+  const ids = await notif.coordenadoresEmExercicio(db);
+  const todos = [...new Set([...(para ? [para.id] : []), ...ids])];
+  if (!todos.length) return [];
+  const { rows } = await db.query(
+    `SELECT id, nome, perfil, grupo, data_saida FROM usuarios WHERE id = ANY($1::int[])`, [todos]);
+  return rows.map((u) => ({
+    id: u.id, nome: u.nome, condicao: transf.condicaoCiencia(u, lote),
+  })).filter((x) => x.condicao);
+}
+
+/** As ciências já registradas, e quem ainda deve. Serve o detalhe, o termo e o modal. */
+async function cienciasDoRepasse(db, repasseId, lote) {
+  const { rows: dadas } = await db.query(transf.SQL_CIENCIAS,
+    [transf.EVENTO_CIENCIA, transf.ancoraCiencia(repasseId)]);
+  const esperados = await devemCiencia(db, lote);
+  const jaDeram = new Set(dadas.map((d) => d.analista_id));
+  return {
+    ciencias: dadas.map((d) => ({
+      id: d.id, usuario_id: d.analista_id, nome: d.nome,
+      condicao: d.condicao, quando: d.criado_em,
+    })),
+    // ⚠️ O PENDENTE É DERIVADO, e não uma lista gravada. Gravar "fulano deve ciência" criaria
+    // uma segunda verdade que envelhece: um coordenador novo não apareceria, e um dispensado
+    // continuaria cobrado. A pergunta se responde por subtração, toda vez.
+    pendentes: esperados.filter((e) => !jaDeram.has(e.id)),
+  };
+}
+
 // GET /transferencias — do mais recente para o mais antigo
 app.get('/transferencias', async (req, res) => {
   try {
@@ -3724,12 +3768,34 @@ app.get('/transferencias', async (req, res) => {
       ? await pool.query(`SELECT id, nome FROM usuarios WHERE id = ANY($1::int[])`, [ids])
       : { rows: [] };
     const nomeDe = new Map(execs.map((e) => [e.id, e.nome]));
+
+    // ── AS CIÊNCIAS DA LISTA: UMA consulta para todos os repasses ───────────
+    //
+    // ⚠️ NUNCA UMA POR LINHA. A lista cresce a cada repasse, e um SELECT por item viraria N+1
+    // sem ninguém perceber — é o mesmo cuidado que os nomes dos executores acima já tomam.
+    //
+    // ⚠️ E O ESPERADO É UM NÚMERO SÓ PARA A LISTA INTEIRA: 1 (o destino) + a coordenação em
+    // exercício. Ele é igual em todos os repasses porque a coordenação é a de HOJE — o que
+    // varia entre linhas é quantas já foram dadas.
+    const ancoras = rows.map((r) => transf.ancoraCiencia(r.id));
+    const { rows: cont } = ancoras.length
+      ? await pool.query(transf.SQL_CIENCIAS_CONTA, [transf.EVENTO_CIENCIA, ancoras])
+      : { rows: [] };
+    const porAncora = new Map(cont.map((c) => [c.ancora, c.n]));
+    const esperado = 1 + (await notif.coordenadoresEmExercicio(pool)).length;
+
     res.json({ data: rows.map((r) => ({
       id: r.id, quando: r.criado_em, evento: r.evento,
       de: transf.partirRotulo(r.valor_anterior), para: transf.partirRotulo(r.valor_novo),
       trs: r.trs, pcs: r.pcs,
       executado_por: r.executado_por,
       executado_por_nome: nomeDe.get(r.executado_por) || null,
+      // ⚠️ SÓ O EVENTO NOVO TEM CIÊNCIA A COBRAR, pelo mesmo motivo do termo: os 32 registros
+      // de 28/08 vieram de um script, ninguém foi avisado deles, e cobrar ciência de um
+      // repasse que nunca comunicou nada abriria uma pendência impossível de fechar com
+      // honestidade.
+      ciencias: porAncora.get(transf.ancoraCiencia(r.id)) || 0,
+      ciencias_esperadas: r.evento === transf.EVENTO ? esperado : 0,
       // ⚠️ O TERMO SÓ EXISTE PARA O EVENTO NOVO. Os 32 registros de 28/08 vieram de um script
       // que não gerou termo nenhum, e a tela mostra "sem termo" neles — inventar um documento
       // para um repasse que não teve seria produzir papel com data retroativa.
@@ -3795,6 +3861,170 @@ app.get('/transferencias/devolvidas', async (req, res) => {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
 });
+// ══════════════════════════════════════════════════════════════════════════════
+//  A CIÊNCIA DO REPASSE (01/09/2026)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// GET /transferencias/ciencia_pendente?usuario_id=N
+//
+// Os repasses de que ESTA pessoa ainda não deu ciência — é o que o modal do login lê.
+//
+// ⚠️ ROTA DE NOME FIXO ANTES DA ROTA COM `:id` — armadilha 13, e aqui ela morde de verdade:
+// declarada depois, `/transferencias/ciencia_pendente` casaria com `/transferencias/:id`, o
+// `parseInt` daria `NaN` e a resposta seria "Repasse não encontrado" para uma rota que existe.
+// A `/devolvidas` está acima pela mesma razão.
+//
+// ⚠️ SÓ O EVENTO NOVO. Os 32 registros de 28/08 vieram de um script que não avisou ninguém —
+// abrir um modal de ciência sobre eles seria pedir que a pessoa declare ter lido um repasse
+// que nunca lhe foi comunicado.
+app.get('/transferencias/ciencia_pendente', async (req, res) => {
+  try {
+    const { rows: u } = await pool.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo, data_saida FROM usuarios WHERE id = $1`,
+      [parseInt(req.query.usuario_id) || 0]);
+    if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    const quem = u[0];
+
+    const { rows: lotes } = await pool.query(transf.SQL_LISTA, [[transf.EVENTO]]);
+    const meus = lotes.filter((l) => transf.condicaoCiencia(quem, l));
+    if (!meus.length) return res.json({ data: [], error: null });
+
+    // ⚠️ UMA CONSULTA PARA SABER O QUE JÁ FOI DADO, e não uma por repasse.
+    const { rows: dadas } = await pool.query(
+      `SELECT valor_anterior AS ancora FROM parcela_historico
+        WHERE evento = $1::text AND analista_id = $2::int AND valor_anterior = ANY($3::text[])`,
+      [transf.EVENTO_CIENCIA, quem.id, meus.map((l) => transf.ancoraCiencia(l.id))]);
+    const ja = new Set(dadas.map((d) => d.ancora));
+    const faltam = meus.filter((l) => !ja.has(transf.ancoraCiencia(l.id)));
+    if (!faltam.length) return res.json({ data: [], error: null });
+
+    // ── O QUE O MODAL PRECISA, e que a lista sozinha não dá ─────────────────
+    //
+    // ⚠️ A PORTARIA E A VIGÊNCIA VÊM DO CADASTRO DO DESTINO — a mesma fonte do termo desde
+    // 01/09. A `substituicao` guarda a portaria da DISPENSA da origem, e o modal afirma na
+    // primeira pessoa "a partir de tal data você assume": afirmar isso com a data errada é
+    // pior do que não afirmar.
+    const idsPara = [...new Set(faltam.map((l) => (transf.partirRotulo(l.valor_novo) || {}).id).filter(Boolean))];
+    const { rows: paras } = idsPara.length
+      ? await pool.query(
+          `SELECT id, nome, grupo, portaria, data_ingresso::text FROM usuarios WHERE id = ANY($1::int[])`,
+          [idsPara])
+      : { rows: [] };
+    const porId = new Map(paras.map((x) => [x.id, x]));
+
+    const saida = [];
+    for (const l of faltam) {
+      const para = transf.partirRotulo(l.valor_novo) || {};
+      const cad = porId.get(para.id) || {};
+      // ⚠️ AS PCs DO LOTE VÊM DA `SQL_DETALHE`, a MESMA que o detalhe e o desfazer usam. Um
+      // segundo SQL que agrupasse o lote por conta própria é a segunda definição de "quais PCs
+      // este repasse moveu" — e a primeira já custou caro em 01/09, quando o `criado_em` ia e
+      // voltava pelo JavaScript e o detalhe vinha vazio.
+      const { rows: pcs } = await pool.query(transf.SQL_DETALHE, [l.id, transf.EVENTOS_REPASSE]);
+      const codigos = pcs.map((x) => x.codigo_pc).filter(Boolean);
+      // ⚠️ AS VENCIDAS SÃO CONTADAS COM A MESMA REGRA da busca global e do aviso do sino:
+      // CORTE_PRAZO e hoje em Brasília. Um terceiro critério faria a caixa bege do modal
+      // discordar do texto que a pessoa acabou de ler no sino.
+      const venc = codigos.length
+        ? (await pool.query(
+            `SELECT COUNT(*)::int n FROM prestacoes_contas
+              WHERE codigo_pc = ANY($1::text[]) AND dt_limite_pc IS NOT NULL
+                AND dt_limite_pc >= $2::date AND dt_limite_pc < ${HOJE_BR}`,
+            [codigos, CORTE_PRAZO])).rows[0].n
+        : 0;
+      saida.push({
+        id: l.id, quando: l.criado_em,
+        de: transf.partirRotulo(l.valor_anterior),
+        para: { id: para.id, nome: cad.nome || para.nome,
+                grupo: cad.grupo == null ? null : String(cad.grupo) },
+        portaria: cad.portaria || null,
+        vigencia: cad.data_ingresso || null,
+        pcs: l.pcs, trs: l.trs, vencidas: venc,
+        condicao: transf.condicaoCiencia(quem, l),
+        // ⚠️ O GRUPO DE QUEM ASSINA, e não o do repasse — ordem do Richard. A caixa de marcar
+        // do coordenador diz "na condição de coordenação do Grupo N", e o N é o DELE.
+        meu_grupo: quem.grupo == null ? null : String(quem.grupo),
+        grupo_repasse: cad.grupo == null ? null : String(cad.grupo),
+      });
+    }
+    res.json({ data: saida, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /transferencias/:id/ciencia  { usuario_id }
+//
+// ⚠️ SÓ O PRÓPRIO DESTINATÁRIO REGISTRA A DELE. Não há `de_quem` no corpo, de propósito: o
+// único id que a rota usa é o do autenticado. Um parâmetro "por quem" existiria justamente
+// para ser preenchido com o de outra pessoa.
+//
+// ⚠️ E QUEM AGE PELA CONTA DE OUTRO NÃO DÁ CIÊNCIA POR ELE — ordem do Richard, e é a quinta
+// trava da mesma família de estornar, devolver TR, pedir devolução e decidir no C.I.: são
+// decisões SOBRE o trabalho da pessoa, não trabalho. Uma ciência registrada por terceiro não
+// prova que alguém leu coisa nenhuma — que é a única coisa que uma ciência serve para provar.
+//
+// ⚠️ A RECUSA É DO SERVIDOR, e o sinal é o `executado_por` que o `fetch` do front carimba em
+// todo corpo que declara dono (armadilha 22 do front). Esconder o botão na tela seria
+// cosmético: a URL continua existindo.
+app.post('/transferencias/:id/ciencia', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.usuario_id) return res.status(400).json({ data: null, error: { message: 'usuario_id é obrigatório.' } });
+
+    // ⚠️ O CARIMBO DENUNCIA O MODO. Ele só aparece quando alguém está agindo pela conta de
+    // outro — e aí os dois ids diferem. Recusar aqui é o que faz a trava valer para a URL
+    // crua, e não só para o botão.
+    if (b.executado_por != null && String(b.executado_por) !== String(b.usuario_id)) {
+      return res.status(403).json({ data: null, error: {
+        message: 'Ciência é pessoal: não dá para registrar no lugar de outra pessoa. '
+          + 'Saia do modo "agir pela conta de" e peça que ela mesma registre.' } });
+    }
+
+    const { rows: u } = await pool.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo, data_saida FROM usuarios WHERE id = $1`,
+      [parseInt(b.usuario_id) || 0]);
+    if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    const quem = u[0];
+
+    const { rows: lote } = await pool.query(transf.SQL_LOTE_POR_ID,
+      [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
+    if (!lote.length) return res.status(404).json({ data: null, error: { message: 'Repasse não encontrado.' } });
+    const l = lote[0];
+
+    // ⚠️ O REPASSE VELHO NÃO PEDE CIÊNCIA, e por isso também não a aceita: os 32 registros de
+    // 28/08 não avisaram ninguém, e uma ciência sobre eles afirmaria uma leitura que não houve.
+    if (l.evento !== transf.EVENTO) {
+      return res.status(409).json({ data: null, error: {
+        message: 'Este repasse é anterior ao registro de ciência e não pede uma.' } });
+    }
+
+    const condicao = transf.condicaoCiencia(quem, l);
+    if (!condicao) {
+      return res.status(403).json({ data: null, error: {
+        message: 'Este repasse não pede a sua ciência — ela é do analista de destino e da coordenação.' } });
+    }
+
+    const { rows: gravou } = await pool.query(transf.SQL_CIENCIA_GRAVAR,
+      transf.paramsCiencia({ repasseId: parseInt(req.params.id), condicao, quem }));
+
+    // ⚠️ ZERO LINHAS AQUI NÃO É ERRO: é a ciência que já existia. "Não se repete" é isto, e a
+    // resposta diz `repetida: true` em vez de estourar — quem clicou duas vezes fez a mesma
+    // coisa duas vezes, e o resultado é o mesmo. O 200 é honesto: o estado pedido é o estado.
+    const cie = await cienciasDoRepasse(pool, parseInt(req.params.id) || 0, l);
+    res.json({ data: {
+      repasse_id: parseInt(req.params.id),
+      registrada: !!gravou.length,
+      repetida: !gravou.length,
+      quando: gravou.length ? gravou[0].criado_em : null,
+      condicao,
+      ciencias: cie.ciencias, ciencias_pendentes: cie.pendentes,
+    }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // GET /transferencias/:id — o detalhe, com as PCs movidas
 //
 // ⚠️ ROTA DE NOME FIXO ANTES DA ROTA COM `:id` — armadilha 13. Aqui não há conflito porque
@@ -3845,10 +4075,17 @@ app.get('/transferencias/:id', async (req, res) => {
         portariaEm = portariaEm || sub[0].data_publicacao;
       }
     }
+    // ⚠️ AS CIÊNCIAS VÊM JUNTO COM O DETALHE, e não numa segunda chamada. O termo já pede este
+    // detalhe uma vez por emissão; uma rota à parte faria o documento ser montado com duas
+    // fontes e um instante de diferença entre elas.
+    const cie = await cienciasDoRepasse(pool, parseInt(req.params.id) || 0, l);
+
     res.json({ data: {
       id: parseInt(req.params.id), quando: l.criado_em, evento: l.evento,
       de: transf.partirRotulo(l.valor_anterior), para: transf.partirRotulo(l.valor_novo),
       tem_termo: l.evento === transf.EVENTO,
+      ciencias: cie.ciencias,
+      ciencias_pendentes: cie.pendentes,
       // ⚠️ A PORTARIA DO DESTINO — a vigencia do termo. Vem da foto do repasse; quando o
       // repasse e anterior a 01/09/2026 ela nao existe, e a tela mostra o termo sem vigencia
       // apenas para os antigos, que ja saem como "sem termo".

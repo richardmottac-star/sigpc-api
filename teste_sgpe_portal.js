@@ -229,7 +229,15 @@ secao('8. A CONSULTA — com fetch dublê, sem tocar no portal');
       conf(/e\.key === 'Escape'/.test(bloco), 'mas o Esc fecha');
       conf(/removeEventListener\('keydown', tecla, true\)/.test(bloco),
            'e o ouvinte do teclado sai junto — senao o Esc seguiria armado com a janela fechada');
-      conf(/el\.style\.zIndex = '1300'/.test(bloco), 'o modal sobe acima do cabecalho');
+      // ⚠️ O z-index SAIU DO ARQUIVO em 31/08/2026, quando este modal virou JANELA FLUTUANTE.
+      // O 1300 escrito a mao resolvia o cabecalho fixo (1199/1200) e mais nada: com duas
+      // janelas abertas as duas ficavam em 1300, e a ordem passava a ser a do documento — quem
+      // clicasse na de baixo continuaria vendo a de cima. Quem empilha agora e a `jfFocar`,
+      // que reordena TODAS a cada clique.
+      conf(!/el\.style\.zIndex = '1300'/.test(bloco), 'o z-index a mao saiu');
+      conf(/jfAbrir\('sgpeMo', el\)/.test(bloco), 'e a janela sobe pela pilha das flutuantes');
+      conf(/JF_Z_BASE = 1250/.test(idx) && /\.mo\{[^}]*z-index:1400/.test(idx),
+           'que fica acima do cabecalho fixo e abaixo do modal que trava');
       conf(/document\.body\.appendChild\(el\)/.test(bloco), 'e vai portalizado para o body');
       // Os seis estados.
       conf(/SIGLA_NAO_CADASTRADA/.test(bloco), 'estado: sigla nao cadastrada');
@@ -352,20 +360,39 @@ secao('8. A CONSULTA — com fetch dublê, sem tocar no portal');
     // resposta "nao encontrado" — a parte fixa mentiria sobre o miolo.
     conf(/ident\.innerHTML = ''/.test(idx), 'a identificacao e limpa a cada consulta nova');
 
-    // ── EXPANDIR ─────────────────────────────────────────────────────────────
-    conf(/id="sgpeExp"/.test(idx), 'ha o botao de expandir, ao lado do fechar');
-    conf(/function sgpeAplicarTamanho\(mc, bt, cheia\)/.test(idx),
-         'e UMA funcao aplica o tamanho — abertura e troca pelo mesmo caminho');
-    // ⚠️ A ESCOLHA E DE SESSAO, nao de sempre: quem expande esta expandindo para o processo de
-    // 34 tramites que tem na frente agora. No localStorage, a janela abriria em tela cheia
-    // semanas depois para uma consulta de duas linhas.
-    conf(/SGPE_CHEIA_CHAVE = 'sigpc_sgpe_tela_cheia'/.test(idx), 'a escolha tem chave propria');
+    // ── O EXPANDIR VIROU O MAXIMIZAR DA JANELA FLUTUANTE (31/08/2026) ────────
+    //
+    // ⚠️ ESTA SECAO COBRIA O BOTAO ⤢ DESTE MODAL, e ele saiu no mesmo dia em que foi
+    // consertado. O modal virou uma das cinco JANELAS FLUTUANTES e ganhou os tres botoes que
+    // todas tem — minimizar, maximizar, fechar. Dois botoes de maximizar na mesma barra de
+    // titulo seriam dois estados a manter em acordo, e o segundo estaria errado no dia
+    // seguinte. `sgpeCheiaLer`, `sgpeCheiaGravar`, `sgpeEstaCheia` e `sgpeAplicarTamanho`
+    // foram removidas.
+    conf(!/id="sgpeExp"/.test(idx) && !/data-f="exp"/.test(idx), 'o botao ⤢ proprio saiu');
+    // ⚠️ PELA DEFINICAO, nao pelo nome: o index.html CITA as quatro num comentario que conta
+    // por que elas sairam, e uma busca pelo nome cru acharia o proprio obituario delas.
+    conf(!/function (sgpeAplicarTamanho|sgpeEstaCheia|sgpeCheiaLer|sgpeCheiaGravar)/.test(idx),
+         'e as quatro funcoes dele tambem');
+    conf(/data-jf="max"/.test(idx), 'quem maximiza agora e o botao da janela');
+
+    // ⚠️ MAS A LICAO QUE ELE CUSTOU CONTINUA DE PE, e e por ela que esta secao existe. Medido
+    // no navegador, na versao publicada: com o armazenamento bloqueado — janela anonima,
+    // cookies de terceiros barrados — o `lerEstado()` devolvia `false` para sempre, o `!` do
+    // clique dava `true` toda vez, e a janela expandia no primeiro clique e NUNCA MAIS voltava:
+    // quatro cliques seguidos, 1711px nos quatro. Quem sabe se a janela esta grande e A JANELA.
+    conf(/function jfEstaMax\(mc\)\s*\{\s*return !!mc && mc\.dataset\.jfMax === '1'/.test(idx),
+         'o estado de maximizada sai do ELEMENTO, nunca do armazenamento');
+    conf(/if\(jfEstaMax\(mc\)\)/.test(idx), 'e o clique alterna a partir dele');
     {
-      const i = idx.indexOf('function sgpeCheiaLer()');
-      const bloco = idx.slice(i, idx.indexOf('function sgpeAplicarTamanho'));
-      conf(/sessionStorage/.test(bloco) && !/localStorage/.test(bloco),
-           'e vive na SESSAO, nao para sempre');
-      conf(/catch\(_\)/.test(bloco), 'protegida — no modo anonimo o sessionStorage LANCA');
+      // ⚠️ E O ARMAZENAMENTO CONTINUA PROTEGIDO POR `try`. Mudou de prazo — de `sessionStorage`
+      // para `localStorage`, porque a janela agora guarda POSICAO e quem arrastou para o canto
+      // quer acha-la ali amanha — mas nao mudou de risco: ele LANCA no modo anonimo, e sem o
+      // `try` a janela deixaria de abrir por causa de uma preferencia de posicao.
+      const i = idx.indexOf('function jfLerDisco()');
+      const bloco = idx.slice(i, idx.indexOf('const JF_MARGEM'));
+      conf(/localStorage/.test(bloco), 'a posicao e o tamanho vivem no localStorage');
+      conf((bloco.match(/catch\s*\(_\)/g) || []).length >= 2,
+           'e as duas pontas — ler e gravar — estao protegidas');
     }
 
     console.log(`\n=== RESULTADO: ${ok} passaram · ${falhou} falharam ===\n`);

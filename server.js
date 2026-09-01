@@ -3412,11 +3412,16 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
 // rota — e esta devolve o acervo inteiro de qualquer analista, que é justamente o que o
 // recorte por `analista_id` das outras telas existe para não fazer.
 
-// GET /busca_global?termo=X&usuario_id=N
+// GET /busca_global?termo=X&tr=Y&processo=Z&usuario_id=N
+//
+// ⚠️ `tr` E `processo` SÃO CAIXAS PRÓPRIAS DESDE 31/08/2026, e as três entradas combinam com
+// AND. A barra desta tela era o último campo livre do sistema — as outras sete já mandavam os
+// três separados, e ali a TR e o processo iam misturados no meio do texto.
 app.get('/busca_global', async (req, res) => {
   const cli = await pool.connect();
   try {
-    const b = { termo: req.query.termo, usuario_id: req.query.usuario_id };
+    const b = { termo: req.query.termo, tr: req.query.tr, processo: req.query.processo,
+                usuario_id: req.query.usuario_id };
     const erro = bg.validar(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
@@ -3425,16 +3430,19 @@ app.get('/busca_global', async (req, res) => {
     if (!u.length || papel.perfilEfetivo(u[0]) !== 'superadmin')
       return res.status(403).json({ data: null, error: { message: 'A busca global é exclusiva do superadmin.' } });
 
-    const termo = String(b.termo).trim();
+    // ⚠️ `String(b.termo)` VIRARIA A PALAVRA "undefined" quando a tela manda só as caixas —
+    // uma busca por entidade chamada "undefined", que não casa com nada e devolve zero como
+    // se a TR não existisse. O `?? ''` é o conserto, e ele nasceu junto com as caixas.
+    const termo = String(b.termo ?? '').trim();
 
     // ── quais TRs, e quais PCs casaram ───────────────────────────────────────
     // Duas perguntas, dois usos: o `IN` escolhe as TRs (e as agregações continuam vendo
     // TODAS as linhas de cada uma — o defeito de 09/08); o conjunto de `codigo_pc` é o que
     // destaca as parciais dentro do card.
     const vCasa = [];
-    const rc = bg.condicaoBusca(termo, vCasa, 1);
+    const condAlvo = bg.condicaoAlvo(b, vCasa);
     const { rows: casaram } = await cli.query(
-      `SELECT codigo_pc, tr FROM prestacoes_contas WHERE setorial_id='FCEE' AND ${rc.condicao}`, vCasa);
+      `SELECT codigo_pc, tr FROM prestacoes_contas WHERE setorial_id='FCEE' AND ${condAlvo}`, vCasa);
     if (!casaram.length)
       return res.json({ data: { termo, total_trs: 0, mostrando: 0, cards: [] }, links: {}, error: null });
 

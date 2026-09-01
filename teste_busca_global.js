@@ -34,6 +34,52 @@ conf(bg.validar({ termo: '  ', usuario_id: 4 }) !== null, 'termo so de espaco re
 conf(bg.validar({ termo: 'ab', usuario_id: 4 }) === null, '2 caracteres passam');
 conf(bg.validar({ termo: 'ab' }) !== null, 'sem usuario_id recusa');
 
+// ⚠️ TRES ENTRADAS, E BASTA UMA (31/08/2026). A TR e o processo ganharam caixa propria na
+// barra, como nas outras sete telas. Exigir `termo` recusaria com "Digite o que procura."
+// quem preencheu a TR — a caixa cheia, e a resposta dizendo que esta vazia.
+conf(bg.validar({ tr: '2020TR000704', usuario_id: 4 }) === null, 'so a TR passa, sem termo');
+conf(bg.validar({ processo: 'SCC 197/2021', usuario_id: 4 }) === null, 'so o processo passa');
+conf(bg.validar({ tr: '2020', processo: 'SCC', usuario_id: 4 }) === null, 'os dois juntos passam');
+conf(bg.validar({ termo: '', tr: '', processo: '', usuario_id: 4 }) !== null,
+     'as tres vazias recusam');
+// ⚠️ O MINIMO DE 2 CARACTERES E SO DO `termo`. Ele existe porque o campo livre varre entidade,
+// NL e PC com ILIKE — uma letra traria milhares de TRs e o teto esconderia o resto sem dizer.
+// A TR e o processo sao filtros de COLUNA, e o pedaco curto ali e busca legitima.
+conf(bg.validar({ tr: '2', usuario_id: 4 }) === null, 'um caractere na TR passa — e filtro de coluna');
+conf(bg.validar({ termo: 'a', tr: '2020TR000704', usuario_id: 4 }) !== null,
+     'mas o termo curto continua recusado, mesmo com a TR preenchida');
+
+console.log('\n═══ 1b. AS TRES ENTRADAS VIRAM UMA CONDICAO, COM AND ═══');
+// ⚠️ AND, E NAO OR — a mesma escolha das outras barras. Quem preenche a TR E o processo esta
+// estreitando: com OR, acrescentar um segundo criterio AUMENTARIA o resultado, que e o
+// contrario do que uma barra de filtro promete.
+{
+  const v1 = [];
+  const c1 = bg.condicaoAlvo({ tr: '2020TR000704', processo: 'SCC 197/2021' }, v1);
+  conf(/ AND /.test(c1), 'TR e processo entram com AND', c1);
+  conf(v1.length === 2, 'com um parametro para cada', v1.length);
+
+  const v2 = [];
+  const c2 = bg.condicaoAlvo({ termo: 'APAE' }, v2);
+  conf(!/ AND /.test(c2), 'so o termo nao inventa AND nenhum');
+  conf(v2.length >= 1, 'e leva os parametros do termo', v2.length);
+
+  // ⚠️ OS $n TEM DE BATER COM O TAMANHO DE `valores` — foi o erro medido em 25/08 na fila do
+  // C.I.: "bind message supplies N parameters, but prepared statement requires M". O `pg`
+  // recusa parametro que a consulta nao usa, e nenhum teste com duble pega isso.
+  const v3 = [];
+  const c3 = bg.condicaoAlvo({ termo: 'APAE', tr: '2020TR000704', processo: 'SCC 197/2021' }, v3);
+  const usados = new Set((c3.match(/\$(\d+)/g) || []).map(x => parseInt(x.slice(1), 10)));
+  conf(usados.size === v3.length, 'todo $n declarado e usado, e nenhum sobra',
+       'usados=' + usados.size + ' valores=' + v3.length);
+  conf(Math.max(...usados) === v3.length, 'e a numeracao vai de 1 ate o ultimo, sem buraco',
+       'maior=' + Math.max(...usados) + ' valores=' + v3.length);
+  conf((c3.match(/ AND /g) || []).length === 2, 'as tres entradas juntas dao dois ANDs');
+
+  conf(bg.condicaoAlvo({}, []) === null, 'nada informado devolve null');
+  conf(bg.condicaoAlvo({ termo: '   ', tr: '  ' }, []) === null, 'e so espaco tambem');
+}
+
 // ─────────────────────────────────────────────────────────────
 secao('2. A SITUACAO DA TR');
 conf(bg.situacaoTr({ com_dono: 0, pcs: 3, baixadas: 0, no_ci: 0 }).chave === 'livre', 'sem dono: no estoque');
@@ -167,7 +213,15 @@ conf(/403/.test(rota), 'quem nao e superadmin leva 403');
 conf(/tr = ANY\(\$1\)/.test(rota), 'as linhas vem por tr = ANY(...), nao pelo termo');
 conf(rota.indexOf('condicaoBusca') < rota.indexOf('tr = ANY'),
      'o termo escolhe as TRs ANTES, e depois a TR vem inteira');
-conf(/bg\.condicaoBusca/.test(rota) || /condicaoBusca/.test(rota), 'reaproveita condicaoBusca');
+// ⚠️ A ROTA PASSOU A CHAMAR A `condicaoAlvo` (31/08/2026), que e quem junta as tres entradas
+// com AND — e ela continua reaproveitando a `condicaoBusca` por dentro, para o campo livre.
+conf(/bg\.condicaoAlvo\(b, vCasa\)/.test(rota), 'a rota monta a condicao pelas TRES entradas');
+conf(/req\.query\.tr/.test(rota) && /req\.query\.processo/.test(rota),
+     'e le tr e processo do query, como as outras barras');
+// ⚠️ `String(b.termo)` VIRARIA A PALAVRA "undefined" quando a tela manda so as caixas — uma
+// busca por entidade chamada "undefined", que nao casa com nada e devolve zero como se a TR
+// nao existisse. E o tipo de defeito que nao da erro: a tela diz "Nada encontrado".
+conf(/String\(b\.termo \?\? ''\)/.test(rota), 'e o termo ausente nao vira a palavra "undefined"');
 conf(/linksDeLinhas/.test(rota), 'e linksDeLinhas para o SGPe');
 conf(/MAX_TRS/.test(rota) && /total_trs/.test(rota), 'ha teto, e o total real vai junto');
 // a busca NAO escreve nada

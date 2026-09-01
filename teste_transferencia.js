@@ -284,5 +284,54 @@ conf(!/ALTER TABLE prestacoes_contas[sS]{0,120}(veio_de|devolvida)/.test(rota),
 conf(/analista_id IS NULL/.test(rotaDev), 'e so devolve TR que continua sem dono');
 conf(/portaria/.test(rotaDev), 'trazendo a portaria de quem saiu, para o balao');
 
+
+S('17. A PORTARIA DO DESTINO, QUE DEFINE A VIGENCIA');
+// ⚠️ SEM ELA O TERMO NAO SAI, e por isso a transferencia tambem nao — decisao do Richard em
+// 01/09. A vigencia e o que o termo afirma ("a partir de tal data o analista assume"), e um
+// termo sem vigencia nao diz de quando vale.
+const rotaT = rota.slice(rota.indexOf("app.post('/transferencia',"), rota.indexOf("app.get('/transferencias'"));
+conf(/FROM substituicao/.test(rotaT), 'a rota consulta a substituicao primeiro');
+conf(/WHERE substituto_id = \$1/.test(rotaT), 'casando pelo analista de DESTINO');
+conf(/falta: 'portaria_destino'/.test(rotaT), 'e recusa com 400 quando nao ha portaria');
+conf(/status\(400\)[\s\S]{0,300}?Informe o número e a data/.test(rotaT),
+     'dizendo que o numero e a data tem de ser informados');
+// ⚠️ ARMADILHA 25: o `pg` devolve coluna `date` como objeto Date, e String(Date).slice(0,10)
+// da "Fri Aug 21", nao "2026-08-21". Cai nela ao escrever esta rota, e a conversao passou a
+// ser do POSTGRES.
+conf(/data_publicacao::text/.test(rotaT), 'a data vem como TEXTO do Postgres');
+conf(!/String\(subs\[0\]\.data_publicacao\)\.slice/.test(rota), 'e nao e um Date fatiado como texto');
+conf((rota.match(/SELECT portaria, data_publicacao::text/g) || []).length === 2,
+     'nas duas consultas — a do repasse e a do detalhe',
+     (rota.match(/data_publicacao::text/g) || []).length);
+
+S('18. A PORTARIA VIAJA COM O REPASSE');
+// ⚠️ GRAVADA NO estado_anterior (jsonb): nenhuma coluna nova, nenhum ALTER. O termo tem de
+// sair IGUAL na reemissao, anos depois, mesmo que a substituicao mude.
+const pp = transf.paramsHistorico({
+  movidas: movem.map((m) => ({ codigo_pc: m.codigo_pc, tr: m.tr, parcial_num: m.parcial_num })),
+  foto: FOTO, deId: DE, paraId: PARA, deNome: 'Goreti', paraNome: 'Aline',
+  usuarioId: 4, portaria: '203/2026', portariaEm: '2026-08-21',
+});
+const fotoP = JSON.parse(pp[9][0]);
+conf(fotoP.portaria_destino === '203/2026', 'o numero entra na foto de cada PC', fotoP.portaria_destino);
+conf(fotoP.portaria_destino_em === '2026-08-21', 'e a data tambem', fotoP.portaria_destino_em);
+conf(/estado_anterior->>'portaria_destino'/.test(transf.SQL_DETALHE),
+     'e o detalhe a devolve de volta');
+// ⚠️ NAO FOI PARA A substituicao: as colunas de la se chamam dispensado_id e dispensado_nome,
+// e gravar ali um repasse entre dois analistas EM ATIVIDADE afirmaria uma dispensa que nao
+// houve. Dado errado no banco e pior que um campo a mais.
+conf(!/INSERT INTO substituicao/.test(rota), 'e nenhuma rota INSERE em substituicao');
+
+S('19. O NUMERO E A DATA ANDAM JUNTOS');
+// ⚠️ Um numero sem data nao define vigencia nenhuma — deixaria o termo com meia frase.
+conf(transf.validar({ de_id: 1, para_id: 2, trs: ['T'], usuario_id: 4, portaria: '203/2026' }) !== null,
+     'numero sem data recusa');
+conf(transf.validar({ de_id: 1, para_id: 2, trs: ['T'], usuario_id: 4, portaria_em: '2026-08-21' }) !== null,
+     'data sem numero recusa');
+conf(transf.validar({ de_id: 1, para_id: 2, trs: ['T'], usuario_id: 4,
+                      portaria: '203/2026', portaria_em: '2026-08-21' }) === null, 'os dois juntos passam');
+conf(transf.validar({ de_id: 1, para_id: 2, trs: ['T'], usuario_id: 4 }) === null,
+     'e nenhum dos dois passa — a substituicao pode responder');
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

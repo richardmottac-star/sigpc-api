@@ -3482,6 +3482,33 @@ app.post('/transferencia', async (req, res) => {
         message: `${uPara.nome} não está ativo${uPara.data_saida ? ' — está dispensado' : ''}.` } });
     }
 
+    // ── A PORTARIA DO DESTINO, que define a VIGÊNCIA do termo ──────────────
+    //
+    // ⚠️ A `substituicao` RESPONDE PRIMEIRO, e é o caminho normal: ela já guarda "quem
+    // substituiu quem, por qual portaria, publicada quando". A linha 8 dela é exatamente o
+    // repasse Willian → Fabiana, com a 203/2026 de 21/08/2026. Pedir à pessoa um dado que o
+    // banco tem seria fazê-la digitar o que já está escrito — e digitar cria divergência.
+    //
+    // ⚠️ `data_publicacao::text` E NÃO `String(data).slice(0,10)` — armadilha 25, e eu caí
+    // nela ao escrever esta rota em 01/09: o `pg` devolve coluna `date` como objeto `Date`, e
+    // fatiar o texto dele dá "Fri Aug 21", não "2026-08-21". A conversão é do Postgres.
+    const { rows: subs } = await cli.query(
+      `SELECT portaria, data_publicacao::text FROM substituicao
+        WHERE substituto_id = $1 ORDER BY data_publicacao DESC LIMIT 1`, [paraId]);
+    const portaria = subs.length ? subs[0].portaria : String(b.portaria || '').trim();
+    const portariaEm = subs.length ? subs[0].data_publicacao : String(b.portaria_em || '').trim();
+
+    // ⚠️ SEM ELA O TERMO NÃO SAI, E POR ISSO A TRANSFERÊNCIA TAMBÉM NÃO — decisão do Richard,
+    // 01/09/2026. A vigência é o que o termo afirma ("a partir de tal data o analista
+    // assume"), e um termo sem vigência não diz de quando vale. Recusar aqui é melhor que
+    // gravar o repasse e descobrir depois que ele não pode ser documentado.
+    if (!portaria || !portariaEm) {
+      return res.status(400).json({ data: null, error: {
+        message: `Não há portaria de designação registrada para ${uPara.nome}. `
+          + 'Informe o número e a data de publicação da portaria.',
+        falta: 'portaria_destino' } });
+    }
+
     await cli.query('BEGIN');
 
     // ── 1. A FOTO, antes de qualquer escrita ────────────────────────────────
@@ -3514,7 +3541,7 @@ app.post('/transferencia', async (req, res) => {
     if (movidas.length) {
       const { rowCount } = await cli.query(transf.SQL_HIST, transf.paramsHistorico({
         movidas, foto, deId, paraId, deNome: uDe.nome, paraNome: uPara.nome,
-        usuarioId: b.usuario_id, motivo: b.motivo,
+        usuarioId: b.usuario_id, motivo: b.motivo, portaria, portariaEm,
       }));
       nHist = rowCount;
     }
@@ -3535,6 +3562,7 @@ app.post('/transferencia', async (req, res) => {
     await cli.query('COMMIT');
     res.json({ data: {
       de: { id: deId, nome: uDe.nome }, para: { id: paraId, nome: uPara.nome },
+      portaria, portaria_em: portariaEm,
       trs, transferidas: movidas.length, previstas: previstas.length,
       ficaram_baixadas: ficam.length, historico: nHist,
       codigos: movidas.map((m) => m.codigo_pc),
@@ -3660,10 +3688,33 @@ app.get('/transferencias/:id', async (req, res) => {
     const l = lote[0];
     const { rows: pcs } = await pool.query(transf.SQL_DETALHE,
       [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
+
+    // ⚠️ QUANDO A FOTO NAO TEM A PORTARIA, A substituicao RESPONDE — e este e o caso dos
+    // repasses anteriores a 01/09/2026, que foram gravados sem ela. O repasse 2381 (Willian
+    // -> Fabiana) e exatamente assim: a foto nao tem, e a linha 8 da substituicao tem a
+    // 203/2026 de 21/08/2026. Sem esta queda, um termo que PODE ser emitido corretamente
+    // sairia sem vigencia.
+    let portaria = (pcs[0] || {}).portaria_destino || null;
+    let portariaEm = (pcs[0] || {}).portaria_destino_em || null;
+    const pDest = transf.partirRotulo(l.valor_novo);
+    if ((!portaria || !portariaEm) && pDest) {
+      const { rows: sub } = await pool.query(
+        `SELECT portaria, data_publicacao::text FROM substituicao
+          WHERE substituto_id = $1 ORDER BY data_publicacao DESC LIMIT 1`, [pDest.id]);
+      if (sub.length) {
+        portaria = portaria || sub[0].portaria;
+        portariaEm = portariaEm || sub[0].data_publicacao;
+      }
+    }
     res.json({ data: {
       id: parseInt(req.params.id), quando: l.criado_em, evento: l.evento,
       de: transf.partirRotulo(l.valor_anterior), para: transf.partirRotulo(l.valor_novo),
       tem_termo: l.evento === transf.EVENTO,
+      // ⚠️ A PORTARIA DO DESTINO — a vigencia do termo. Vem da foto do repasse; quando o
+      // repasse e anterior a 01/09/2026 ela nao existe, e a tela mostra o termo sem vigencia
+      // apenas para os antigos, que ja saem como "sem termo".
+      portaria_destino: portaria,
+      portaria_destino_em: portariaEm,
       trs: [...new Set(pcs.map((p) => p.tr))].length, pcs: pcs.length,
       linhas: pcs,
     }, error: null });

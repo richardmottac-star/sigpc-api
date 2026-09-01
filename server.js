@@ -52,6 +52,7 @@ async function lerUsuario(cli, id) {
 const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
 const bg = require('./lib/busca-global');
+const transf = require('./lib/transferencia');
 const dup = require('./lib/duplicata');
 // As quatro frentes de 18/08/2026: corrigir situação, puxar do C.I., cadastrar PC e o
 // pedido de correção ao coordenador. A regra mora nas libs; aqui só a transação e o perfil.
@@ -3403,6 +3404,130 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
   }
 });
 
+
+// ══════════════════════════════════════
+//  TRANSFERIR PRESTAÇÕES DE CONTAS — só superadmin
+// ══════════════════════════════════════
+// A regra e o porquê estão em lib/transferencia.js.
+//
+// POST /transferencia  { de_id, para_id, trs: [...], usuario_id, motivo? }
+//
+// ⚠️ TUDO OU NADA, NUMA TRANSAÇÃO SÓ: BEGIN, foto, UPDATE, histórico, conferências contra a
+// foto, COMMIT — e ROLLBACK em qualquer falha. Transferir metade deixaria a TR partida entre
+// dois donos sem ninguém saber qual metade foi, e o segundo pedido não teria como saber o que
+// o primeiro já moveu.
+//
+// ⚠️ E NENHUMA TABELA NOVA. O registro é `parcela_historico`, que já tem todas as colunas —
+// inclusive `estado_anterior`, a foto por onde se desfaz — e não tem CHECK em `evento`.
+app.post('/transferencia', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const erro = transf.validar(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    // ⚠️ O PERFIL VEM DO BANCO, pelo `usuario_id` — nunca do corpo. Foi o defeito das quatro
+    // rotas corrigidas em 14/08: bastava mandar `perfil: 'superadmin'` para passar. E é o
+    // PERFIL EFETIVO: no papel analista o superadmin é analista em toda parte, e esta rota
+    // move o acervo de outra pessoa.
+    const { rows: u } = await cli.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
+      [parseInt(b.usuario_id) || 0]);
+    if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    if (papel.perfilEfetivo(u[0]) !== 'superadmin') {
+      return res.status(403).json({ data: null, error: {
+        message: 'A transferência é exclusiva do superadmin.' } });
+    }
+
+    const deId = parseInt(b.de_id);
+    const paraId = parseInt(b.para_id);
+    const setorial_id = b.setorial_id || 'FCEE';
+    const trs = transf.trsLimpas(b.trs);
+
+    // ── As duas pontas existem? ─────────────────────────────────────────────
+    const { rows: pontas } = await cli.query(
+      `SELECT id, nome, perfil, ativo, data_saida FROM usuarios WHERE id = ANY($1::int[])`,
+      [[deId, paraId]]);
+    const uDe = pontas.find((x) => x.id === deId);
+    const uPara = pontas.find((x) => x.id === paraId);
+    if (!uDe) return res.status(400).json({ data: null, error: { message: 'O analista de origem não existe.' } });
+    if (!uPara) return res.status(400).json({ data: null, error: { message: 'O analista de destino não existe.' } });
+
+    // ⚠️ O DESTINO TEM DE SER ANALISTA ATIVO, e "ativo" aqui são DUAS colunas: `ativo = true`
+    // E `data_saida IS NULL`. Os sete dispensados continuam com `ativo = true` por decisão do
+    // Richard — quem saiu precisa terminar o que ficou em curso —, então deduzir a dispensa do
+    // `ativo` deixaria passar justamente as sete pessoas para quem não se pode mandar PC.
+    if (uPara.perfil !== 'analista') {
+      return res.status(400).json({ data: null, error: {
+        message: `${uPara.nome} não é analista — o destino tem de ser um analista ativo.` } });
+    }
+    if (!uPara.ativo || uPara.data_saida) {
+      return res.status(400).json({ data: null, error: {
+        message: `${uPara.nome} não está ativo${uPara.data_saida ? ' — está dispensado' : ''}.` } });
+    }
+
+    await cli.query('BEGIN');
+
+    // ── 1. A FOTO, antes de qualquer escrita ────────────────────────────────
+    const { rows: foto } = await cli.query(transf.SQL_FOTO, [setorial_id, trs]);
+
+    // ── 2. TR que não é do `de_id` recusa a operação INTEIRA, com a lista ───
+    //
+    // ⚠️ RECUSA TUDO, e não só as alheias. Aceitar as boas e ignorar as outras devolveria um
+    // sucesso parcial que ninguém pediu — e quem marcou 30 TRs não perceberia que 3 ficaram.
+    const alheias = transf.trsAlheias(trs, foto, deId);
+    if (alheias.length) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: `${alheias.length} ${alheias.length === 1 ? 'TR não é' : 'TRs não são'} de `
+          + `${uDe.nome}, ou não ${alheias.length === 1 ? 'tem' : 'têm'} PC aberta: `
+          + alheias.join(', '),
+        trs_recusadas: alheias } });
+    }
+
+    const previstas = transf.pcsQueMovem(foto, deId);
+    const ficam = transf.pcsQueFicam(foto, deId);
+
+    // ── 3. O UPDATE — só as abertas do `de_id` ──────────────────────────────
+    const nomeNovo = assumir.nomeCurto(uPara.nome);
+    const { rows: movidas } = await cli.query(transf.SQL_MOVER,
+      [setorial_id, trs, deId, paraId, nomeNovo]);
+
+    // ── 4. O histórico — uma linha por PC movida ────────────────────────────
+    let nHist = 0;
+    if (movidas.length) {
+      const { rowCount } = await cli.query(transf.SQL_HIST, transf.paramsHistorico({
+        movidas, foto, deId, paraId, deNome: uDe.nome, paraNome: uPara.nome,
+        usuarioId: b.usuario_id, motivo: b.motivo,
+      }));
+      nHist = rowCount;
+    }
+
+    // ── 5. AS CONFERÊNCIAS, contra a foto e ainda dentro da transação ───────
+    const { rows: depois } = await cli.query(transf.SQL_FOTO, [setorial_id, trs]);
+    const problemas = transf.conferir({ foto, depois, movidas, deId, paraId });
+    if (nHist !== movidas.length) {
+      problemas.push(`histórico com ${nHist} linhas para ${movidas.length} PCs movidas`);
+    }
+    if (problemas.length) {
+      await cli.query('ROLLBACK');
+      return res.status(500).json({ data: null, error: {
+        message: 'A transferência foi desfeita: as conferências não bateram.',
+        problemas } });
+    }
+
+    await cli.query('COMMIT');
+    res.json({ data: {
+      de: { id: deId, nome: uDe.nome }, para: { id: paraId, nome: uPara.nome },
+      trs, transferidas: movidas.length, previstas: previstas.length,
+      ficaram_baixadas: ficam.length, historico: nHist,
+      codigos: movidas.map((m) => m.codigo_pc),
+    }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
 // ══════════════════════════════════════
 //  BUSCA GLOBAL — só superadmin
 // ══════════════════════════════════════

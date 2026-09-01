@@ -1553,6 +1553,22 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
               COUNT(*) AS total_pcs,
               COUNT(DISTINCT codigo_nl) AS total_nls,
               COUNT(*) FILTER (WHERE baixada) AS baixadas,
+              -- ⚠️ abertas_com_dono NASCEU EM 01/09/2026, e responde "a TR tem alguem
+              -- trabalhando nela AGORA?". A pergunta parecia ja respondida pelo
+              -- analista_nome, e nao estava: ele e MAX() sobre TODAS as linhas, inclusive as
+              -- BAIXADAS — e a baixada mantem o nome de quem a analisou por regra, porque a
+              -- produtividade e dela.
+              --
+              -- Numa TR MISTA — o que toda TR vira depois de um repasse — o nome do analista
+              -- antigo continuava ali pelas baixadas, e a tela nunca a mostrava como Livre. A
+              -- 2021TR000693 voltou ao estoque por um desfazer, ficou Em Analise e sem botao
+              -- Assumir: ninguem conseguia pega-la.
+              --
+              -- ⚠️ E A COLUNA E NOVA EM VEZ DE O analista_nome MUDAR. Troca-lo por
+              -- MAX(...) FILTER (WHERE NOT baixada) afetaria 381 TRs — todas as 100% baixadas
+              -- passariam a exibir analista vazio em seis telas. Medido antes de mexer.
+              -- Acrescentar nao tira nada de ninguem.
+              COUNT(*) FILTER (WHERE NOT baixada AND analista_id IS NOT NULL) AS abertas_com_dono,
               -- ⚠️ pcs_livres VEM DA MESMA REGRA DO ASSUMIR (16/08/2026).
               --
               -- A tela derivava "livre" de !analista_nome, e o assumir exige sem dono E

@@ -3448,6 +3448,18 @@ async function notificarRepasse(db, a) {
     pcs: a.pcs, trs: a.trs, deNome: a.deNome, quando: a.quando, vencidas: a.vencidas });
   await notif.criar(db, { ...base, ...an, destinatario_id: a.paraId, ref_tipo: 'repasse' });
 
+  // ⚠️ A ORIGEM TAMBÉM É AVISADA, SE ESTIVER EM EXERCÍCIO (01/09/2026, ordem do Richard). Ver
+  // o acervo sair sem que ninguém diga nada é o pior jeito de descobrir um repasse.
+  //
+  // ⚠️ E O DISPENSADO NÃO RECEBE: ele não entra mais no sistema, e o aviso ficaria não lido
+  // para sempre — nunca apagado, porque o `limparLidas` só apaga o que foi LIDO. É o caso
+  // principal desta tela: o repasse existe, na maioria das vezes, porque a pessoa saiu.
+  if (a.deEmExercicio && a.deId) {
+    const ao = transf.avisoOrigem({
+      pcs: a.pcs, trs: a.trs, paraNome: a.paraNome, quando: a.quando });
+    await notif.criar(db, { ...base, ...ao, destinatario_id: a.deId, ref_tipo: 'repasse_origem' });
+  }
+
   // ⚠️ TODOS OS COORDENADORES, DOS TRÊS GRUPOS — ordem do Richard: analista novo é assunto do
   // GT inteiro, e não só de quem coordena o grupo envolvido. Dispensado não recebe.
   //
@@ -3455,7 +3467,11 @@ async function notificarRepasse(db, a) {
   // mesma caixa, com textos diferentes, é o sino se contradizendo.
   const co = transf.avisoCoord({
     pcs: a.pcs, grupo: a.grupo || '—', deNome: a.deNome, paraNome: a.paraNome, quando: a.quando });
-  const coords = (await notif.coordenadoresEmExercicio(db)).filter((id) => id !== a.paraId);
+  // ⚠️ AS DUAS PONTAS SAEM DA LISTA DA COORDENAÇÃO. Elas já receberam o aviso delas, com o
+  // texto do lado que ocupam — dois avisos do mesmo fato na mesma caixa, com textos
+  // diferentes, é o sino se contradizendo.
+  const coords = (await notif.coordenadoresEmExercicio(db))
+    .filter((id) => id !== a.paraId && id !== a.deId);
   await notif.criarVarios(db, coords, { ...base, ...co, ref_tipo: 'repasse_coord' });
 }
 
@@ -3469,9 +3485,18 @@ async function notificarDesfeito(db, a) {
     await notif.criar(db, { ...base, ...an, destinatario_id: a.paraId, ref_tipo: 'repasse_desfeito' });
   }
 
+  // ⚠️ E A ORIGEM, SE EM EXERCÍCIO — mesma regra do repasse. Ela foi avisada de que o acervo
+  // saiu; precisa ser avisada de que ele não está mais com quem o recebeu.
+  if (a.deEmExercicio && a.deId) {
+    const ao = transf.avisoDesfeitoOrigem({
+      pcs: a.pcs, trs: a.trs, paraNome: a.paraNome, quando: a.quando, quandoRepasse: a.quandoRepasse });
+    await notif.criar(db, { ...base, ...ao, destinatario_id: a.deId, ref_tipo: 'repasse_desfeito_origem' });
+  }
+
   const co = transf.avisoDesfeitoCoord({
     pcs: a.pcs, grupo: a.grupo || '—', paraNome: a.paraNome, quando: a.quando });
-  const coords = (await notif.coordenadoresEmExercicio(db)).filter((id) => id !== a.paraId);
+  const coords = (await notif.coordenadoresEmExercicio(db))
+    .filter((id) => id !== a.paraId && id !== a.deId);
   await notif.criarVarios(db, coords, { ...base, ...co, ref_tipo: 'repasse_desfeito_coord' });
 }
 
@@ -3651,7 +3676,8 @@ app.post('/transferencia', async (req, res) => {
     const repasseId = idsHist.length ? Math.min(...idsHist) : null;
     if (repasseId) {
       notificarRepasse(pool, {
-        repasseId, deNome: uDe.nome, paraId, paraNome: uPara.nome, grupo: uPara.grupo,
+        repasseId, deId, deNome: uDe.nome, deEmExercicio: transf.emExercicio(uDe),
+        paraId, paraNome: uPara.nome, grupo: uPara.grupo,
         pcs: movidas.length, trs: [...new Set(movidas.map((m) => m.tr))].length,
         vencidas, quando: new Date(),
       }).catch((e) => console.error('Falha ao notificar o repasse:', e.message));
@@ -3718,13 +3744,19 @@ async function podeVerRepasse(quem, lote) {
  * repasse deixa de ser cobrado — a pendência existe para ser resolvida por quem está lá, e não
  * para ficar aberta para sempre no nome de quem saiu.
  *
- * ⚠️ A ORIGEM NÃO ENTRA. Ela abre o termo, porque o acervo foi dela, mas não há o que declare
- * assumir: o repasse tira PCs dela, não lhe entrega nenhuma.
+ * ⚠️ A ORIGEM ENTRA DESDE 01/09/2026 — mas SÓ EM EXERCÍCIO, e quem decide isso é a
+ * `condicaoCiencia`, que devolve null para a dispensada. É por isso que o `filter` do fim
+ * basta: a lista de candidatos pode trazer quem saiu, e a condição a descarta.
+ *
+ * ⚠️ E É POR ISSO QUE A DISPENSADA NÃO APARECE COMO PENDENTE NO TERMO. Não há o que cobrar de
+ * quem não entra mais no sistema, e uma pendência que ninguém pode fechar ficaria no documento
+ * para sempre — no caso mais comum desta tela, que é o repasse por dispensa.
  */
 async function devemCiencia(db, lote) {
   const para = transf.partirRotulo(lote.valor_novo);
+  const de = transf.partirRotulo(lote.valor_anterior);
   const ids = await notif.coordenadoresEmExercicio(db);
-  const todos = [...new Set([...(para ? [para.id] : []), ...ids])];
+  const todos = [...new Set([...(para ? [para.id] : []), ...(de ? [de.id] : []), ...ids])];
   if (!todos.length) return [];
   const { rows } = await db.query(
     `SELECT id, nome, perfil, grupo, data_saida FROM usuarios WHERE id = ANY($1::int[])`, [todos]);
@@ -3782,7 +3814,26 @@ app.get('/transferencias', async (req, res) => {
       ? await pool.query(transf.SQL_CIENCIAS_CONTA, [transf.EVENTO_CIENCIA, ancoras])
       : { rows: [] };
     const porAncora = new Map(cont.map((c) => [c.ancora, c.n]));
-    const esperado = 1 + (await notif.coordenadoresEmExercicio(pool)).length;
+    // ⚠️ O ESPERADO NÃO É MAIS UM NÚMERO SÓ PARA A LISTA INTEIRA. Com a origem na conta, ele
+    // passou a depender do repasse: a origem entra se estiver em exercício, e isso varia de
+    // linha para linha. Os dados das pontas saem de UMA consulta para a lista toda — a
+    // alternativa era um SELECT por repasse, que é o N+1 que este arquivo evita em dois outros
+    // pontos desta mesma rota.
+    const nCoord = (await notif.coordenadoresEmExercicio(pool)).length;
+    const idsPontas = [...new Set(rows.flatMap((r) => [
+      (transf.partirRotulo(r.valor_anterior) || {}).id,
+      (transf.partirRotulo(r.valor_novo) || {}).id,
+    ]).filter(Boolean))];
+    const { rows: pontasU } = idsPontas.length
+      ? await pool.query(`SELECT id, data_saida FROM usuarios WHERE id = ANY($1::int[])`, [idsPontas])
+      : { rows: [] };
+    const emEx = new Map(pontasU.map((x) => [x.id, transf.emExercicio(x)]));
+    // ⚠️ O DESTINO CONTA SEMPRE: a rota do repasse recusa mandar PCs para quem está dispensado,
+    // então ele está em exercício por construção. A origem é a que pode não estar.
+    const esperadoDe = (r) => {
+      const de = transf.partirRotulo(r.valor_anterior);
+      return 1 + nCoord + (de && emEx.get(de.id) ? 1 : 0);
+    };
 
     res.json({ data: rows.map((r) => ({
       id: r.id, quando: r.criado_em, evento: r.evento,
@@ -3795,7 +3846,7 @@ app.get('/transferencias', async (req, res) => {
       // repasse que nunca comunicou nada abriria uma pendência impossível de fechar com
       // honestidade.
       ciencias: porAncora.get(transf.ancoraCiencia(r.id)) || 0,
-      ciencias_esperadas: r.evento === transf.EVENTO ? esperado : 0,
+      ciencias_esperadas: r.evento === transf.EVENTO ? esperadoDe(r) : 0,
       // ⚠️ O TERMO SÓ EXISTE PARA O EVENTO NOVO. Os 32 registros de 28/08 vieram de um script
       // que não gerou termo nenhum, e a tela mostra "sem termo" neles — inventar um documento
       // para um repasse que não teve seria produzir papel com data retroativa.
@@ -4210,13 +4261,19 @@ app.post('/transferencias/:id/desfazer', async (req, res) => {
     // CURTO da época do repasse ("48 · Samoel") — ele identifica, mas o grupo não está lá, e um
     // repasse de meses atrás pode trazer um nome que mudou desde então.
     const pDest = transf.partirRotulo(l.valor_novo);
-    const { rows: uDest } = pDest
-      ? await pool.query(`SELECT nome, grupo FROM usuarios WHERE id = $1`, [pDest.id])
-      : { rows: [] };
+    const pOrig = transf.partirRotulo(l.valor_anterior);
+    // ⚠️ AS DUAS PONTAS NUMA CONSULTA SÓ, e o `data_saida` vem junto: é ele que decide se a
+    // origem é avisada. Dois SELECTs para a mesma pergunta seriam duas fontes.
+    const { rows: pontasD } = await pool.query(
+      `SELECT id, nome, grupo, data_saida FROM usuarios WHERE id = ANY($1::int[])`,
+      [[pDest ? pDest.id : 0, pOrig ? pOrig.id : 0]]);
+    const uDest = pontasD.filter((x) => pDest && x.id === pDest.id);
+    const uOrig = pontasD.find((x) => pOrig && x.id === pOrig.id) || null;
     notificarDesfeito(pool, {
       repasseId: parseInt(req.params.id), paraId: pDest ? pDest.id : null,
       paraNome: (uDest[0] && uDest[0].nome) || (pDest && pDest.nome) || '—',
       grupo: (uDest[0] && uDest[0].grupo) || '—',
+      deId: pOrig ? pOrig.id : null, deEmExercicio: transf.emExercicio(uOrig),
       pcs: devolvidas.length, trs: [...new Set(comCodigo.map((x) => x.tr))].length,
       quando: new Date(), quandoRepasse: l.criado_em,
     }).catch((e) => console.error('Falha ao notificar o desfazer:', e.message));

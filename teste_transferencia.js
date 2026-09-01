@@ -367,6 +367,26 @@ S('20. OS TEXTOS DOS AVISOS (01/09/2026)');
   const dc = transf.avisoDesfeitoCoord({ pcs: 32, grupo: 3, paraNome: 'Richard', quando: '2026-09-01' });
   conf(dc.titulo === 'Repasse desfeito no Grupo 3', 'o titulo do desfazer para a coordenacao', dc.titulo);
 
+  // ⚠️ A PERSPECTIVA DA ORIGEM E A DE QUEM ENTREGA, e por isso o texto dela nao reaproveita o
+  // do destino: "voce recebeu" e "sairam da sua planilha" sao o mesmo fato lido dos dois lados,
+  // e o lado errado faz a pessoa procurar na planilha o que ja nao esta la.
+  const ao = transf.avisoOrigem({ pcs: 32, trs: 5, paraNome: 'Richard', quando: '2026-08-28' });
+  conf(ao.titulo === '32 prestações passaram para Richard', 'o titulo da origem', ao.titulo);
+  conf(/sob sua responsabilidade, passaram para Richard em 28\/08\/2026/.test(ao.mensagem),
+       'e o corpo, na perspectiva de quem entrega', ao.mensagem);
+  // ⚠️ ELE DIZ QUE AS BAIXADAS FICAM: e a primeira pergunta de quem ve o acervo sair, e a
+  // resposta e a regra central do repasse.
+  conf(/As já baixadas permanecem em seu nome, com a produtividade\./.test(ao.mensagem),
+       'e diz que as baixadas ficam com ela');
+
+  // ⚠️ NO DESFAZER, AS PCs NAO VOLTAM PARA ELA — vao ao ESTOQUE. Sem essa frase, quem le "o
+  // repasse foi desfeito" procura o acervo de volta na propria planilha.
+  const dfo = transf.avisoDesfeitoOrigem({ pcs: 32, trs: 5, paraNome: 'Richard',
+                                           quando: '2026-09-01', quandoRepasse: '2026-08-28' });
+  conf(dfo.titulo === 'O repasse para Richard foi desfeito', 'o titulo do desfazer para a origem', dfo.titulo);
+  conf(/voltaram ao ESTOQUE — não à sua planilha/.test(dfo.mensagem),
+       'e o corpo diz que elas NAO voltam para ela', dfo.mensagem);
+
   // ⚠️ NAO SE FATIA O TEXTO DE UM Date — armadilha 25, e a mesma pedra em que esta rota ja
   // tropecou: String(d).slice(0,10) da "Fri Aug 21", nao "2026-08-21".
   conf(transf.dataBr(new Date(2026, 7, 28)) === '28/08/2026', 'a data sai certa vinda de um Date',
@@ -398,8 +418,18 @@ conf(/ref_id: .desfeito:\$\{a\.repasseId\}./.test(rota), 'e o desfazer, desfeito
 conf((rota.match(/urgente: true/g) || []).length >= 2, 'os dois avisos nascem urgentes');
 // TODOS os coordenadores, dos tres grupos — e nao a coordenadoresDoGrupo.
 conf(/coordenadoresEmExercicio/.test(rota), 'a coordenacao inteira e avisada');
-conf(/\.filter\(\(id\) => id !== a\.paraId\)/.test(rota),
-     'e o destino sai da lista se ele mesmo for coordenador');
+// ⚠️ AS DUAS PONTAS SAEM DA LISTA DA COORDENACAO: elas ja receberam o aviso delas, com o texto
+// do lado que ocupam. Dois avisos do mesmo fato na mesma caixa, com textos diferentes, e o sino
+// se contradizendo.
+conf((rota.match(/id !== a\.paraId && id !== a\.deId/g) || []).length === 2,
+     'as duas pontas saem da lista da coordenacao, no repasse e no desfazer');
+// ⚠️ A ORIGEM E AVISADA SO EM EXERCICIO. O dispensado nao entra mais no sistema, e o aviso
+// ficaria nao lido para sempre — nunca apagado, porque o limparLidas so apaga o que foi LIDO.
+conf((rota.match(/if \(a\.deEmExercicio && a\.deId\)/g) || []).length === 2,
+     'a origem e avisada no repasse e no desfazer, so em exercicio');
+conf(/deEmExercicio: transf\.emExercicio\(uDe\)/.test(rota),
+     'e quem decide isso e a emExercicio, uma definicao so');
+conf(/ref_tipo: 'repasse_origem'/.test(rota), 'o aviso da origem tem ref_tipo proprio');
 // O ref_tipo diz QUAL aviso e, e e por ele que a tela decide os botoes.
 conf(/ref_tipo: 'repasse'/.test(rota) && /ref_tipo: 'repasse_coord'/.test(rota),
      'o ref_tipo separa o aviso do analista do da coordenacao');
@@ -449,12 +479,38 @@ S('23. A CIENCIA DO REPASSE (01/09/2026)');
   const coordFora = { id: 9, nome: 'X', perfil: 'coordenador', grupo: '3', data_saida: '2026-07-01' };
   conf(transf.condicaoCiencia(coordFora, LOTE) === null, 'coordenador dispensado nao da ciencia');
 
-  // ⚠️ A ORIGEM NAO DA CIENCIA: ela abre o termo, porque o acervo foi dela, mas nao ha o que
-  // declare assumir — o repasse TIRA PCs dela.
+  // ⚠️ A ORIGEM DA CIENCIA DESDE 01/09/2026 — ordem do Richard, e e a correcao de uma decisao
+  // que estava errada: eu tinha escrito que ela nao declara nada porque o repasse "tira PCs
+  // dela". Tirar o acervo de alguem e justamente o que essa pessoa precisa saber.
   const origem = { id: 48, nome: 'Samoel', perfil: 'analista', grupo: '2', data_saida: null };
-  conf(transf.condicaoCiencia(origem, LOTE) === null, 'a origem NAO da ciencia');
+  conf(transf.condicaoCiencia(origem, LOTE) === 'analista de origem',
+       'a origem da ciencia como analista de origem', transf.condicaoCiencia(origem, LOTE));
+
+  // ⚠️ MAS SO EM EXERCICIO. Dispensado nao entra mais no sistema: cobrar ciencia dele abriria
+  // uma pendencia que ninguem pode fechar, e ela ficaria no termo para sempre — no caso mais
+  // comum desta tela, que e justamente o repasse por dispensa.
+  const origemFora = { ...origem, data_saida: '2026-08-20' };
+  conf(transf.condicaoCiencia(origemFora, LOTE) === null, 'e a origem DISPENSADA nao da ciencia');
+
+  // ⚠️ "EM EXERCICIO" E data_saida, NUNCA ativo: os sete dispensados continuam com ativo=true
+  // por decisao do Richard, e deduzir a dispensa do ativo deixaria passar justamente eles.
+  conf(transf.emExercicio(origem) === true && transf.emExercicio(origemFora) === false,
+       'emExercicio le data_saida');
+  conf(transf.emExercicio({ id: 1, ativo: false, data_saida: null }) === true,
+       'e NAO le ativo — os dispensados continuam com ativo=true');
+  conf(transf.emExercicio(null) === false, 'e o nulo nao esta em exercicio');
   const outro = { id: 99, nome: 'Outro', perfil: 'analista', grupo: '1', data_saida: null };
-  conf(transf.condicaoCiencia(outro, LOTE) === null, 'e um analista qualquer tampouco');
+  conf(transf.condicaoCiencia(outro, LOTE) === null, 'e um analista qualquer nao da ciencia');
+  // ⚠️ O DESTINO E CONFERIDO PRIMEIRO. A rota ja recusa de === para, mas se um dia deixasse
+  // passar, quem RECEBE tem de ler o texto de quem recebe: ele e o unico que declara assumir.
+  const ambos = { id: 7, nome: 'Aline', perfil: 'analista', grupo: '2', data_saida: null };
+  const LOTE_IGUAL = { ...LOTE, valor_anterior: '7 · Aline' };
+  conf(transf.condicaoCiencia(ambos, LOTE_IGUAL) === 'analista de destino',
+       'sendo as duas pontas, vale a de destino');
+  // ⚠️ E O COORDENADOR QUE FOR PONTA LE COMO PONTA, nao como coordenacao — o acervo e dele.
+  const coordOrigem = { id: 48, nome: 'X', perfil: 'coordenador', grupo: '1', data_saida: null };
+  conf(transf.condicaoCiencia(coordOrigem, LOTE) === 'analista de origem',
+       'e o coordenador que for a origem le como origem');
   conf(transf.condicaoCiencia(null, LOTE) === null && transf.condicaoCiencia(destino, null) === null,
        'nulo nao estoura');
 
@@ -540,6 +596,23 @@ S('24. AS ROTAS DA CIENCIA');
        'e ela usa a MESMA lista do aviso do sino');
   // ⚠️ O PENDENTE E DERIVADO, nunca gravado: uma lista de "fulano deve" envelheceria — o
   // coordenador novo nao apareceria e o dispensado continuaria cobrado.
+  // ⚠️ A ORIGEM ENTRA NOS CANDIDATOS, e quem a descarta quando dispensada e a condicaoCiencia —
+  // por isso o filter do fim basta. E e por isso que a dispensada NAO aparece como pendente no
+  // termo: nao ha o que cobrar de quem nao entra mais no sistema.
+  const iDev = rota.indexOf('async function devemCiencia');
+  const dev = rota.slice(iDev, rota.indexOf('async function cienciasDoRepasse', iDev));
+  conf(/const de = transf\.partirRotulo\(lote\.valor_anterior\)/.test(dev),
+       'a origem entra nos candidatos a ciencia');
+  conf(/\.filter\(\(x\) => x\.condicao\)/.test(dev),
+       'e a condicaoCiencia descarta a dispensada — nada de segunda regra aqui');
+  // ⚠️ O ESPERADO DA LISTA DEIXOU DE SER UM NUMERO SO: com a origem na conta ele depende do
+  // repasse, porque ela entra se estiver em exercicio. E os dados das pontas saem de UMA
+  // consulta para a lista toda — nunca um SELECT por linha.
+  conf(/const esperadoDe = \(r\) =>/.test(rota), 'o esperado passou a ser por repasse');
+  conf(/1 \+ nCoord \+ \(de && emEx\.get\(de\.id\) \? 1 : 0\)/.test(rota),
+       'destino + coordenacao + a origem quando em exercicio');
+  conf(/SELECT id, data_saida FROM usuarios WHERE id = ANY\(\$1::int\[\]\)/.test(rota),
+       'e as pontas da lista saem de UMA consulta, nao de uma por linha');
   conf(/pendentes: esperados\.filter\(\(e\) => !jaDeram\.has\(e\.id\)\)/.test(rota),
        'e o pendente sai por subtracao, nao de uma lista gravada');
 

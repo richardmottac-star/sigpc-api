@@ -626,5 +626,67 @@ S('24. AS ROTAS DA CIENCIA');
   // ⚠️ UMA consulta para a lista inteira, nunca N+1.
   conf(/SQL_CIENCIAS_CONTA/.test(lista), 'a contagem da lista e UMA consulta, nao uma por linha');
 }
+
+S('25. O REPASSE DESFEITO SAI DA FILA DE CIENCIA (01/09/2026)');
+// ⚠️ DEFEITO MEDIDO EM PRODUCAO: o repasse 2381 (Willian -> Fabiana, 1 PC) foi desfeito, a PC
+// voltou ao estoque `livre` e sem dono — e a `ciencia_pendente` continuava devolvendo ele,
+// porque filtrava por evento e por ciencia ja dada e nao olhava o desfazer. O modal pediria que
+// quatro pessoas declarassem "assumo a analise das prestacoes relacionadas" sobre uma PC que
+// esta no estoque. E a ciencia, uma vez declarada, nao se apaga.
+{
+  // ⚠️ A PERGUNTA E FEITA AO HISTORICO, e nao a uma coluna: o desfazer grava
+  // `transferencia_desfeita` com o repasse_id dentro do estado_anterior. Uma coluna "desfeito"
+  // seria uma segunda verdade sobre um fato que a tabela ja registra.
+  conf(/estado_anterior->>'repasse_id'/.test(transf.SQL_DESFEITOS),
+       'o desfeito e lido do estado_anterior do historico');
+  conf(/evento = \$1::text/.test(transf.SQL_DESFEITOS) && /= ANY\(\$2::int\[\]\)/.test(transf.SQL_DESFEITOS),
+       'e a consulta aceita a lista inteira — nunca uma por repasse');
+
+  // ⚠️ SO AS NAO LIDAS SAEM DO SINO. Quem ja leu viu um fato que era verdade quando leu, e
+  // recebe o aviso do desfazer em seguida — apagar o que a pessoa leu esconderia metade da
+  // historia. E e DELETE, nao "marcar como lida": marcar afirmaria que alguem leu, e ninguem leu.
+  conf(/lida_em IS NULL/.test(transf.SQL_NOTIF_DO_REPASSE), 'so o aviso NAO LIDO e apagado');
+  conf(/tipo = 'repasse'/.test(transf.SQL_NOTIF_DO_REPASSE), 'e so o do tipo repasse');
+  conf(!/UPDATE/.test(transf.SQL_NOTIF_DO_REPASSE),
+       'e ele nao e "marcado como lido" — ninguem leu');
+
+  // A rota: quatro pontos, e os quatro precisam concordar.
+  conf(/async function repassesDesfeitos/.test(rota), 'ha uma funcao unica de "quais foram desfeitos"');
+  const iPend = rota.indexOf("app.get('/transferencias/ciencia_pendente'");
+  const pend = rota.slice(iPend, rota.indexOf("app.post('/transferencias/:id/ciencia'", iPend));
+  conf(/!desfeitos\.has\(l\.id\) && transf\.condicaoCiencia\(quem, l\)/.test(pend),
+       'o desfeito sai da fila do modal');
+
+  const iPost = rota.indexOf("app.post('/transferencias/:id/ciencia'");
+  const post = rota.slice(iPost, rota.indexOf("app.get('/transferencias/:id'", iPost));
+  // ⚠️ ESCONDER O MODAL SERIA COSMETICO: a URL continua existindo, e uma janela aberta ANTES do
+  // desfazer ainda tem o botao vivo na tela de quem nao recarregou.
+  conf(/await repasseDesfeito\(pool/.test(post), 'e a ROTA tambem recusa gravar ciencia do desfeito');
+  conf(/status\(409\)/.test(post), 'com 409 — o estado do repasse mudou, nao e falta de permissao');
+
+  // ⚠️ O TERMO CONTINUA EXISTINDO: um repasse desfeito ACONTECEU, e o documento e a prova de que
+  // aconteceu. O que sai e a COBRANCA — pendente de repasse revogado e divida que ninguem deve.
+  const iCie = rota.indexOf('async function cienciasDoRepasse');
+  const cie = rota.slice(iCie, rota.indexOf('async function repassesDesfeitos', iCie));
+  conf(/pendentes: \[\], desfeito: true/.test(cie), 'o desfeito nao cobra pendente no termo');
+  conf(cie.indexOf('dadas.map') < cie.indexOf('pendentes: []'),
+       'mas as ciencias dadas ANTES do desfazer continuam listadas');
+
+  // O historico: marca a linha e zera a cobranca.
+  const lista = rota.slice(rota.indexOf("app.get('/transferencias',"),
+                           rota.indexOf("app.get('/transferencias/devolvidas'"));
+  conf(/desfeito: desfeitos\.has\(r\.id\)/.test(lista), 'a lista marca o repasse desfeito');
+  conf(/!desfeitos\.has\(r\.id\) \? esperadoDe\(r\) : 0/.test(lista),
+       'e nao cobra ciencia dele');
+
+  // ⚠️ O DELETE DO AVISO VAI DENTRO DA TRANSACAO, pelo `cli` — ao contrario dos avisos CRIADOS,
+  // que sao gravados depois do COMMIT. A direcao e outra: criar aviso de algo nao confirmado e o
+  // erro que o COMMIT-primeiro evita; apagar o aviso de algo em revogacao tem de ser desfeito
+  // junto se o ROLLBACK vier, senao o sino perde um aviso valido.
+  conf(/await cli\.query\(transf\.SQL_NOTIF_DO_REPASSE/.test(rotaD),
+       'o desfazer apaga o aviso nao lido do repasse');
+  conf(rotaD.indexOf('SQL_NOTIF_DO_REPASSE') < rotaD.indexOf("cli.query('COMMIT')"),
+       'e o faz DENTRO da transacao, para o ROLLBACK devolver o aviso');
+}
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

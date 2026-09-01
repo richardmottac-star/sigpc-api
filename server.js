@@ -3769,6 +3769,20 @@ async function devemCiencia(db, lote) {
 async function cienciasDoRepasse(db, repasseId, lote) {
   const { rows: dadas } = await db.query(transf.SQL_CIENCIAS,
     [transf.EVENTO_CIENCIA, transf.ancoraCiencia(repasseId)]);
+  // ⚠️ REPASSE DESFEITO NÃO COBRA PENDENTE — ordem do Richard, 01/09/2026. As ciências que
+  // chegaram a ser dadas ANTES do desfazer continuam listadas: elas aconteceram, e o termo é a
+  // prova de que aconteceram. O que sai é a cobrança de quem não deu, porque não há o que
+  // cobrar sobre um repasse revogado.
+  const desfeito = await repasseDesfeito(db, repasseId);
+  if (desfeito) {
+    return {
+      ciencias: dadas.map((d) => ({
+        id: d.id, usuario_id: d.analista_id, nome: d.nome,
+        condicao: d.condicao, quando: d.criado_em,
+      })),
+      pendentes: [], desfeito: true,
+    };
+  }
   const esperados = await devemCiencia(db, lote);
   const jaDeram = new Set(dadas.map((d) => d.analista_id));
   return {
@@ -3780,7 +3794,28 @@ async function cienciasDoRepasse(db, repasseId, lote) {
     // uma segunda verdade que envelhece: um coordenador novo não apareceria, e um dispensado
     // continuaria cobrado. A pergunta se responde por subtração, toda vez.
     pendentes: esperados.filter((e) => !jaDeram.has(e.id)),
+    desfeito: false,
   };
+}
+
+/**
+ * QUAIS DESTES REPASSES FORAM DESFEITOS — uma consulta para a lista inteira.
+ *
+ * ⚠️ A PERGUNTA É FEITA AO HISTÓRICO, e não a uma coluna. O desfazer grava linhas
+ * `transferencia_desfeita` com o `repasse_id` no `estado_anterior`; uma coluna "desfeito" no
+ * lote seria uma segunda verdade sobre um fato que a tabela já registra — o mesmo motivo pelo
+ * qual a pílula do Estoque é derivada e não gravada.
+ */
+async function repassesDesfeitos(db, ids) {
+  const lista = (ids || []).map((x) => parseInt(x)).filter(Boolean);
+  if (!lista.length) return new Set();
+  const { rows } = await db.query(transf.SQL_DESFEITOS, [transf.EVENTO_DESFEITA, lista]);
+  return new Set(rows.map((r) => r.repasse_id));
+}
+
+/** O mesmo, para um repasse só. */
+async function repasseDesfeito(db, id) {
+  return (await repassesDesfeitos(db, [id])).has(parseInt(id));
 }
 
 // GET /transferencias — do mais recente para o mais antigo
@@ -3820,6 +3855,8 @@ app.get('/transferencias', async (req, res) => {
     // alternativa era um SELECT por repasse, que é o N+1 que este arquivo evita em dois outros
     // pontos desta mesma rota.
     const nCoord = (await notif.coordenadoresEmExercicio(pool)).length;
+    // ⚠️ UMA consulta para saber quais foram desfeitos, e não uma por linha.
+    const desfeitos = await repassesDesfeitos(pool, rows.map((r) => r.id));
     const idsPontas = [...new Set(rows.flatMap((r) => [
       (transf.partirRotulo(r.valor_anterior) || {}).id,
       (transf.partirRotulo(r.valor_novo) || {}).id,
@@ -3846,7 +3883,10 @@ app.get('/transferencias', async (req, res) => {
       // repasse que nunca comunicou nada abriria uma pendência impossível de fechar com
       // honestidade.
       ciencias: porAncora.get(transf.ancoraCiencia(r.id)) || 0,
-      ciencias_esperadas: r.evento === transf.EVENTO ? esperadoDe(r) : 0,
+      // ⚠️ O DESFEITO NÃO COBRA CIÊNCIA, e o zero aqui é o que faz a coluna mostrar "—" em vez
+      // de "0 de 4". A tela não precisa saber a regra: ela desenha o número que vier.
+      ciencias_esperadas: r.evento === transf.EVENTO && !desfeitos.has(r.id) ? esperadoDe(r) : 0,
+      desfeito: desfeitos.has(r.id),
       // ⚠️ O TERMO SÓ EXISTE PARA O EVENTO NOVO. Os 32 registros de 28/08 vieram de um script
       // que não gerou termo nenhum, e a tela mostra "sem termo" neles — inventar um documento
       // para um repasse que não teve seria produzir papel com data retroativa.
@@ -3937,7 +3977,13 @@ app.get('/transferencias/ciencia_pendente', async (req, res) => {
     const quem = u[0];
 
     const { rows: lotes } = await pool.query(transf.SQL_LISTA, [[transf.EVENTO]]);
-    const meus = lotes.filter((l) => transf.condicaoCiencia(quem, l));
+    // ⚠️ O REPASSE DESFEITO SAI DA FILA — ordem do Richard, 01/09/2026, e é a correção de um
+    // defeito medido: o 2381 foi desfeito, a PC voltou ao estoque `livre` e sem dono, e esta
+    // rota continuava devolvendo ele. O modal pediria que quatro pessoas declarassem "assumo a
+    // análise das prestações relacionadas" sobre uma PC que está no estoque — e a ciência, uma
+    // vez declarada, não se apaga.
+    const desfeitos = await repassesDesfeitos(pool, lotes.map((l) => l.id));
+    const meus = lotes.filter((l) => !desfeitos.has(l.id) && transf.condicaoCiencia(quem, l));
     if (!meus.length) return res.json({ data: [], error: null });
 
     // ⚠️ UMA CONSULTA PARA SABER O QUE JÁ FOI DADO, e não uma por repasse.
@@ -4048,6 +4094,15 @@ app.post('/transferencias/:id/ciencia', async (req, res) => {
     if (l.evento !== transf.EVENTO) {
       return res.status(409).json({ data: null, error: {
         message: 'Este repasse é anterior ao registro de ciência e não pede uma.' } });
+    }
+
+    // ⚠️ E O DESFEITO NÃO ACEITA CIÊNCIA, além de não pedir. Esconder o modal seria cosmético:
+    // a URL continua existindo, e uma janela aberta ANTES do desfazer ainda tem o botão vivo na
+    // tela de quem não recarregou. Uma ciência registrada depois da revogação afirmaria que a
+    // pessoa assumiu PCs que estão no estoque — e não se apaga.
+    if (await repasseDesfeito(pool, parseInt(req.params.id) || 0)) {
+      return res.status(409).json({ data: null, error: {
+        message: 'Este repasse foi desfeito — as prestações voltaram ao estoque e não há ciência a registrar.' } });
     }
 
     const condicao = transf.condicaoCiencia(quem, l);
@@ -4229,6 +4284,19 @@ app.post('/transferencias/:id/desfazer', async (req, res) => {
       linhas: comCodigo.map((x) => ({ ...x, repasse_id: parseInt(req.params.id) })),
       lote: l, usuarioId: b.usuario_id, motivo: b.motivo,
     }));
+
+    // ⚠️ O AVISO NÃO LIDO DO REPASSE SAI DO SINO — ordem do Richard, 01/09/2026. Ele anuncia um
+    // repasse que deixou de existir, e traz o botão que abre o modal de ciência; deixá-lo lá
+    // convidaria alguém a declarar que assume PCs que voltaram ao estoque.
+    //
+    // ⚠️ SÓ AS NÃO LIDAS. Quem já leu viu um fato que era verdade quando leu, e recebe o aviso do
+    // desfazer logo em seguida — apagar o que a pessoa leu esconderia metade da história.
+    //
+    // ⚠️ E ELE VAI DENTRO DA TRANSAÇÃO, pelo `cli`, ao contrário dos avisos que são CRIADOS
+    // depois do COMMIT. A diferença é a direção: criar um aviso de algo que não se confirmou é o
+    // erro que o COMMIT-primeiro evita; apagar o aviso de algo que está sendo revogado tem de
+    // ser desfeito junto se o ROLLBACK vier, senão o sino perde um aviso válido.
+    await cli.query(transf.SQL_NOTIF_DO_REPASSE, [transf.ancoraCiencia(parseInt(req.params.id))]);
 
     // ── Conferências, ainda dentro da transação ─────────────────────────────
     const { rows: agora } = await cli.query(

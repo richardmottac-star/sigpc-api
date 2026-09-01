@@ -3528,6 +3528,191 @@ app.post('/transferencia', async (req, res) => {
     res.status(500).json({ data: null, error: { message: e.message } });
   } finally { cli.release(); }
 });
+
+// ── OS REPASSES JÁ FEITOS: lista, detalhe e o desfazer (01/09/2026) ─────────
+//
+// ⚠️ NENHUMA TABELA E NENHUMA COLUNA NOVA. O repasse se identifica pelo carimbo da transação:
+// `parcela_historico.criado_em` tem default `now()`, que no Postgres é o instante em que a
+// TRANSAÇÃO começou — todas as linhas de um lote saem com o mesmo valor. Medido: as 32 linhas
+// do repasse do Samoel têm UM carimbo só. O `:id` das rotas é o `MIN(id)` do lote.
+
+// GET /transferencias — do mais recente para o mais antigo
+app.get('/transferencias', async (req, res) => {
+  try {
+    const { rows: u } = await pool.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
+      [parseInt(req.query.usuario_id) || 0]);
+    if (!u.length || papel.perfilEfetivo(u[0]) !== 'superadmin') {
+      return res.status(403).json({ data: null, error: { message: 'Acesso restrito ao superadmin.' } });
+    }
+    const { rows } = await pool.query(transf.SQL_LISTA, [transf.EVENTOS_REPASSE]);
+    // ⚠️ OS NOMES DOS EXECUTORES VÊM DE UMA CONSULTA SÓ, e não de um SELECT por linha: a lista
+    // cresce a cada repasse, e uma consulta por item viraria N+1 sem ninguém perceber.
+    const ids = [...new Set(rows.map((r) => r.executado_por).filter(Boolean))];
+    const { rows: execs } = ids.length
+      ? await pool.query(`SELECT id, nome FROM usuarios WHERE id = ANY($1::int[])`, [ids])
+      : { rows: [] };
+    const nomeDe = new Map(execs.map((e) => [e.id, e.nome]));
+    res.json({ data: rows.map((r) => ({
+      id: r.id, quando: r.criado_em, evento: r.evento,
+      de: transf.partirRotulo(r.valor_anterior), para: transf.partirRotulo(r.valor_novo),
+      trs: r.trs, pcs: r.pcs,
+      executado_por: r.executado_por,
+      executado_por_nome: nomeDe.get(r.executado_por) || null,
+      // ⚠️ O TERMO SÓ EXISTE PARA O EVENTO NOVO. Os 32 registros de 28/08 vieram de um script
+      // que não gerou termo nenhum, e a tela mostra "sem termo" neles — inventar um documento
+      // para um repasse que não teve seria produzir papel com data retroativa.
+      tem_termo: r.evento === transf.EVENTO,
+    })), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// GET /transferencias/:id — o detalhe, com as PCs movidas
+//
+// ⚠️ ROTA DE NOME FIXO ANTES DA ROTA COM `:id` — armadilha 13. Aqui não há conflito porque
+// `/transferencias` e `/transferencias/:id` têm profundidades diferentes, mas o
+// `/transferencias/:id/desfazer` abaixo é mais específico e o Express casa na ordem: ele vem
+// depois, e por ser POST não disputa com este GET.
+app.get('/transferencias/:id', async (req, res) => {
+  try {
+    const { rows: u } = await pool.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
+      [parseInt(req.query.usuario_id) || 0]);
+    if (!u.length || papel.perfilEfetivo(u[0]) !== 'superadmin') {
+      return res.status(403).json({ data: null, error: { message: 'Acesso restrito ao superadmin.' } });
+    }
+    const { rows: lote } = await pool.query(transf.SQL_LOTE_POR_ID,
+      [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
+    if (!lote.length) return res.status(404).json({ data: null, error: { message: 'Repasse não encontrado.' } });
+    const l = lote[0];
+    const { rows: pcs } = await pool.query(transf.SQL_DETALHE,
+      [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
+    res.json({ data: {
+      id: parseInt(req.params.id), quando: l.criado_em, evento: l.evento,
+      de: transf.partirRotulo(l.valor_anterior), para: transf.partirRotulo(l.valor_novo),
+      tem_termo: l.evento === transf.EVENTO,
+      trs: [...new Set(pcs.map((p) => p.tr))].length, pcs: pcs.length,
+      linhas: pcs,
+    }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+// POST /transferencias/:id/desfazer — as TRs voltam ao ESTOQUE
+//
+// ⚠️ AO ESTOQUE, E NÃO DE VOLTA PARA QUEM SAIU. O repasse existe porque a pessoa de origem
+// não vai mais analisar aquilo; devolvê-las a ela recriaria o problema que o repasse
+// resolveu. Voltam livres, para quem puder pegar — e a pílula do Estoque conta de onde vieram.
+app.post('/transferencias/:id/desfazer', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const erro = transf.validarDesfazer(b);
+    if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+
+    const { rows: u } = await cli.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
+      [parseInt(b.usuario_id) || 0]);
+    if (!u.length) return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+    if (papel.perfilEfetivo(u[0]) !== 'superadmin') {
+      return res.status(403).json({ data: null, error: { message: 'Desfazer é exclusivo do superadmin.' } });
+    }
+
+    await cli.query('BEGIN');
+
+    const { rows: lote } = await cli.query(transf.SQL_LOTE_POR_ID,
+      [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
+    if (!lote.length) {
+      await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Repasse não encontrado.' } });
+    }
+    const l = lote[0];
+
+    // ── A foto do repasse: quais PCs ele moveu, e como elas estão agora ─────
+    const { rows: linhas } = await cli.query(transf.SQL_DETALHE,
+      [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
+    const comCodigo = linhas.filter((x) => x.codigo_pc);
+    if (!comCodigo.length) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: 'Este repasse não guardou o código das PCs — não há como desfazê-lo com segurança.' } });
+    }
+
+    // ── A TRAVA: movimentação posterior ao repasse ──────────────────────────
+    //
+    // ⚠️ DESFAZER UM REPASSE EM QUE ALGUÉM JÁ TRABALHOU APAGARIA O TRABALHO: a PC voltaria ao
+    // estoque sem dono, e o parecer ou a baixa que vieram DEPOIS ficariam órfãos. A recusa é
+    // da operação inteira, com a lista — desfazer só as intocadas partiria o repasse em dois
+    // pedaços e ninguém saberia qual metade voltou.
+    const { rows: mov } = await cli.query(transf.SQL_MOV_POSTERIOR,
+      [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE, transf.EVENTOS_TRAVA]);
+    // ⚠️ E A SEGUNDA METADE DA TRAVA: o ESTADO de agora contra a foto. Nem toda mudança
+    // escreve linha no histórico — um script, uma carga ou um ajuste direto no banco passam
+    // sem rastro, e só o estado os denuncia. As duas metades juntas é que sustentam a promessa
+    // de "nada mudou desde o repasse".
+    const impedidas = comCodigo.filter((x) =>
+      mov.some((m) => m.tr === x.tr && String(m.parcial_num || '') === String(x.parcial_num || '')) ||
+      x.baixada === true || x.analista_atual == null);
+    if (impedidas.length) {
+      await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: {
+        message: `${impedidas.length} ${impedidas.length === 1 ? 'PC teve' : 'PCs tiveram'} `
+          + 'movimentação depois do repasse. Nada foi desfeito.',
+        pcs_impedidas: impedidas.map((x) => ({
+          codigo_pc: x.codigo_pc, tr: x.tr, parcial_num: x.parcial_num,
+          motivo: x.baixada ? 'baixada' : x.analista_atual == null ? 'já está no estoque'
+            : (mov.find((m) => m.tr === x.tr) || {}).evento || 'movimentação posterior',
+        })) } });
+    }
+
+    // ── O DESFAZER, pela MESMA função que a devolução do superadmin usa ─────
+    //
+    // ⚠️ "LIVRE" TEM UMA DEFINIÇÃO SÓ no sistema. Em 16/08 havia duas, e 87 PCs caíam no vão
+    // entre elas. Escrever aqui um segundo `SET status='livre', analista_id=NULL` recriaria o
+    // vão — quem devolve é a `devol.SQL_DEVOLVER`.
+    const codigos = comCodigo.map((x) => x.codigo_pc);
+    const { rows: devolvidas } = await cli.query(devol.SQL_DEVOLVER, [codigos]);
+
+    const { rowCount: nHist } = await cli.query(transf.SQL_HIST, transf.paramsDesfeita({
+      linhas: comCodigo.map((x) => ({ ...x, repasse_id: parseInt(req.params.id) })),
+      lote: l, usuarioId: b.usuario_id, motivo: b.motivo,
+    }));
+
+    // ── Conferências, ainda dentro da transação ─────────────────────────────
+    const { rows: agora } = await cli.query(
+      `SELECT codigo_pc, analista_id, status FROM prestacoes_contas WHERE codigo_pc = ANY($1)`,
+      [codigos]);
+    const problemas = [];
+    if (devolvidas.length !== codigos.length) {
+      problemas.push(`${devolvidas.length} devolvidas para ${codigos.length} pedidas`);
+    }
+    if (nHist !== comCodigo.length) problemas.push(`histórico com ${nHist} linhas para ${comCodigo.length} PCs`);
+    for (const a of agora) {
+      if (a.analista_id !== null) problemas.push(`${a.codigo_pc} continua com dono`);
+      if (a.status !== 'livre') problemas.push(`${a.codigo_pc} não ficou livre (${a.status})`);
+    }
+    if (problemas.length) {
+      await cli.query('ROLLBACK');
+      return res.status(500).json({ data: null, error: {
+        message: 'O desfazer foi cancelado: as conferências não bateram.', problemas } });
+    }
+
+    await cli.query('COMMIT');
+    res.json({ data: {
+      repasse_id: parseInt(req.params.id), quando: l.criado_em,
+      de: transf.partirRotulo(l.valor_anterior), para: transf.partirRotulo(l.valor_novo),
+      devolvidas: devolvidas.length,
+      trs: [...new Set(comCodigo.map((x) => x.tr))],
+      historico: nHist,
+    }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
 // ══════════════════════════════════════
 //  BUSCA GLOBAL — só superadmin
 // ══════════════════════════════════════

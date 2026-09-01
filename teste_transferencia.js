@@ -171,5 +171,100 @@ conf(/uPara\.perfil !== 'analista'/.test(bloco), 'o destino tem de ser analista'
 conf(/!uPara\.ativo \|\| uPara\.data_saida/.test(bloco), 'ativo E sem data_saida — as duas colunas');
 conf(/trs_recusadas/.test(bloco), 'e a recusa por TR alheia devolve a lista');
 
+
+S('9. O REPASSE SE IDENTIFICA SEM COLUNA NOVA');
+// ⚠️ O `criado_em` tem default `now()`, que no Postgres e o instante em que a TRANSACAO
+// comecou — nao o de cada linha. Todas as linhas de um lote saem com o carimbo IDENTICO.
+// Medido em 01/09: as 32 linhas do repasse do Samoel tem UM carimbo so, contra 324 linhas e
+// 324 carimbos do `parecer`. Por isso a chave do grupo e (criado_em, evento, de, para).
+conf(/GROUP BY criado_em, evento, valor_anterior, valor_novo/.test(transf.SQL_LISTA),
+     'a lista agrupa pelo carimbo da transacao e pelas duas pontas');
+conf(/MIN\(id\)::int\s+AS id/.test(transf.SQL_LISTA), 'e o id do repasse e o MIN(id) do lote');
+conf(/ORDER BY criado_em DESC/.test(transf.SQL_LISTA), 'do mais recente para o mais antigo');
+// ⚠️ OS DOIS EVENTOS ENTRAM: esconder o `transferencia_dispensa` faria a tela dizer que a
+// primeira transferencia do sistema nunca aconteceu.
+conf(transf.EVENTOS_REPASSE.includes('transferencia') &&
+     transf.EVENTOS_REPASSE.includes('transferencia_dispensa'),
+     'e os dois eventos de repasse entram na lista', transf.EVENTOS_REPASSE.join(', '));
+
+S('10. O CARIMBO NAO VOLTA PELO JAVASCRIPT');
+// ⚠️ DEFEITO REAL, pego em 01/09 contra o banco. A primeira versao lia a chave do lote, trazia
+// o `criado_em` para o Node e o mandava de volta como parametro — e o detalhe voltava VAZIO.
+// A coluna e `timestamp WITHOUT time zone`, e um `Date` do JS chega com fuso: a comparacao
+// nunca casava. E a armadilha 18 noutra roupa, e NAO DAVA ERRO — devolvia zero linhas, que se
+// le como "este repasse nao moveu nada".
+conf(/WITH lote AS \(/.test(transf.SQL_DETALHE), 'o detalhe acha o lote DENTRO do SQL');
+conf(/WHERE id = \$1/.test(transf.SQL_DETALHE), 'entrando pelo id');
+conf(!/h\.criado_em = \$1/.test(transf.SQL_DETALHE), 'e nao por um criado_em vindo de fora');
+conf(/WITH lote AS \(/.test(transf.SQL_MOV_POSTERIOR), 'a trava faz o mesmo');
+conf(/h\.criado_em > l\.criado_em/.test(transf.SQL_MOV_POSTERIOR),
+     'e compara os dois carimbos dentro do Postgres');
+
+S('11. O DETALHE SAI DA FOTO, NAO DE UM JOIN PELO CODIGO');
+// ⚠️ O `codigo_pc` esta no `estado_anterior` em 32/32 das linhas antigas. E a foto do que foi
+// movido NAQUELE dia — se a PC mudou de mao de novo depois, o detalhe do repasse continua
+// contando o que ELE fez, que e a pergunta.
+conf(/estado_anterior->>'codigo_pc'/.test(transf.SQL_DETALHE), 'o codigo vem do estado_anterior');
+conf(/LEFT JOIN prestacoes_contas/.test(transf.SQL_DETALHE),
+     'e o LEFT JOIN so acrescenta o estado de AGORA — a PC apagada nao some do detalhe');
+
+S('12. A TRAVA DO DESFAZER');
+// ⚠️ PELA PARCELA, e nao pelo codigo_pc: o historico do parecer e gravado em (tr, parcial_num)
+// porque a analise e por PARCIAL. Procurar por codigo_pc nao acharia o parecer que baixou
+// aquela mesma PC — a trava passaria batido no evento mais comum.
+conf(/\(h\.tr, COALESCE\(h\.parcial_num,''\)\) IN/.test(transf.SQL_MOV_POSTERIOR),
+     'a trava casa por (tr, parcial_num)');
+for (const e of ['parecer', 'ci', 'estorno', 'engenharia_envio', 'situacao']) {
+  conf(transf.EVENTOS_TRAVA.includes(e), `'${e}' trava o desfazer`);
+}
+conf(!transf.EVENTOS_TRAVA.includes('transferencia'),
+     'e o proprio repasse NAO se conta como movimentacao posterior');
+
+S('13. O DESFAZER MANDA PARA O ESTOQUE');
+const dsf = transf.paramsDesfeita({
+  linhas: [{ tr: 'T1', parcial_num: '1', codigo_pc: 'PC1', analista_atual: 7, repasse_id: 9 }],
+  lote: { criado_em: new Date('2026-08-28T16:55:05Z'), valor_anterior: '48 · Samoel', valor_novo: '4 · Richard' },
+  usuarioId: 4, motivo: 'Teste.',
+});
+conf(dsf[3][0] === 'transferencia_desfeita', "o evento e 'transferencia_desfeita'", dsf[3][0]);
+// ⚠️ AS PONTAS INVERTEM: o valor_anterior do desfazer e o valor_novo do repasse, e o destino e
+// o ESTOQUE. Repetir as pontas do repasse faria a trilha ler ao contrario.
+conf(dsf[4][0] === '4 · Richard', 'valor_anterior e quem TINHA a PC', dsf[4][0]);
+conf(dsf[5][0] === '— · estoque', 'e valor_novo e o estoque', dsf[5][0]);
+conf(dsf[6][0] === null, 'o analista_id fica NULO — a PC nao tem dono');
+conf(dsf[8][0] === 4, 'executado_por preenchido');
+const fotoD = JSON.parse(dsf[9][0]);
+conf(fotoD.veio_de === '48 · Samoel' && fotoD.repasse_id === 9,
+     'e a foto guarda de quem veio e de qual repasse — e o que a pilula do Estoque le',
+     JSON.stringify(fotoD));
+
+S('14. "LIVRE" TEM UMA DEFINICAO SO');
+// ⚠️ Em 16/08 havia duas, e 87 PCs caiam no vao entre elas. Quem devolve ao estoque e a
+// devol.SQL_DEVOLVER, a mesma da devolucao do superadmin.
+// ⚠️ O RECORTE TERMINA NO BANNER SEGUINTE, e nao no fim do arquivo: sem o limite a fatia
+// levava as rotas de baixo junto, e a checagem do "segundo SET status=livre" reprovava por
+// causa da devolucao normal, que fica adiante. Foi um defeito deste teste, nao da rota.
+const rotaD = rota.slice(rota.indexOf("app.post('/transferencias/:id/desfazer'"),
+                         rota.indexOf('//  BUSCA GLOBAL'));
+conf(/devol\.SQL_DEVOLVER/.test(rotaD), 'o desfazer usa a devol.SQL_DEVOLVER');
+conf(!/status = 'livre'/.test(rotaD), 'e nao escreve um segundo SET status=livre');
+conf(/status\(409\)/.test(rotaD) && /pcs_impedidas/.test(rotaD),
+     'a recusa por movimentacao posterior devolve a lista de quais');
+conf(/await cli\.query\('BEGIN'\)/.test(rotaD) && /await cli\.query\('COMMIT'\)/.test(rotaD),
+     'tudo ou nada, numa transacao so');
+conf((rotaD.match(/ROLLBACK/g) || []).length >= 4, 'com ROLLBACK em cada saida',
+     (rotaD.match(/ROLLBACK/g) || []).length);
+conf(/perfilEfetivo\(u\[0\]\) !== 'superadmin'/.test(rotaD), 'e so o superadmin desfaz');
+
+S('15. O TERMO SO EXISTE PARA O EVENTO NOVO');
+// ⚠️ Os 32 registros de 28/08 vieram de um script que nao gerou termo nenhum. Inventar um
+// documento para um repasse que nao teve seria produzir papel com data retroativa.
+const rotaL = rota.slice(rota.indexOf("app.get('/transferencias'"), rota.indexOf("app.get('/transferencias/:id'"));
+conf(/tem_termo: r\.evento === transf\.EVENTO/.test(rotaL),
+     'a lista marca tem_termo so no evento novo');
+conf(/executado_por_nome/.test(rotaL), 'e devolve o nome de quem executou');
+// ⚠️ UMA CONSULTA SO para os nomes: um SELECT por linha viraria N+1 sem ninguem perceber.
+conf(/WHERE id = ANY\(\$1::int\[\]\)/.test(rotaL), 'por UMA consulta, nao uma por linha');
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

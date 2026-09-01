@@ -333,5 +333,97 @@ conf(transf.validar({ de_id: 1, para_id: 2, trs: ['T'], usuario_id: 4,
 conf(transf.validar({ de_id: 1, para_id: 2, trs: ['T'], usuario_id: 4 }) === null,
      'e nenhum dos dois passa — a substituicao pode responder');
 
+S('20. OS TEXTOS DOS AVISOS (01/09/2026)');
+// ⚠️ OS QUATRO TEXTOS MORAM NA lib, e nao soltos na rota. Sao repasse e desfazer vezes
+// analista e coordenacao, e os quatro dizem os MESMOS numeros: escritos em quatro lugares da
+// server.js, divergiriam no primeiro ajuste.
+{
+  const a = transf.avisoDestino({ pcs: 32, trs: 5, deNome: 'Samoel', quando: '2026-08-28', vencidas: 0 });
+  conf(a.titulo === 'Você recebeu 32 prestações em 5 TRs', 'o titulo do destino', a.titulo);
+  conf(a.mensagem === 'Repassadas de Samoel em 28/08/2026. Já estão na sua planilha e podem ser analisadas.',
+       'e o corpo, sem a frase do prazo', a.mensagem);
+
+  // ⚠️ "N TEM PRAZO VENCIDO" SO SAI QUANDO HA — ordem do Richard. A frase com zero e ruido que
+  // treina a pessoa a nao ler o resto do aviso, e o aviso do repasse e o que ela precisa ler
+  // inteiro.
+  const v = transf.avisoDestino({ pcs: 32, trs: 5, deNome: 'Samoel', quando: '2026-08-28', vencidas: 3 });
+  conf(/3 têm prazo vencido\.$/.test(v.mensagem), 'com vencidas, a frase entra no fim', v.mensagem);
+  conf(!/prazo vencido/.test(a.mensagem), 'e com zero ela NAO aparece');
+  const v1 = transf.avisoDestino({ pcs: 1, trs: 1, deNome: 'Samoel', quando: '2026-08-28', vencidas: 1 });
+  conf(v1.titulo === 'Você recebeu 1 prestação em 1 TR', 'o singular no titulo', v1.titulo);
+  conf(/1 tem prazo vencido\./.test(v1.mensagem), 'e o singular na frase do prazo', v1.mensagem);
+
+  const c = transf.avisoCoord({ pcs: 32, grupo: 3, deNome: 'Samoel', paraNome: 'Richard', quando: '2026-08-28' });
+  conf(c.titulo === 'Repasse no Grupo 3', 'o titulo da coordenacao', c.titulo);
+  conf(c.mensagem === '32 prestações de Samoel passaram para Richard em 28/08/2026.',
+       'e o corpo dela', c.mensagem);
+
+  // ⚠️ QUEM PERDEU AS PCs E O ANALISTA DE DESTINO DO REPASSE, nao o de origem: as PCs estavam
+  // com ele ate o desfazer, e a origem nao tem mais nada a ver com aquele acervo.
+  const df = transf.avisoDesfeitoAnalista({ pcs: 32, trs: 5, quando: '2026-09-01', quandoRepasse: '2026-08-28' });
+  conf(df.titulo === '32 prestações voltaram ao estoque', 'o titulo do desfazer', df.titulo);
+  conf(/repasse de 28\/08\/2026 foi desfeito em 01\/09\/2026/.test(df.mensagem),
+       'e ele cita as DUAS datas — a do repasse e a do desfazer', df.mensagem);
+  const dc = transf.avisoDesfeitoCoord({ pcs: 32, grupo: 3, paraNome: 'Richard', quando: '2026-09-01' });
+  conf(dc.titulo === 'Repasse desfeito no Grupo 3', 'o titulo do desfazer para a coordenacao', dc.titulo);
+
+  // ⚠️ NAO SE FATIA O TEXTO DE UM Date — armadilha 25, e a mesma pedra em que esta rota ja
+  // tropecou: String(d).slice(0,10) da "Fri Aug 21", nao "2026-08-21".
+  conf(transf.dataBr(new Date(2026, 7, 28)) === '28/08/2026', 'a data sai certa vinda de um Date',
+       transf.dataBr(new Date(2026, 7, 28)));
+  conf(transf.dataBr('2026-08-28T16:55:05.084Z') === '28/08/2026', 'e vinda de um ISO com hora',
+       transf.dataBr('2026-08-28T16:55:05.084Z'));
+  conf(transf.dataBr(null) === '', 'e o nulo nao vira "Invalid Date"');
+}
+
+S('21. OS AVISOS NA ROTA');
+// ⚠️ DEPOIS DO COMMIT, NUNCA DENTRO DA TRANSACAO. Sob o mesmo cliente, o aviso morreria no
+// ROLLBACK; sob o pool antes do COMMIT, o oposto — sobreviveria a um ROLLBACK e anunciaria um
+// repasse que nao aconteceu.
+conf(rotaT.indexOf("cli.query('COMMIT')") < rotaT.indexOf('notificarRepasse('),
+     'o aviso do repasse vem DEPOIS do COMMIT');
+conf(/notificarRepasse\(pool,/.test(rotaT), 'e grava pelo pool, fora da transacao');
+conf(/\.catch\(/.test(rotaT.slice(rotaT.indexOf('notificarRepasse('))),
+     'e o sino quebrado nao derruba o repasse ja gravado');
+conf(rotaD.indexOf("cli.query('COMMIT')") < rotaD.indexOf('notificarDesfeito('),
+     'e o do desfazer, idem');
+
+// ⚠️ O ref_id SEPARA O REPASSE DO DESFAZER. O dedupe e destinatario+tipo+ref_id, e os dois
+// eventos tem o mesmo tipo e o mesmo id de lote: um ref_id so faria o aviso do desfazer ser
+// engolido como repeticao — e a pessoa nunca saberia que as TRs sairam da planilha dela.
+conf(/ref_id: .repasse:\$\{a\.repasseId\}./.test(rota), 'o repasse marca ref_id repasse:N');
+conf(/ref_id: .desfeito:\$\{a\.repasseId\}./.test(rota), 'e o desfazer, desfeito:N');
+// ⚠️ urgente NAO E ENFEITE: e ele que poe o aviso no TOPO (o ORDER BY do notif.listar) e faz a
+// tela desenhar a barra na borda esquerda. O destaque sai do mecanismo que ja existe.
+conf((rota.match(/urgente: true/g) || []).length >= 2, 'os dois avisos nascem urgentes');
+// TODOS os coordenadores, dos tres grupos — e nao a coordenadoresDoGrupo.
+conf(/coordenadoresEmExercicio/.test(rota), 'a coordenacao inteira e avisada');
+conf(/\.filter\(\(id\) => id !== a\.paraId\)/.test(rota),
+     'e o destino sai da lista se ele mesmo for coordenador');
+// O ref_tipo diz QUAL aviso e, e e por ele que a tela decide os botoes.
+conf(/ref_tipo: 'repasse'/.test(rota) && /ref_tipo: 'repasse_coord'/.test(rota),
+     'o ref_tipo separa o aviso do analista do da coordenacao');
+
+// ⚠️ AS VENCIDAS SAO CONTADAS COM A MESMA REGRA DA BUSCA GLOBAL: CORTE_PRAZO e hoje em
+// Brasilia. Um segundo criterio faria o aviso dizer um numero que nenhuma tela mostra.
+conf(/CORTE_PRAZO/.test(rotaT) && /HOJE_BR/.test(rotaT),
+     'as vencidas usam o CORTE_PRAZO e o HOJE_BR do lib/datas');
+// ⚠️ O id do repasse vem do RETURNING do proprio INSERT, e nao de uma reconsulta: adivinhar
+// pelo carimbo depois do COMMIT e justamente a colisao que o lib admite nao garantir.
+conf(/idsHist = hRows\.map/.test(rotaT), 'o id do repasse vem do RETURNING do historico');
+conf(/Math\.min\(\.\.\.idsHist\)/.test(rotaT), 'e e o MIN do lote, a mesma chave das rotas');
+
+S('22. QUEM ABRE O REPASSE, E POR TABELA O TERMO');
+// ⚠️ A GUARDA E UMA SO, e as DUAS rotas do termo entram por ela. Escrita nos dois lugares, uma
+// ficaria para tras no primeiro ajuste — e a que ficasse seria a que deixa passar.
+conf(/async function podeVerRepasse/.test(rota), 'a regra e uma funcao unica');
+conf(/perfilEfetivo\(quem\) === 'superadmin'/.test(rota), 'superadmin sempre passa');
+conf(/de\.id === quem\.id\) \|\| \(para && para\.id === quem\.id/.test(rota),
+     'as DUAS pontas passam — origem e destino');
+conf(/'coordenador' && !quem\.data_saida/.test(rota),
+     'coordenador em exercicio passa, e o dispensado NAO');
+conf(!/GET \/transferencias\/:id[\s\S]{0,400}Acesso restrito ao superadmin/.test(rota),
+     'e a rota do detalhe deixou de ser so do superadmin');
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

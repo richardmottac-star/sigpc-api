@@ -200,12 +200,21 @@ secao('9. O BLOCO DO C.I.');
 // ─────────────────────────────────────────────────────────────
 secao('10. TRAVAS NO server.js');
 const src = fs.readFileSync('./server.js', 'utf8');
-const rota = src.slice(src.indexOf("app.get('/busca_global'"), src.indexOf("app.get('/busca_global'") + 3600);
+// ⚠️ A JANELA NAO E MAIS UM NUMERO CHUTADO. Ela era 3600 caracteres, e o caminho restrito do
+// repasse (01/09/2026) empurrou metade das conferencias para fora dela — seis passaram a
+// FALHAR sem que a rota tivesse defeito nenhum. Uma janela fixa mede o tamanho do arquivo, e
+// nao o que a rota faz: agora ela vai ate a proxima rota, que e onde a busca global acaba.
+const _iniBG = src.indexOf("app.get('/busca_global'");
+const _fimBG = src.indexOf("app.", _iniBG + 40) > 0 ? src.indexOf("\napp.", _iniBG) : src.length;
+const rota = src.slice(_iniBG, _fimBG > _iniBG ? _fimBG : src.length);
 
 // ⚠️ Em 14/08 a conferência passou a usar o PERFIL EFETIVO: a busca global é do TÉCNICO do
 // sistema, e no papel analista o superadmin leva 403 como qualquer analista.
 conf(/papel\.perfilEfetivo\(u\[0\]\) !== 'superadmin'/.test(rota), 'a rota confere o PAPEL ATIVO');
-conf(/SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id/.test(rota),
+// ⚠️ `data_saida` ENTROU NA CONSULTA em 01/09/2026, e nao e enfeite: o caminho restrito do
+// repasse deixa passar COORDENADOR EM EXERCICIO, e "em exercicio" e `data_saida IS NULL` —
+// nunca `ativo`, que nos dispensados continua true.
+conf(/SELECT id, nome, perfil, grupo, papel_ativo, data_saida FROM usuarios WHERE id/.test(rota),
      'e o perfil vem do BANCO');
 conf(/403/.test(rota), 'quem nao e superadmin leva 403');
 // ⚠️ O defeito de 09/08: com a busca no mesmo WHERE das agregacoes, as contagens passam a
@@ -226,6 +235,32 @@ conf(/linksDeLinhas/.test(rota), 'e linksDeLinhas para o SGPe');
 conf(/MAX_TRS/.test(rota) && /total_trs/.test(rota), 'ha teto, e o total real vai junto');
 // a busca NAO escreve nada
 conf(!/UPDATE |INSERT |DELETE /.test(rota), 'a rota nao escreve nada');
+
+// ─────────────────────────────────────────────────────────────
+secao('11. O CAMINHO RESTRITO DO TERMO DE REPASSE (01/09/2026)');
+// ⚠️ A BUSCA GLOBAL CONTINUA EXCLUSIVA DO SUPERADMIN. O que existe agora e uma fresta NOMEADA:
+// com `repasse_id`, quem o repasse envolve e a coordenacao em exercicio leem as TRs DAQUELE
+// repasse — porque e disso que o termo e feito, e o aviso do sino leva a ele.
+conf(/req\.query\.repasse_id/.test(rota), 'a fresta tem nome: repasse_id');
+conf(/A busca global e|A busca global é exclusiva do superadmin/.test(rota),
+     'sem repasse_id, quem nao e superadmin continua levando 403');
+// ⚠️ DUAS TRANCAS, NAO UMA. A primeira e QUEM; a segunda e O QUE — a TR pedida tem de estar
+// NAQUELE repasse. Sem a segunda, quem e ponta de um repasse qualquer mandaria o id do seu
+// junto com a TR de outra pessoa e leria o acervo inteiro: a guarda pareceria fechada.
+conf(/podeVerRepasse\(u\[0\], lote\[0\]\)/.test(rota), 'primeira tranca: QUEM abre o repasse');
+conf(/nao faz parte deste repasse|não faz parte deste repasse/.test(rota),
+     'segunda tranca: a TR tem de ser DAQUELE repasse');
+conf(rota.indexOf('podeVerRepasse') < rota.indexOf('nao faz parte deste repasse') ||
+     rota.indexOf('podeVerRepasse') < rota.indexOf('não faz parte deste repasse'),
+     'e o QUEM e conferido antes do O QUE');
+// ⚠️ O RECORTE E REESCRITO, e nao so conferido: com `repasse_id` a consulta e a TR e nada
+// mais. Deixar `termo` e `processo` seguirem junto abriria por fora a porta que o `tr` fechou.
+conf(/b\.termo = ''/.test(rota) && /b\.processo = ''/.test(rota),
+     'o termo e o processo sao zerados no caminho restrito');
+// A guarda mora numa funcao SO — as duas rotas do termo entram pela mesma porta.
+conf(/async function podeVerRepasse/.test(src), 'a regra do acesso e uma funcao unica no server.js');
+conf((src.match(/podeVerRepasse\(/g) || []).length >= 3,
+     'e as duas rotas do termo a chamam', String((src.match(/podeVerRepasse\(/g) || []).length));
 
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

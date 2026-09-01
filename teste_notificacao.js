@@ -388,6 +388,39 @@ function db(resposta) {
     conf(J.agruparDiligencias(null).length === 0, 'nulo nao estoura');
   }
 
+  console.log('\n═══ 12. O REPASSE (01/09/2026) ═══');
+  {
+    // ⚠️ TIPO PROPRIO, e nao 'recado'. O tipo e o que a tela le para decidir o icone e os
+    // botoes do aviso — enfiar o repasse em 'recado' obrigaria o front a adivinhar pelo texto
+    // do titulo, que e a deducao que este arquivo existe para nao fazer.
+    conf(N.TIPOS.includes('repasse'), "'repasse' e um tipo de notificacao");
+    conf(N.TIPOS.length === 5, 'e os outros quatro continuam la', String(N.TIPOS.length));
+
+    // ⚠️ "EM EXERCICIO" E `data_saida IS NULL`, NUNCA `ativo`: os sete dispensados continuam
+    // com `ativo = true` por decisao do Richard, e deduzir a dispensa do `ativo` mandaria
+    // aviso a quem ja nao esta la.
+    const d = db({ rows: [{ id: 8 }, { id: 12 }, { id: 56 }] });
+    const r = await N.coordenadoresEmExercicio(d);
+    conf(r.length === 3, 'os coordenadores dos TRES grupos, e nao so o do grupo envolvido',
+         String(r.length));
+    conf(/data_saida IS NULL/.test(d.ch[0].sql), 'o corte e data_saida, nao ativo');
+    conf(!/\bativo\b/.test(d.ch[0].sql), 'e o `ativo` nao aparece na consulta');
+    conf(!/grupo/.test(d.ch[0].sql), 'e nao ha filtro de grupo nenhum');
+
+    // ⚠️ SEM QUEDA PARA O SUPERADMIN, ao contrario da `coordenadoresDoGrupo`. La um pedido sem
+    // destinatario ficaria sem resposta; aqui ninguem tem de decidir nada, e um aviso a menos
+    // nao trava operacao alguma.
+    const vazio = { ch: [], query: async function (s) { this.ch.push(s); return { rows: [] }; } };
+    conf((await N.coordenadoresEmExercicio(vazio)).length === 0,
+         'sem coordenador em exercicio, a lista volta vazia');
+    conf(vazio.ch.length === 1 && !/superadmin/.test(vazio.ch[0]),
+         'e o superadmin NAO e chamado para o lugar deles');
+
+    const quebrado = { query: async () => { throw new Error('sem tabela') } };
+    conf((await N.coordenadoresEmExercicio(quebrado)).length === 0,
+         'e o banco fora do ar devolve lista vazia, nao estoura');
+  }
+
   console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);
   process.exit(falhou ? 1 : 0);
 })();

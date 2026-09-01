@@ -3421,6 +3421,60 @@ app.post('/prestacoes_contas/registrar_parecer', async (req, res) => {
 });
 
 
+// ── OS AVISOS DO REPASSE E DO DESFAZER (01/09/2026) ─────────────────────────
+//
+// ⚠️ NENHUMA TABELA NOVA: é a `notificacao` de sempre, com o tipo `repasse`. O texto está em
+// `lib/transferencia.js`, num lugar só, e estas duas funções apenas escolhem os destinatários
+// e gravam.
+//
+// ⚠️ `urgente: true` NÃO É ENFEITE: é ele que faz o `notif.listar` pôr o aviso no TOPO da
+// lista (`ORDER BY (lida_em IS NULL AND urgente) DESC`) e a tela desenhar a barra na borda
+// esquerda. O destaque pedido pelo Richard sai do mecanismo que já existe, e não de um segundo
+// caminho no front.
+//
+// ⚠️ O `ref_id` SEPARA O REPASSE DO DESFAZER — `repasse:12` contra `desfeito:12`. O dedupe do
+// `notif.criar` é `destinatario + tipo + ref_id`, e os dois eventos têm o mesmo tipo e o mesmo
+// id de lote: um `ref_id` só faria o aviso do desfazer ser engolido como repetição do aviso do
+// repasse — e a pessoa nunca saberia que as TRs saíram da planilha dela.
+//
+// ⚠️ O `ref_tipo` DIZ QUAL DOS DOIS AVISOS É, e é por ele que a tela decide os botões: o do
+// analista tem dois ("Ver na minha planilha" e "Abrir o termo"), o da coordenação tem um. Ele
+// fica FORA da chave do dedupe de propósito — é rótulo, não identidade.
+async function notificarRepasse(db, a) {
+  const link = `#repasse:${a.repasseId}`;
+  const base = { tipo: 'repasse', link, urgente: true, ref_id: `repasse:${a.repasseId}` };
+
+  const an = transf.avisoDestino({
+    pcs: a.pcs, trs: a.trs, deNome: a.deNome, quando: a.quando, vencidas: a.vencidas });
+  await notif.criar(db, { ...base, ...an, destinatario_id: a.paraId, ref_tipo: 'repasse' });
+
+  // ⚠️ TODOS OS COORDENADORES, DOS TRÊS GRUPOS — ordem do Richard: analista novo é assunto do
+  // GT inteiro, e não só de quem coordena o grupo envolvido. Dispensado não recebe.
+  //
+  // ⚠️ E O DESTINO SAI DA LISTA se ele mesmo for coordenador: dois avisos do mesmo fato na
+  // mesma caixa, com textos diferentes, é o sino se contradizendo.
+  const co = transf.avisoCoord({
+    pcs: a.pcs, grupo: a.grupo || '—', deNome: a.deNome, paraNome: a.paraNome, quando: a.quando });
+  const coords = (await notif.coordenadoresEmExercicio(db)).filter((id) => id !== a.paraId);
+  await notif.criarVarios(db, coords, { ...base, ...co, ref_tipo: 'repasse_coord' });
+}
+
+async function notificarDesfeito(db, a) {
+  const link = `#repasse:${a.repasseId}`;
+  const base = { tipo: 'repasse', link, urgente: true, ref_id: `desfeito:${a.repasseId}` };
+
+  if (a.paraId) {
+    const an = transf.avisoDesfeitoAnalista({
+      pcs: a.pcs, trs: a.trs, quando: a.quando, quandoRepasse: a.quandoRepasse });
+    await notif.criar(db, { ...base, ...an, destinatario_id: a.paraId, ref_tipo: 'repasse_desfeito' });
+  }
+
+  const co = transf.avisoDesfeitoCoord({
+    pcs: a.pcs, grupo: a.grupo || '—', paraNome: a.paraNome, quando: a.quando });
+  const coords = (await notif.coordenadoresEmExercicio(db)).filter((id) => id !== a.paraId);
+  await notif.criarVarios(db, coords, { ...base, ...co, ref_tipo: 'repasse_desfeito_coord' });
+}
+
 // ══════════════════════════════════════
 //  TRANSFERIR PRESTAÇÕES DE CONTAS — só superadmin
 // ══════════════════════════════════════
@@ -3462,7 +3516,7 @@ app.post('/transferencia', async (req, res) => {
 
     // ── As duas pontas existem? ─────────────────────────────────────────────
     const { rows: pontas } = await cli.query(
-      `SELECT id, nome, perfil, ativo, data_saida FROM usuarios WHERE id = ANY($1::int[])`,
+      `SELECT id, nome, perfil, grupo, ativo, data_saida FROM usuarios WHERE id = ANY($1::int[])`,
       [[deId, paraId]]);
     const uDe = pontas.find((x) => x.id === deId);
     const uPara = pontas.find((x) => x.id === paraId);
@@ -3537,14 +3591,34 @@ app.post('/transferencia', async (req, res) => {
       [setorial_id, trs, deId, paraId, nomeNovo]);
 
     // ── 4. O histórico — uma linha por PC movida ────────────────────────────
+    //
+    // ⚠️ OS `id` VOLTAM AGORA porque o `MIN` deles É O IDENTIFICADOR DO REPASSE, e é ele que
+    // vai no aviso. Reconsultar depois do COMMIT para descobrir "qual foi o lote que eu acabei
+    // de gravar" seria adivinhar pelo carimbo — e dois repasses do mesmo par no mesmo instante
+    // são justamente a colisão que o `lib/transferencia.js` admite não garantir.
     let nHist = 0;
+    let idsHist = [];
     if (movidas.length) {
-      const { rowCount } = await cli.query(transf.SQL_HIST, transf.paramsHistorico({
+      const { rowCount, rows: hRows } = await cli.query(transf.SQL_HIST, transf.paramsHistorico({
         movidas, foto, deId, paraId, deNome: uDe.nome, paraNome: uPara.nome,
         usuarioId: b.usuario_id, motivo: b.motivo, portaria, portariaEm,
       }));
       nHist = rowCount;
+      idsHist = hRows.map((r) => r.id);
     }
+
+    // ⚠️ AS VENCIDAS SÃO CONTADAS PELO POSTGRES, com a MESMA regra da busca global: a data tem
+    // de ser posterior ao `CORTE_PRAZO` (senão o atraso seria medido sobre data que ninguém
+    // definiu) e anterior a hoje em Brasília. Escrever aqui um segundo critério faria o aviso
+    // dizer um número que nenhuma tela mostra.
+    const { rows: venc } = await cli.query(
+      `SELECT COUNT(*)::int n FROM prestacoes_contas
+        WHERE codigo_pc = ANY($1::text[])
+          AND dt_limite_pc IS NOT NULL
+          AND dt_limite_pc >= $2::date
+          AND dt_limite_pc < ${HOJE_BR}`,
+      [movidas.map((m) => m.codigo_pc), CORTE_PRAZO]);
+    const vencidas = venc[0].n;
 
     // ── 5. AS CONFERÊNCIAS, contra a foto e ainda dentro da transação ───────
     const { rows: depois } = await cli.query(transf.SQL_FOTO, [setorial_id, trs]);
@@ -3560,11 +3634,35 @@ app.post('/transferencia', async (req, res) => {
     }
 
     await cli.query('COMMIT');
+
+    // ── 6. OS AVISOS — depois do COMMIT, e sem `await` que segure a resposta ──
+    //
+    // ⚠️ DEPOIS DO COMMIT, NUNCA DENTRO DA TRANSAÇÃO. `notif.criar` usa o `pool`, não o `cli`:
+    // uma escrita por fora da transação aberta aqui. Gravá-los antes do COMMIT sob o mesmo
+    // cliente prenderia o aviso ao ROLLBACK — e sob o pool, o oposto: o aviso sobreviveria a um
+    // ROLLBACK e anunciaria um repasse que não aconteceu.
+    //
+    // ⚠️ E NENHUM ERRO DAQUI DERRUBA O REPASSE, que já está gravado. É a regra escrita no
+    // `lib/notificacao.js`: o sino quebrado não pode desfazer a ação que o originou.
+    //
+    // ⚠️ O ID DO REPASSE É O `MIN(id)` DO LOTE — a mesma chave que `GET /transferencias/:id`
+    // usa. Não é contador novo: é uma linha de verdade do `parcela_historico`, e é ela que o
+    // botão "Abrir o termo de repasse" do sino carrega.
+    const repasseId = idsHist.length ? Math.min(...idsHist) : null;
+    if (repasseId) {
+      notificarRepasse(pool, {
+        repasseId, deNome: uDe.nome, paraId, paraNome: uPara.nome, grupo: uPara.grupo,
+        pcs: movidas.length, trs: [...new Set(movidas.map((m) => m.tr))].length,
+        vencidas, quando: new Date(),
+      }).catch((e) => console.error('Falha ao notificar o repasse:', e.message));
+    }
+
     res.json({ data: {
       de: { id: deId, nome: uDe.nome }, para: { id: paraId, nome: uPara.nome },
       portaria, portaria_em: portariaEm,
       trs, transferidas: movidas.length, previstas: previstas.length,
       ficaram_baixadas: ficam.length, historico: nHist,
+      repasse_id: repasseId, vencidas,
       codigos: movidas.map((m) => m.codigo_pc),
     }, error: null });
   } catch (e) {
@@ -3579,6 +3677,35 @@ app.post('/transferencia', async (req, res) => {
 // `parcela_historico.criado_em` tem default `now()`, que no Postgres é o instante em que a
 // TRANSAÇÃO começou — todas as linhas de um lote saem com o mesmo valor. Medido: as 32 linhas
 // do repasse do Samoel têm UM carimbo só. O `:id` das rotas é o `MIN(id)` do lote.
+
+/**
+ * QUEM PODE ABRIR UM REPASSE, e por tabela o termo dele.  (01/09/2026)
+ *
+ * ⚠️ ELA É A FONTE ÚNICA DA REGRA, e as DUAS rotas do termo entram por aqui —
+ * `GET /transferencias/:id` e o caminho restrito do `busca_global`. Escrever a mesma condição
+ * nos dois lugares faria uma delas ficar para trás no primeiro ajuste, e a que ficasse para
+ * trás seria a que deixa passar.
+ *
+ * A REGRA:
+ *   · superadmin, sempre — é ele quem faz o repasse;
+ *   · as DUAS pontas, origem e destino: o acervo é o deles, e o aviso do sino leva os dois ao
+ *     termo (o destino no repasse, a ponta que perdeu as PCs no desfazer);
+ *   · qualquer coordenador EM EXERCÍCIO, dos três grupos — a mesma lista que recebe o aviso.
+ *     Mandar um aviso com um botão que o destinatário não pode clicar seria pior que não
+ *     mandar aviso nenhum.
+ *
+ * ⚠️ COORDENADOR DISPENSADO NÃO ABRE, pelo mesmo `data_saida IS NULL` que o exclui do aviso.
+ * ⚠️ E `perfilEfetivo`, nunca `perfil` cru: no papel analista o superadmin é analista em toda
+ * parte, e aí ele passa pela porta das pontas, ou não passa.
+ */
+async function podeVerRepasse(quem, lote) {
+  if (!quem || !lote) return false;
+  if (papel.perfilEfetivo(quem) === 'superadmin') return true;
+  const de = transf.partirRotulo(lote.valor_anterior);
+  const para = transf.partirRotulo(lote.valor_novo);
+  if ((de && de.id === quem.id) || (para && para.id === quem.id)) return true;
+  return papel.perfilEfetivo(quem) === 'coordenador' && !quem.data_saida;
+}
 
 // GET /transferencias — do mais recente para o mais antigo
 app.get('/transferencias', async (req, res) => {
@@ -3677,15 +3804,27 @@ app.get('/transferencias/devolvidas', async (req, res) => {
 app.get('/transferencias/:id', async (req, res) => {
   try {
     const { rows: u } = await pool.query(
-      `SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
+      `SELECT id, nome, perfil, grupo, papel_ativo, data_saida FROM usuarios WHERE id = $1`,
       [parseInt(req.query.usuario_id) || 0]);
-    if (!u.length || papel.perfilEfetivo(u[0]) !== 'superadmin') {
-      return res.status(403).json({ data: null, error: { message: 'Acesso restrito ao superadmin.' } });
+    if (!u.length) {
+      return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
     }
     const { rows: lote } = await pool.query(transf.SQL_LOTE_POR_ID,
       [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
     if (!lote.length) return res.status(404).json({ data: null, error: { message: 'Repasse não encontrado.' } });
     const l = lote[0];
+
+    // ⚠️ A GUARDA DEIXOU DE SER "SÓ SUPERADMIN" EM 01/09/2026 — decisão do Richard, e ela é a
+    // consequência de o aviso do sino levar ao termo: um botão que abre 403 é o clique aceito
+    // que não responde (armadilha 12 do front). Quem passa é quem o repasse ENVOLVE.
+    //
+    // ⚠️ E ESTA ROTA CONTINUA ESTREITA: devolve UM repasse, achado pelo id. Não é a busca
+    // global, que devolve o acervo de qualquer analista — essa continua com a guarda dela,
+    // e o caminho restrito para o termo está lá embaixo, no `repasse_id`.
+    if (!(await podeVerRepasse(u[0], l))) {
+      return res.status(403).json({ data: null, error: {
+        message: 'Este repasse não é seu — só quem ele envolve e a coordenação podem abri-lo.' } });
+    }
     const { rows: pcs } = await pool.query(transf.SQL_DETALHE,
       [parseInt(req.params.id) || 0, transf.EVENTOS_REPASSE]);
 
@@ -3823,6 +3962,28 @@ app.post('/transferencias/:id/desfazer', async (req, res) => {
     }
 
     await cli.query('COMMIT');
+
+    // ── OS AVISOS DO DESFAZER — depois do COMMIT, pela mesma razão do repasse ──
+    //
+    // ⚠️ QUEM PERDEU AS PCs É O ANALISTA DE DESTINO DO REPASSE, e não o de origem. As PCs
+    // estavam com ele até este instante; a origem não tem mais nada a ver com aquele acervo
+    // desde o dia do repasse. Avisar a origem seria avisar a pessoa errada com o texto certo.
+    //
+    // ⚠️ O NOME E O GRUPO VÊM DO CADASTRO, e não do rótulo do histórico. O rótulo guarda o NOME
+    // CURTO da época do repasse ("48 · Samoel") — ele identifica, mas o grupo não está lá, e um
+    // repasse de meses atrás pode trazer um nome que mudou desde então.
+    const pDest = transf.partirRotulo(l.valor_novo);
+    const { rows: uDest } = pDest
+      ? await pool.query(`SELECT nome, grupo FROM usuarios WHERE id = $1`, [pDest.id])
+      : { rows: [] };
+    notificarDesfeito(pool, {
+      repasseId: parseInt(req.params.id), paraId: pDest ? pDest.id : null,
+      paraNome: (uDest[0] && uDest[0].nome) || (pDest && pDest.nome) || '—',
+      grupo: (uDest[0] && uDest[0].grupo) || '—',
+      pcs: devolvidas.length, trs: [...new Set(comCodigo.map((x) => x.tr))].length,
+      quando: new Date(), quandoRepasse: l.criado_em,
+    }).catch((e) => console.error('Falha ao notificar o desfazer:', e.message));
+
     res.json({ data: {
       repasse_id: parseInt(req.params.id), quando: l.criado_em,
       de: transf.partirRotulo(l.valor_anterior), para: transf.partirRotulo(l.valor_novo),
@@ -3857,10 +4018,54 @@ app.get('/busca_global', async (req, res) => {
     const erro = bg.validar(b);
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
 
-    const { rows: u } = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`,
-                                        [parseInt(b.usuario_id) || 0]);
-    if (!u.length || papel.perfilEfetivo(u[0]) !== 'superadmin')
-      return res.status(403).json({ data: null, error: { message: 'A busca global é exclusiva do superadmin.' } });
+    const { rows: u } = await cli.query(
+      `SELECT id, nome, perfil, grupo, papel_ativo, data_saida FROM usuarios WHERE id = $1`,
+      [parseInt(b.usuario_id) || 0]);
+    if (!u.length)
+      return res.status(403).json({ data: null, error: { message: 'Usuário não encontrado.' } });
+
+    // ── O CAMINHO RESTRITO DO TERMO DE REPASSE (01/09/2026) ─────────────────
+    //
+    // ⚠️ A BUSCA GLOBAL CONTINUA EXCLUSIVA DO SUPERADMIN — a armadilha 18 não afrouxou. O que
+    // existe agora é uma FRESTA NOMEADA: com `repasse_id`, e só com ele, quem o repasse envolve
+    // e a coordenação em exercício leem as TRs DAQUELE repasse, porque é disso que o termo é
+    // feito e o aviso do sino leva a ele.
+    //
+    // ⚠️ E A FRESTA TEM DUAS TRANCAS, não uma. A primeira é QUEM (`podeVerRepasse`); a segunda é
+    // O QUÊ: a TR pedida tem de estar NAQUELE repasse. Sem a segunda, quem é ponta de um repasse
+    // qualquer mandaria `repasse_id` do seu junto com a TR de outra pessoa e leria o acervo
+    // inteiro — a guarda pareceria fechada e estaria aberta.
+    //
+    // ⚠️ A BUSCA POR TEXTO NÃO ENTRA POR AQUI. O caminho restrito exige `tr`: é o que o termo
+    // pede, uma TR por vez. Deixar o `termo` livre com `repasse_id` devolveria casamento por
+    // entidade e por processo em cima do acervo todo, que é exatamente o que a guarda barra.
+    const repasseId = parseInt(req.query.repasse_id) || 0;
+    if (papel.perfilEfetivo(u[0]) !== 'superadmin') {
+      if (!repasseId) {
+        return res.status(403).json({ data: null, error: {
+          message: 'A busca global é exclusiva do superadmin.' } });
+      }
+      const { rows: lote } = await cli.query(transf.SQL_LOTE_POR_ID, [repasseId, transf.EVENTOS_REPASSE]);
+      if (!lote.length)
+        return res.status(404).json({ data: null, error: { message: 'Repasse não encontrado.' } });
+      if (!(await podeVerRepasse(u[0], lote[0])))
+        return res.status(403).json({ data: null, error: {
+          message: 'Este repasse não é seu — só quem ele envolve e a coordenação podem abri-lo.' } });
+
+      const trPedida = String(req.query.tr || '').trim();
+      if (!trPedida)
+        return res.status(400).json({ data: null, error: {
+          message: 'Pelo repasse, a consulta é por TR — informe a TR.' } });
+      const { rows: doLote } = await cli.query(transf.SQL_DETALHE, [repasseId, transf.EVENTOS_REPASSE]);
+      if (!doLote.some((x) => x.tr === trPedida))
+        return res.status(403).json({ data: null, error: {
+          message: `A TR ${trPedida} não faz parte deste repasse.` } });
+      // ⚠️ O RECORTE É REESCRITO, e não só conferido: com `repasse_id` a consulta é a TR e nada
+      // mais. Deixar `termo` e `processo` seguirem junto abriria por fora a porta que o `tr`
+      // acabou de fechar.
+      b.termo = '';
+      b.processo = '';
+    }
 
     // ⚠️ `String(b.termo)` VIRARIA A PALAVRA "undefined" quando a tela manda só as caixas —
     // uma busca por entidade chamada "undefined", que não casa com nada e devolve zero como

@@ -51,6 +51,9 @@ async function lerUsuario(cli, id) {
 }
 const procEdit = require('./lib/processo-edit');
 const assumir = require('./lib/assumir');
+// A PC invalidada — resíduo de carga que sai das contagens sem sair da tabela. Fase 2 do
+// DESENHO_INVALIDACAO_PC.md. Uma cópia só da regra, colada em 27 pontos.
+const inval = require('./lib/invalidada');
 const bg = require('./lib/busca-global');
 const transf = require('./lib/transferencia');
 const dup = require('./lib/duplicata');
@@ -249,8 +252,10 @@ app.get('/usuarios/pendentes', async (req, res) => {
     // Quem espera aprovação sempre aparece. O que a setorial diferente vira é um AVISO.
     const { rows } = await pool.query(`
       SELECT u.*,
-             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
-             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id AND baixada) AS baixas
+             (SELECT COUNT(*)::int FROM prestacoes_contas
+               WHERE analista_id = u.id AND ${inval.ativa('')}) AS pcs,
+             (SELECT COUNT(*)::int FROM prestacoes_contas
+               WHERE analista_id = u.id AND baixada AND ${inval.ativa('')}) AS baixas
         FROM usuarios u
        ORDER BY u.criado_em`);
 
@@ -592,6 +597,12 @@ app.post('/usuarios/primeiro_acesso', async (req, res) => {
 // cada um está em `lib/duplicata.js`. Consequência a não esquecer: a senha que passa a valer
 // na conta antiga é a do cadastro NOVO. Quem mescla o par errado não erra só o dado, dá
 // acesso — e o `avaliar` deste mesmo arquivo aponta candidato por nome, inclusive FRACO.
+// ⚠️ FASE 2: o CONTADOR de PCs ganhou `inval.ativa('')`, mas o `rotulo_acervo` NÃO — e a
+// ausência é deliberada. Ele responde "como o acervo chama esta pessoa", e uma PC invalidada
+// continua tendo sido analisada por ela; filtrar ali mudaria o nome gravado no cadastro por
+// causa de uma PC que apenas saiu da contagem.
+// (O comentário mora aqui porque `teste_duplicata.js` procura o `FOR UPDATE` numa fatia de
+//  1.400 caracteres a partir do `app.post`, e explicação longa lá dentro o empurra para fora.)
 app.post('/usuarios/mesclar', async (req, res) => {
   const cli = await pool.connect();
   try {
@@ -609,7 +620,7 @@ app.post('/usuarios/mesclar', async (req, res) => {
     // `nomeCurto(usuarios.nome)` erra nos três casos do MAPA_NOME.
     const { rows } = await cli.query(`
       SELECT u.*,
-             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id) AS pcs,
+             (SELECT COUNT(*)::int FROM prestacoes_contas WHERE analista_id = u.id AND ${inval.ativa('')}) AS pcs,
              (SELECT analista_nome FROM prestacoes_contas
                WHERE analista_id = u.id AND analista_nome IS NOT NULL
                GROUP BY analista_nome ORDER BY COUNT(*) DESC, analista_nome LIMIT 1) AS rotulo_acervo
@@ -1440,6 +1451,13 @@ app.get('/prestacoes_contas', async (req, res) => {
       i = r.proximo;
     }
 
+    // ⚠️ A PC INVALIDADA SAI DAQUI, e daqui saem SEIS telas: os quatro cards do Dashboard e o
+    // `count` do Painel Técnico e do Estornar (pelo `countRes`), e a lista inteira que a
+    // Produtividade, o Board, a Gestão Grupo, os Relatórios e a Minha Planilha agregam no
+    // cliente. Um filtro só, no `conditions`, alcança o SELECT e o COUNT — que é o que os
+    // mantém concordando.
+    conditions.push(inval.ativa('p'));
+
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const countRes = await pool.query(`SELECT COUNT(*) FROM prestacoes_contas p ${where}`, values);
     // ⚠️ `sigef_tag` É CALCULADA AQUI, E NÃO EXISTE NO BANCO. Ver o cabeçalho de
@@ -1546,6 +1564,14 @@ app.get('/prestacoes_contas/resumo_tr', async (req, res) => {
         `tr IN (SELECT tr FROM prestacoes_contas WHERE ${escopoSub}${cProc.condicao})`
       );
     }
+    // ⚠️ AQUI O FILTRO MUDA `total_pcs`, E É O PONTO DA FASE 2 INTEIRA: é esta contagem que a
+    // tela compara com `baixadas` para dizer "Concluída". Sem ela, uma TR com uma PC
+    // invalidada aberta nunca fecha — que é o caso da 2021TR002375.
+    //
+    // ⚠️ E ELE VAI SÓ NO `conditions`, NÃO nas duas subconsultas de `busca`/`processo` acima:
+    // aquelas escolhem QUAIS TRs aparecem, e uma TR não deve sumir da lista só porque o termo
+    // casou numa PC invalidada. Quem conta dentro da TR é este WHERE.
+    conditions.push(inval.ativa('p'));
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(
       `SELECT tr, MAX(entidade) AS entidade, MAX(analista_nome) AS analista_nome,
@@ -1623,8 +1649,12 @@ app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
     //
     // ⚠️ NÃO REDECLARE A DATA AQUI. Ela mora em `lib/datas.js`, e foi a duplicação em potencial
     // que deixou o sino e esta tela discordarem por 18 dias.
+    // ⚠️ SEM ALIAS nesta rota — `inval.ativa('')`. A PC invalidada não tem prazo a vencer:
+    // ela não existe, e cobrar prazo dela é o mesmo defeito que o CORTE_PRAZO corrigiu em
+    // 28/08, com outro nome.
     const conditions = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`,
-      `dt_limite_pc >= DATE '${CORTE_PRAZO}'`, `(${HOJE_BR} - dt_limite_pc) >= -30`];
+      `dt_limite_pc >= DATE '${CORTE_PRAZO}'`, `(${HOJE_BR} - dt_limite_pc) >= -30`,
+      inval.ativa('')];
     const values = [parseInt(analista_id)];
     let i = 2;
     if (setorial_id) { conditions.push(`setorial_id = $${i++}`); values.push(setorial_id); }
@@ -1654,7 +1684,7 @@ app.get('/prestacoes_contas/alertas_prazo', async (req, res) => {
     // e chamá-la de vencida é o que o alerta fazia até 28/08 — dizia ao analista que ele tinha
     // 214 atrasos quando ninguém nunca definiu aqueles prazos.
     const impCond = [`analista_id = $1`, `status <> 'baixada'`, `dt_limite_pc IS NOT NULL`,
-      `dt_limite_pc < DATE '${CORTE_PRAZO}'`];
+      `dt_limite_pc < DATE '${CORTE_PRAZO}'`, inval.ativa('')];
     const impValues = [parseInt(analista_id)];
     if (setorial_id) { impCond.push(`setorial_id = $2`); impValues.push(setorial_id); }
     const { rows: imp } = await pool.query(
@@ -1761,7 +1791,8 @@ app.get('/prestacoes_contas/painel', async (req, res) => {
     // Janela de "vencendo": o padrão são 15 dias, e quem chama pode apertar ou afrouxar.
     const dias = Math.max(1, Math.min(365, parseInt(req.query.dias) || 15));
 
-    const cond = ['analista_id = $1'];
+    // A PC invalidada nao pede nada ao analista, nao espera o C.I. e nao entra no anel.
+    const cond = ['analista_id = $1', inval.ativa('p')];
     const val = [parseInt(analista_id)];
     if (setorial_id) { val.push(setorial_id); cond.push(`setorial_id = $${val.length}`); }
     val.push(dias);
@@ -1834,7 +1865,10 @@ app.get('/prestacoes_contas/painel', async (req, res) => {
 
     // A média do setorial — sobre TODO MUNDO, e por isso fora do WHERE do analista.
     const vs = [];
-    let condS = [`ci_situacao IN ('na_fila','com_analista')`, `dt_envio_ci IS NOT NULL`];
+    // ⚠️ A media do setorial tambem: uma parcela invalidada parada ha 90 dias inflaria a
+    // espera media de todo mundo com um tempo que nao e de ninguem.
+    let condS = [`ci_situacao IN ('na_fila','com_analista')`, `dt_envio_ci IS NOT NULL`,
+      inval.ativa('')];
     if (setorial_id) { vs.push(setorial_id); condS.push(`setorial_id = $${vs.length}`); }
     const { rows: med } = await pool.query(
       `SELECT ROUND(AVG(${HOJE_BR} - dt_envio_ci::date))::int AS media
@@ -1861,7 +1895,8 @@ app.get('/prestacoes_contas/painel', async (req, res) => {
 // seriam seis fotos de instantes diferentes, e a linha da tela não fecharia consigo mesma.
 app.get('/prestacoes_contas/painel_equipe', async (req, res) => {
   try {
-    const cond = ['analista_id IS NOT NULL'];
+    // Os seis numeros da tela Ver como — inclusive a barra de meta, que le `baixadas`.
+    const cond = ['analista_id IS NOT NULL', inval.ativa('')];
     const val = [];
     if (req.query.setorial_id) { val.push(req.query.setorial_id); cond.push(`setorial_id = $${val.length}`); }
 
@@ -1893,6 +1928,19 @@ app.get('/prestacoes_contas/painel_equipe', async (req, res) => {
 });
 
 // GET /prestacoes_contas/produtividade?corte=YYYY-MM-DD&analista_id=X
+//
+// ⚠️ A INVALIDAÇÃO ENTRA AQUI COM RECORTE DE DATA, e não com o filtro simples — é a única
+// das 28 da fase 2 assim. Esta rota é CUMULATIVA: responde "o que valia naquela data". Com
+// `NOT p.invalidada`, um relatório de julho gerado depois da invalidação perderia as PCs
+// invalidadas — e as 16 baixadas candidatas têm `data_baixa` em AGOSTO de 2026, dentro do
+// período do CGE em aberto. O passado já emitido mudaria.
+//
+// É a MESMA forma que o estorno usa (`estornada = false OR data_estorno > $1`), e de
+// propósito: as duas respondem a mesma pergunta, e `invalidada_em` existe para isto.
+//
+// ⚠️ E O COMENTÁRIO MORA AQUI, e não dentro do corpo: `teste_sigef.js` confere as asserções
+// desta rota numa fatia de 2.000 caracteres a partir do `app.get`, e explicação longa lá
+// dentro empurra `AS total_bruto` e `sqlContaAte` para fora da janela.
 app.get('/prestacoes_contas/produtividade', async (req, res) => {
   try {
     const { corte, analista_id } = req.query;
@@ -1905,7 +1953,8 @@ app.get('/prestacoes_contas/produtividade', async (req, res) => {
     // estruturalmente, a PC que conta SÓ por ter ido ao C.I. — `enviado_ci = true` sem baixa
     // tem `dt_envio_ci`, não `data_baixa`. A rota dizia implementar "baixada OU enviado_ci" e
     // implementava só a primeira metade. Hoje é uma PC; a falha é de forma, não de tamanho.
-    const conditions = ['(p.estornada = false OR p.data_estorno > $1)'];
+    // ⚠️ `ativaAte`, e não `ativa` — o porquê está no cabeçalho da rota.
+    const conditions = ['(p.estornada = false OR p.data_estorno > $1)', inval.ativaAte('$1', 'p')];
     const values = [corte];
     let i = 2;
     if (analista_id) { conditions.push(`p.analista_id = $${i++}`); values.push(parseInt(analista_id)); }
@@ -3010,7 +3059,8 @@ app.get('/solicitacao_vaga', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT s.*, u.nome AS analista_nome_completo, u.grupo,
               (SELECT COUNT(DISTINCT tr)::int FROM prestacoes_contas
-                WHERE analista_id = s.analista_id AND baixada = false) AS trs_abertas,
+                WHERE analista_id = s.analista_id AND baixada = false
+                  AND ${inval.ativa('')}) AS trs_abertas,
               -- O analista pediu a TR, caiu abaixo do limite antes da resposta e assumiu
               -- direto. O pedido continua pendente e vira lixo na fila de quem aprova.
               -- Decisão do Richard (10/08): não some sozinho — aparece marcado como
@@ -3714,7 +3764,8 @@ app.post('/transferencia', async (req, res) => {
         WHERE codigo_pc = ANY($1::text[])
           AND dt_limite_pc IS NOT NULL
           AND dt_limite_pc >= $2::date
-          AND dt_limite_pc < ${HOJE_BR}`,
+          AND dt_limite_pc < ${HOJE_BR}
+          AND ${inval.ativa('')}`,
       [movidas.map((m) => m.codigo_pc), CORTE_PRAZO]);
     const vencidas = venc[0].n;
 
@@ -4099,7 +4150,8 @@ app.get('/transferencias/ciencia_pendente', async (req, res) => {
         ? (await pool.query(
             `SELECT COUNT(*)::int n FROM prestacoes_contas
               WHERE codigo_pc = ANY($1::text[]) AND dt_limite_pc IS NOT NULL
-                AND dt_limite_pc >= $2::date AND dt_limite_pc < ${HOJE_BR}`,
+                AND dt_limite_pc >= $2::date AND dt_limite_pc < ${HOJE_BR}
+                AND ${inval.ativa('')}`,
             [codigos, CORTE_PRAZO])).rows[0].n
         : 0;
       saida.push({
@@ -4530,7 +4582,7 @@ app.get('/busca_global', async (req, res) => {
               ${sigef.SQL_PRE_GT} AS sigef_pre_gt,
               ${sigef.SQL_NL_RESIDUAL} AS nl_residual
          FROM prestacoes_contas p
-        WHERE p.setorial_id='FCEE' AND p.tr = ANY($1)
+        WHERE p.setorial_id='FCEE' AND p.tr = ANY($1) AND ${inval.ativa('p')}
         ORDER BY tr, parcial_num, codigo_pc`, [trs]);
 
     const hoje = (await cli.query(`SELECT ${HOJE_BR}::text d`)).rows[0].d;

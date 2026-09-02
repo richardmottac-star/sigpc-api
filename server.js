@@ -5984,6 +5984,146 @@ const ENG_ACOES = {
   },
 };
 
+// ══════════════════════════════════════
+//  INVALIDAR UMA PC — fase 3  (02/09/2026)
+// ══════════════════════════════════════
+// POST /pc/:codigo_pc/invalidar     body { motivo, usuario_id }
+// POST /pc/:codigo_pc/desinvalidar  body { motivo, usuario_id }
+//
+// Tirar de circulação a PC que nunca deveria ter existido — resíduo de carga, sem
+// correspondência no SIGEF. A regra inteira mora em `lib/invalidada.js`.
+//
+// ⚠️ ISTO NÃO É ESTORNO, e a diferença é o motivo de a rota existir. O estorno é por PARCELA,
+// exige `baixada = true` e DESFAZ uma baixa. A PC resíduo tipicamente nem está baixada — e
+// estornar o que nunca foi baixado inventa um evento que não houve (regra de 16/08). Aqui
+// `baixada`, `status`, `data_baixa`, `parecer_tipo` e `enviado_ci` não são tocados: quem tira
+// a PC das contagens é o filtro da fase 2, não a mudança do estado dela.
+//
+// ⚠️ AS DUAS SÃO ROTAS DE NOME FIXO NO TERCEIRO SEGMENTO, e vêm ANTES de `/pc/:id/engenharia`
+// — armadilha 13. Hoje não há `/pc/:id` nu que as engula, mas a ordem é a convenção do
+// arquivo, e quem acrescentar essa rota depois não vai precisar lembrar de reordenar.
+//
+// ⚠️ O PERFIL É LIDO DO BANCO pelo `usuario_id`, e passa por `papel.perfilEfetivo` — nunca do
+// corpo. Foi o defeito das quatro rotas corrigidas em 14/08.
+
+/** O corpo comum das duas: valida, trava a linha, confere quem pode. */
+async function alvoInvalidacao(cli, req, res) {
+  const b = req.body || {};
+  const eM = inval.validarMotivo(b.motivo);
+  if (eM) { res.status(400).json({ data: null, error: { message: eM } }); return null; }
+
+  await cli.query('BEGIN');
+  const quem = await lerUsuario(cli, b.usuario_id);
+  if (!quem) { await cli.query('ROLLBACK');
+    res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); return null; }
+  const pe = papel.perfilEfetivo(quem);
+  if (!inval.podeInvalidar(pe)) { await cli.query('ROLLBACK');
+    res.status(403).json({ data: null, error: { message:
+      'Só coordenação e superadmin invalidam prestação — ela sai da contagem de todo mundo.' } }); return null; }
+
+  const { rows } = await cli.query(inval.SQL_ALVO, [req.params.codigo_pc]);
+  if (!rows.length) { await cli.query('ROLLBACK');
+    res.status(404).json({ data: null, error: { message: 'PC não encontrada' } }); return null; }
+  return { b, quem, pc: rows[0], motivo: String(b.motivo).trim() };
+}
+
+app.post('/pc/:codigo_pc/invalidar', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const a = await alvoInvalidacao(cli, req, res);
+    if (!a) return;
+
+    // ⚠️ IDEMPOTENTE: já invalidada devolve o estado atual, em 200, sem regravar. Regravar
+    // moveria `invalidada_em` — e é ela que o relatório cumulativo lê para saber o que valia
+    // em cada data. Um segundo clique reescreveria o passado.
+    if (a.pc.invalidada === true) {
+      await cli.query('ROLLBACK');
+      return res.json({ data: {
+        codigo_pc: a.pc.codigo_pc, tr: a.pc.tr, invalidada: true, ja_estava: true,
+        invalidada_em: a.pc.invalidada_em, invalidada_por: a.pc.invalidada_por,
+        motivo_invalidacao: a.pc.motivo_invalidacao,
+      }, error: null });
+    }
+
+    const { rows } = await cli.query(inval.SQL_INVALIDAR, [a.pc.codigo_pc, a.quem.id, a.motivo]);
+
+    // ⚠️ UMA LINHA POR PC, e o código no TEXTO: `parcela_historico` é chaveada por
+    // `(tr, parcial_num)` e não tem coluna `codigo_pc`. Numa parcela que continua existindo é
+    // preciso dizer QUAL PC saiu — as irmãs ficaram como estavam.
+    await registrarHistorico(cli, {
+      tr: a.pc.tr, parcial_num: a.pc.parcial_num, setorial_id: a.pc.setorial_id,
+      evento: inval.EVENTO_INVALIDAR,
+      valor_anterior: 'ativa', valor_novo: 'invalidada',
+      analista_id: a.pc.analista_id ?? null,
+      executado_por: a.quem.id,
+      observacao: `${a.quem.nome} invalidou a PC ${a.pc.codigo_pc}`
+        + ` (parcela ${a.pc.parcial_num ?? '—'}, ${a.pc.baixada ? 'BAIXADA' : 'aberta'}`
+        + `${a.pc.codigo_nl ? ', NL ' + a.pc.codigo_nl : ''}): ${a.motivo}`,
+      // A foto do que a PC era, para o desfazer ter contra o que conferir.
+      estado_anterior: {
+        baixada: a.pc.baixada, status: a.pc.status, enviado_ci: a.pc.enviado_ci,
+        parecer_tipo: a.pc.parecer_tipo, codigo_nl: a.pc.codigo_nl, valor: a.pc.valor,
+      },
+    });
+
+    await cli.query('COMMIT');
+    res.json({ data: {
+      codigo_pc: rows[0].codigo_pc, tr: rows[0].tr, parcial_num: rows[0].parcial_num,
+      invalidada: true, ja_estava: false, invalidada_em: rows[0].invalidada_em,
+      invalidada_por: a.quem.id, motivo_invalidacao: a.motivo,
+      // ⚠️ VAI DITO NA RESPOSTA: a baixa NÃO foi desfeita. É a pergunta que quem clica faz.
+      baixada: a.pc.baixada, baixa_preservada: true,
+    }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+app.post('/pc/:codigo_pc/desinvalidar', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const a = await alvoInvalidacao(cli, req, res);
+    if (!a) return;
+
+    if (a.pc.invalidada !== true) {
+      await cli.query('ROLLBACK');
+      return res.json({ data: {
+        codigo_pc: a.pc.codigo_pc, tr: a.pc.tr, invalidada: false, ja_estava: true,
+      }, error: null });
+    }
+
+    const antesEm = a.pc.invalidada_em;
+    const { rows } = await cli.query(inval.SQL_DESINVALIDAR, [a.pc.codigo_pc]);
+
+    // ⚠️ A LINHA DA INVALIDAÇÃO NÃO É APAGADA — as duas ficam, e é a trilha que conta a
+    // história. Mesma escolha do `ci_reabriu`.
+    await registrarHistorico(cli, {
+      tr: a.pc.tr, parcial_num: a.pc.parcial_num, setorial_id: a.pc.setorial_id,
+      evento: inval.EVENTO_DESFAZER,
+      valor_anterior: 'invalidada', valor_novo: 'ativa',
+      analista_id: a.pc.analista_id ?? null,
+      executado_por: a.quem.id,
+      observacao: `${a.quem.nome} desfez a invalidacao da PC ${a.pc.codigo_pc}`
+        + ` (invalidada em ${antesEm ? new Date(antesEm).toISOString().slice(0, 10) : '—'}`
+        + `, motivo anterior: ${a.pc.motivo_invalidacao || '—'}): ${a.motivo}`,
+    });
+
+    await cli.query('COMMIT');
+    res.json({ data: {
+      codigo_pc: rows[0].codigo_pc, tr: rows[0].tr, parcial_num: rows[0].parcial_num,
+      invalidada: false, ja_estava: false,
+      // ⚠️ O AVISO QUE O DESENHO PEDE: desfazer DEPOIS de um relatório cumulativo emitido sem
+      // a PC faz o número daquele relatório mudar, porque `invalidada_em` volta a ser NULL.
+      // É o mesmo comportamento do estorno desfeito; não é defeito, mas precisa estar dito.
+      aviso_cumulativo: 'Relatório cumulativo já emitido sem esta PC volta a contá-la.',
+    }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
 app.post('/pc/:id/engenharia', async (req, res) => {
   const b = req.body || {};
   const acao = String(b.acao || '').trim();

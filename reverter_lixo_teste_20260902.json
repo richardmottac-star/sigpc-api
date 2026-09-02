@@ -1,0 +1,71 @@
+{
+  "quando": "2026-09-02T15:57:28.479Z",
+  "modo": "gravacao",
+  "script": "limpar_lixo_teste_20260902.js",
+  "motivo": "lixo do teste da fase 3 — a rota fez COMMIT proprio e o ROLLBACK do teste nao alcancou",
+  "ids_apagados": [
+    2544,
+    2545
+  ],
+  "linhas": [
+    {
+      "id": 2544,
+      "tr": "2021TR002375",
+      "parcial_num": "1",
+      "setorial_id": "FCEE",
+      "evento": "pc_invalidada",
+      "valor_anterior": "ativa",
+      "valor_novo": "invalidada",
+      "analista_id": 35,
+      "executado_por": 4,
+      "observacao": "Richard Motta Coelho invalidou a PC 2021PC002840 (parcela 1, aberta, NL 2021NL021001): aaaaaaaaaaaaaaa",
+      "estado_anterior": {
+        "valor": "763.58",
+        "status": "livre",
+        "baixada": false,
+        "codigo_nl": "2021NL021001",
+        "enviado_ci": false,
+        "parecer_tipo": null
+      },
+      "quando": "2026-09-02 15:43:55"
+    },
+    {
+      "id": 2545,
+      "tr": "2021TR002375",
+      "parcial_num": "1",
+      "setorial_id": "FCEE",
+      "evento": "pc_invalidacao_desfeita",
+      "valor_anterior": "invalidada",
+      "valor_novo": "ativa",
+      "analista_id": 35,
+      "executado_por": 4,
+      "observacao": "Richard Motta Coelho desfez a invalidacao da PC 2021PC002840 (invalidada em 2026-09-02, motivo anterior: aaaaaaaaaaaaaaa): limpeza do teste de guardas",
+      "estado_anterior": null,
+      "quando": "2026-09-02 15:44:01"
+    }
+  ],
+  "desfazer": [
+    "INSERT INTO parcela_historico (id, tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, executado_por, observacao) VALUES (2544, '2021TR002375', '1', 'FCEE', 'pc_invalidada', 'ativa', 'invalidada', 35, 4, 'Richard Motta Coelho invalidou a PC 2021PC002840 (parcela 1, aberta, NL 2021NL021001): aaaaaaaaaaaaaaa');",
+    "INSERT INTO parcela_historico (id, tr, parcial_num, setorial_id, evento, valor_anterior, valor_novo, analista_id, executado_por, observacao) VALUES (2545, '2021TR002375', '1', 'FCEE', 'pc_invalidacao_desfeita', 'invalidada', 'ativa', 35, 4, 'Richard Motta Coelho desfez a invalidacao da PC 2021PC002840 (invalidada em 2026-09-02, motivo anterior: aaaaaaaaaaaaaaa): limpeza do teste de guardas');"
+  ],
+  "conferencias_ok": [
+    "as 2 ids existem: achadas 2",
+    "id 2544: evento e de invalidacao (pc_invalidada)",
+    "id 2544: a observacao cita a PC 2021PC002840",
+    "id 2544: a observacao carrega a marca \"aaaaaaaaaaaaaaa\"",
+    "id 2544: e da TR 2021TR002375",
+    "id 2545: evento e de invalidacao (pc_invalidacao_desfeita)",
+    "id 2545: a observacao cita a PC 2021PC002840",
+    "id 2545: a observacao carrega a marca \"aaaaaaaaaaaaaaa\"",
+    "id 2545: e da TR 2021TR002375",
+    "nao ha outro evento de invalidacao no banco: 2 no total, esperado 2",
+    "apagou exatamente 2: 2",
+    "a trilha da TR 2021TR002375 voltou a 1 linhas: 3 -> 1",
+    "a trilha inteira caiu exatamente 2: 2226 -> 2224",
+    "nenhum evento de invalidacao restou: 0",
+    "nenhuma PC invalidada, antes e depois: 0 -> 0",
+    "a PC 2021PC002840 segue limpa: as quatro colunas nulas",
+    "e intacta no resto: baixada false, status livre"
+  ],
+  "conferencias_falhas": []
+}

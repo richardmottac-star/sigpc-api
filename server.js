@@ -1727,6 +1727,32 @@ app.get('/prestacoes_contas/nl_compartilhada', async (req, res) => {
 // ⚠️ E É UM `SELECT` SÓ, com `FILTER`. Seis consultas separadas dariam seis fotos de
 // instantes diferentes — e num painel que se atualiza a cada 60 s isso aparece: o "falta
 // encaminhar" de um segundo e o "no C.I." de outro não fecham a conta que a tela desenha.
+
+// A chave da PARCELA — a MESMA de `lib/ci-fila.js` (`SQL_CHAVE_TEXTO`). Escrita aqui em vez
+// de importada porque aquela usa o alias `p.` fixo e esta roda no mesmo SELECT dos contadores
+// por PC; o formato é idêntico, e `teste_ci_fila.js` guarda a de lá.
+const SQL_CHAVE_PARCELA = `(setorial_id || '|' || tr || '|' || COALESCE(parcial_num, '~'))`;
+
+// "Esta parcela já foi reaberta pelo C.I.?" — o único registro que sobra da reabertura.
+//
+// ⚠️ NÃO HÁ COLUNA QUE RESPONDA ISSO, e é de propósito: o UPDATE da reabertura
+// (`lib/ci.js:394`) APAGA `ci_encerrado_em` e `ci_encerrado_por` e NÃO carimba
+// `ci_tecnico_id` — ordem do Richard, 26/08, para a coluna do técnico continuar respondendo
+// "quem decidiu" e não "quem reabriu". O evento no histórico é o que resta.
+//
+// ⚠️ `ci_rodada >= 2` NÃO SERVE como atalho: ele sobe também na devolução por ressalva, e não
+// distingue as duas. Medido: 161 das 162 reabertas têm rodada >= 2, e parcelas devolvidas sem
+// reabertura nenhuma também têm.
+//
+// ⚠️ O JOIN É POR (tr, parcial_num, setorial_id) COM `IS NOT DISTINCT FROM`, e não `=`:
+// `parcial_num` é anulável, e `NULL = NULL` some no filtro em vez de casar.
+const SQL_CI_REABERTA = `EXISTS (
+  SELECT 1 FROM parcela_historico h
+   WHERE h.tr = p.tr
+     AND h.parcial_num IS NOT DISTINCT FROM p.parcial_num
+     AND h.setorial_id IS NOT DISTINCT FROM p.setorial_id
+     AND h.evento = 'ci_reabriu')`;
+
 app.get('/prestacoes_contas/painel', async (req, res) => {
   try {
     const { analista_id, setorial_id } = req.query;
@@ -1752,12 +1778,59 @@ app.get('/prestacoes_contas/painel', async (req, res) => {
                             AND prazo_diligencia - ${HOJE_BR} BETWEEN 0 AND ${pDias})::int AS dilig_vencendo,
          COUNT(*) FILTER (WHERE ci_situacao = 'na_fila')::int       AS ci_na_fila,
          COUNT(*) FILTER (WHERE ci_situacao = 'encerrado')::int     AS ci_encerrado,
+         -- ⚠️ ci_com_analista FICA, e não é redundante com a linha 5 do painel: quem o lê é
+         -- o CARD "C.I. devolveu com ressalvas" do bloco "Precisa de você", que conta PC e
+         -- não desconta as reabertas. São perguntas diferentes sobre a mesma coluna.
+         -- (Sem crase em nome de coluna daqui para baixo: crase dentro de template literal
+         --  fecha a string e o arquivo deixa de compilar — armadilha 10.)
          COUNT(*) FILTER (WHERE ci_situacao = 'com_analista')::int  AS ci_com_analista,
          -- A mais antiga AINDA no ciclo: encerrada já voltou, e contá-la faria o número só
          -- crescer para sempre.
          MAX(${HOJE_BR} - dt_envio_ci::date) FILTER
-             (WHERE ci_situacao IN ('na_fila','com_analista') AND dt_envio_ci IS NOT NULL)::int AS ci_mais_antigo_dias
-       FROM prestacoes_contas WHERE ${cond.join(' AND ')}`, val);
+             (WHERE ci_situacao IN ('na_fila','com_analista') AND dt_envio_ci IS NOT NULL)::int AS ci_mais_antigo_dias,
+         -- ══ AS CINCO LINHAS DO PAINEL "Suas PCs no Controle Interno" (02/09/2026) ══
+         --
+         -- ⚠️ A UNIDADE É A PARCELA — COUNT(DISTINCT chave), com a MESMA chave e a mesma
+         -- unidade da fila do C.I. (lib/ci-fila.js, desde 26/08). As duas telas que falam do
+         -- Controle Interno passam a contar a mesma coisa. Medido antes de escrever: das
+         -- 1.988 parcelas no ciclo, ZERO têm PCs em ci_situacao diferentes, então a parcela é
+         -- homogênea e a contagem não precisa de regra de desempate.
+         --
+         -- ⚠️ O RECORTE É enviado_ci = true, e não ci_situacao IS NOT NULL. Medido: as duas
+         -- dão o mesmo conjunto hoje, mas enviado_ci é o que SUSTENTA a baixa (CLAUDE.md) e é
+         -- o filtro que o painel afirma no bloco "Fonte".
+         --
+         -- ⚠️ A LINHA 4 TEM PRECEDÊNCIA — NOT reaberta nas outras quatro. Sem isso o anel
+         -- somaria mais que o total: a reaberta volta para com_analista, então ela E a linha 5
+         -- contariam a mesma parcela. Medido em 02/09: 157 PCs colidem com a linha 5 e 4 com a
+         -- linha 1; com as linhas 2 e 3 a colisão é ZERO, porque a reabertura tira a PC de
+         -- 'encerrado' por construção. A precedência pedida era sobre 2 e 3; ela vale sobre as
+         -- quatro, que é o que faz as fatias fecharem o total.
+         COUNT(DISTINCT ${SQL_CHAVE_PARCELA}) FILTER
+             (WHERE enviado_ci = true AND NOT ${SQL_CI_REABERTA}
+                AND ci_situacao = 'na_fila')::int                    AS ci_l1_na_fila,
+         -- Encerrada ANTES de o sistema receber devolutiva do C.I. — a confiabilidade vem da
+         -- declaração do analista, não de decisão registrada. São as 1.577 da carga de 16/08.
+         COUNT(DISTINCT ${SQL_CHAVE_PARCELA}) FILTER
+             (WHERE enviado_ci = true AND NOT ${SQL_CI_REABERTA}
+                AND ci_situacao = 'encerrado' AND ci_tecnico_id IS NULL)::int AS ci_l2_declarada,
+         -- ⚠️ ci_tecnico_id IS NOT NULL É o teste de "decisão de acordo registrada", e não
+         -- precisa de um segundo filtro: ci.decidir carimba o técnico nos DOIS ramos, mas só o
+         -- ramo de_acordo deixa a parcela em 'encerrado'. O ramo ressalva a manda para
+         -- 'com_analista', que é a linha 5. O par (encerrado + técnico) já é "de acordo".
+         COUNT(DISTINCT ${SQL_CHAVE_PARCELA}) FILTER
+             (WHERE enviado_ci = true AND NOT ${SQL_CI_REABERTA}
+                AND ci_situacao = 'encerrado' AND ci_tecnico_id IS NOT NULL)::int AS ci_l3_de_acordo,
+         COUNT(DISTINCT ${SQL_CHAVE_PARCELA}) FILTER
+             (WHERE enviado_ci = true AND ${SQL_CI_REABERTA})::int   AS ci_l4_reaberta,
+         COUNT(DISTINCT ${SQL_CHAVE_PARCELA}) FILTER
+             (WHERE enviado_ci = true AND NOT ${SQL_CI_REABERTA}
+                AND ci_situacao = 'com_analista')::int               AS ci_l5_ressalva,
+         -- O centro do anel. Medido: as cinco linhas somam exatamente este total, e nenhuma
+         -- parcela com enviado_ci fica fora delas.
+         COUNT(DISTINCT ${SQL_CHAVE_PARCELA}) FILTER
+             (WHERE enviado_ci = true)::int                          AS ci_total
+       FROM prestacoes_contas p WHERE ${cond.join(' AND ')}`, val);
 
     // A média do setorial — sobre TODO MUNDO, e por isso fora do WHERE do analista.
     const vs = [];

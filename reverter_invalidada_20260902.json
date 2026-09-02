@@ -1,0 +1,39 @@
+{
+  "quando": "2026-09-02T14:53:27.242Z",
+  "modo": "gravacao",
+  "script": "migracao_invalidada_20260902.js",
+  "fase": "1 de 2 — so as colunas; nenhuma das 64 consultas foi tocada",
+  "foto": "_backup_pre_invalidada_20260902",
+  "linhas_na_foto": 16479,
+  "colunas_criadas": [
+    "invalidada boolean NOT NULL DEFAULT false",
+    "invalidada_em timestamp",
+    "invalidada_por integer",
+    "motivo_invalidacao text"
+  ],
+  "desfazer": [
+    "ALTER TABLE prestacoes_contas DROP COLUMN IF EXISTS invalidada;",
+    "ALTER TABLE prestacoes_contas DROP COLUMN IF EXISTS invalidada_em;",
+    "ALTER TABLE prestacoes_contas DROP COLUMN IF EXISTS invalidada_por;",
+    "ALTER TABLE prestacoes_contas DROP COLUMN IF EXISTS motivo_invalidacao;"
+  ],
+  "conferencias_ok": [
+    "total de PCs inalterado: foto 16479 == depois 16479",
+    "linhas da foto SUMIDAS: 0 (tem de ser 0)",
+    "linhas NOVAS que a foto nao tem: 0 (tem de ser 0)",
+    "conteudo ALTERADO nas colunas antigas: 0 (tem de ser 0)",
+    "as quatro colunas existem: 4 de 4",
+    "invalidada: nullable NO — esperado NO",
+    "invalidada_em: nullable YES — esperado YES",
+    "invalidada_por: nullable YES — esperado YES",
+    "motivo_invalidacao: nullable YES — esperado YES",
+    "invalidada tem DEFAULT false: false",
+    "nenhuma PC com invalidada = true: 0 (tem de ser 0)",
+    "nenhuma PC com invalidada NULA: 0 (tem de ser 0)",
+    "auditoria vazia: em 0, por 0, motivo 0",
+    "baixadas por analista identicas a foto: 0 analista(s) com diferenca",
+    "nenhuma das 64 consultas alterada (git diff HEAD vazio)"
+  ],
+  "conferencias_falhas": [],
+  "aviso": "DROP COLUMN apaga o que estiver gravado nelas. Conferir antes se ja ha PC invalidada: SELECT COUNT(*) FROM prestacoes_contas WHERE invalidada = true;"
+}

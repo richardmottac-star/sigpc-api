@@ -60,6 +60,12 @@ const log = (s) => console.log(s);
   log(`${'═'.repeat(78)}`);
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  // ⚠️ SEM ISTO O SCRIPT MORRE COM STACK TRACE NO CAMINHO DE RECUSA. Um cliente OCIOSO que
+  // perde a conexao emite 'error' no POOL, nao na consulta — e evento 'error' sem ouvinte
+  // derruba o processo no Node. Aconteceu em 03/09: a conferencia recusou certo, e logo
+  // depois vinha 'Connection terminated unexpectedly' com stack, escondendo a mensagem que
+  // importa. A recusa e justamente quando a saida precisa ser legivel.
+  pool.on('error', (e) => log(`   (aviso: conexao ociosa caiu — ${e.message})`));
   const cli = await pool.connect();
   const ok = [], mal = [];
   const conf = (c, m) => { (c ? ok : mal).push(m); log(`   ${c ? '✓' : '✗'} ${m}`); };
@@ -114,7 +120,11 @@ const log = (s) => console.log(s);
       await cli.query('ROLLBACK');
       log(`\n   ⛔ ALGUMA LINHA NAO BATE COM A DESCRICAO — ROLLBACK. Nada foi apagado.`);
       log(`      Confira as linhas acima antes de rodar de novo.\n`);
-      cli.release(); await pool.end(); process.exit(1);
+      // ⚠ Sai pelo `return`, e nao por `process.exit`: o teardown e do `finally` la embaixo.
+      // `process.exit` mata o processo COM consulta em voo e conexao aberta — foi ele que
+      // deixou a conexao pendurada e produziu o erro nao tratado.
+      process.exitCode = 1;
+      return;
     }
 
     // ── 3. O DELETE, POR LISTA EXPLICITA ────────────────────────────────────
@@ -176,7 +186,8 @@ const log = (s) => console.log(s);
     if (mal.length) {
       await cli.query('ROLLBACK');
       log(`\n   ⛔ CONFERENCIA FALHOU — ROLLBACK. Nada foi apagado.\n`);
-      cli.release(); await pool.end(); process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     if (GRAVAR) {
       await cli.query('COMMIT');
@@ -189,7 +200,17 @@ const log = (s) => console.log(s);
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     console.error(`\n   ⛔ ERRO — ROLLBACK. Nada foi apagado.\n   ${e.message}\n`);
-    cli.release(); await pool.end(); process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    // ⚠️ UM LUGAR SÓ devolve o cliente e fecha o pool, e os TRÊS caminhos passam por aqui —
+    // recusa, erro e sucesso. Antes eram quatro cópias da mesma linha, e as de saída corriam
+    // com `process.exit` logo atrás: o `await pool.end()` nem chegava a terminar, e a conexão
+    // ficava pendurada até cair sozinha — que foi o "Connection terminated unexpectedly".
+    //
+    // ⚠️ E `process.exitCode`, NUNCA `process.exit()`. O primeiro pede para sair quando não
+    // houver mais nada pendente; o segundo mata na hora, com consulta em voo. Num script que
+    // termina em ROLLBACK, matar na hora é justamente o que não se quer.
+    cli.release();
+    try { await pool.end(); } catch (e) { log(`   (aviso: ao fechar o pool — ${e.message})`); }
   }
-  cli.release(); await pool.end();
 })();

@@ -60,10 +60,23 @@ secao('3. O CINZA — declarada, aguardando a proxima extracao');
   conf(s.classificar({ ...VERMELHA, sigef_declaracao: decl }) === s.TAGS.REGISTRO_DECLARADO, 'vermelha declarada vira cinza');
   conf(s.classificar({ ...AZUL, sigef_declaracao: decl }) === s.TAGS.REGISTRO_DECLARADO, 'azul declarada vira cinza');
 
-  // ⚠️ O CINZA NAO COBRE O AMBAR. La o pendente e o parecer NESTE sistema, e nada que o
-  // analista declare sobre o SIGEF resolve — os proprios textos dizem isso.
-  conf(s.classificar({ ...AMBAR, sigef_declaracao: decl }) === s.TAGS.REGISTRO_DECLARADO,
-       'ambar declarada vira cinza — as tres declaram desde 30/08/2026');
+  // ⚠️ NO AMBAR, SO `nao_baixada` APAGA, e e a ULTIMA declaracao que decide (11/09/2026).
+  // `ja_estava` e `registrei_agora` confirmam que o SIGEF baixou — a pendencia (o parecer aqui)
+  // continua. Apagar nesses casos esconderia uma PC aberta que o SIGEF ja baixou.
+  const naoBx = [{ resposta: 'nao_baixada', data_registro: null }];
+  conf(s.classificar({ ...AMBAR, sigef_declaracao: naoBx }) === s.TAGS.REGISTRO_DECLARADO,
+       'ambar com nao_baixada vira cinza — a premissa da pilula era falsa');
+  conf(s.classificar({ ...AMBAR, sigef_declaracao: decl }) === s.TAGS.ABERTA_COM_BAIXA_SIGEF,
+       'ambar com ja_estava CONTINUA ambar — o parecer aqui ainda falta');
+  conf(s.classificar({ ...AMBAR, sigef_declaracao: [{ resposta: 'registrei_agora', data_registro: '2026-09-01' }] })
+       === s.TAGS.ABERTA_COM_BAIXA_SIGEF, 'e com registrei_agora tambem');
+  conf(s.classificar({ ...AMBAR, sigef_declaracao: [...naoBx, ...decl] }) === s.TAGS.ABERTA_COM_BAIXA_SIGEF,
+       'a ULTIMA decide: nao_baixada seguida de ja_estava volta a ser ambar');
+  conf(s.classificar({ ...AMBAR, sigef_declaracao: [...decl, ...naoBx] }) === s.TAGS.REGISTRO_DECLARADO,
+       'e ja_estava seguida de nao_baixada vira cinza');
+  // O SQL tem a mesma regra — a divergencia SQL x JS de 11/09 era exatamente aqui.
+  conf(s.SQL_TAG.includes(`-> -1 ->> 'resposta'`) && s.SQL_TAG.includes(`'${s.RESPOSTA_QUE_APAGA_AMBAR}'`),
+       'o SQL_TAG le a ultima resposta e so apaga a ambar com nao_baixada');
 
   // Array vazio nao e declaracao.
   conf(s.classificar({ ...VERMELHA, sigef_declaracao: [] }) === s.TAGS.SEM_REGISTRO_SIGEF, 'array vazio nao conta');
@@ -161,6 +174,23 @@ secao('3-D. A CONTA "ATE UMA DATA" — as DUAS pernas da regra');
   conf(s.sqlContaAte('$1').includes(b), 'a conta ate-a-data usa a mesma base');
   conf(s.sqlDescontadaAte('$1').includes(b), 'a descontada tambem');
   conf(/COALESCE\(/.test(s.sqlContaAte('$1')), 'e protege a tag NULL com COALESCE');
+}
+
+secao('3-E. PC NA ENGENHARIA NAO CONTA (11/09/2026)');
+{
+  const naEng = { ...OK_PC, eng_situacao: 'na_engenharia', eng_enviada_em: '2026-09-09' };
+  conf(s.contaProdutividade(OK_PC) === true, 'a baixada sem tag conta');
+  conf(s.contaProdutividade(naEng) === false, 'a mesma PC na engenharia NAO conta — mesmo baixada');
+  conf(s.contaProdutividade({ ...naEng, eng_situacao: null }) === true, 'voltou da engenharia, conta de novo');
+  // ⚠️ IS DISTINCT FROM: eng_situacao e NULL em quase todas; `<>` zeraria a produtividade.
+  conf(s.SQL_CONTA_PRODUTIVIDADE.includes(s.SQL_FORA_ENGENHARIA), 'o card desconta a engenharia');
+  conf(/IS DISTINCT FROM 'na_engenharia'/.test(s.SQL_FORA_ENGENHARIA), 'e protege o NULL com IS DISTINCT FROM');
+  // ⚠️ O CUMULATIVO TAMBEM, pela data — senao o relatorio do CGE diverge do card.
+  const ate = s.sqlContaAte('$1');
+  conf(ate.includes(s.sqlForaEngenhariaAte('$1')), 'a conta ate-a-data desconta a engenharia');
+  conf(/eng_enviada_em > \$1/.test(ate), 'pela data do envio — a mesma forma do estorno e da invalidacao');
+  conf(/COALESCE\(p\.eng_situacao IS DISTINCT FROM/.test(ate), 'e o NULL do envio sem data vira "nao conta", como no card');
+  conf(!s.sqlBaseAte('$1').includes('eng_'), 'o total_bruto (base) nao muda');
 }
 
 secao('4. QUEM PODE DECLARAR');

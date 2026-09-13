@@ -253,7 +253,7 @@ function agruparDiligencias(pcs) {
 
 function montarAvisoDiligencia(g) {
   const qtd = (g.pcs || []).length;
-  const onde = `${g.tr} · Parcela ${g.parcial_num}${qtd ? ` — ${qtd} PC${qtd > 1 ? 's' : ''}` : ''}` +
+  const onde = `${g.tr} · Parcial ${g.parcial_num}${qtd ? ` — ${qtd} PC${qtd > 1 ? 's' : ''}` : ''}` +
                `${g.entidade ? ` (${g.entidade})` : ''}`;
   const prazoIso = dataIso(g.prazo_diligencia);
   const prazoBr = prazoIso.split('-').reverse().join('/');

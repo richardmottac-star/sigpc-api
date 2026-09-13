@@ -2037,7 +2037,7 @@ app.post('/parcela/sigef_declaracao', async (req, res) => {
       [b.setorial_id || 'FCEE', b.tr, String(b.parcial_num)]);
     if (!daParcela.length) {
       await cli.query('ROLLBACK');
-      return res.status(404).json({ data: null, error: { message: 'Parcela não encontrada.' } });
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada.' } });
     }
 
     const { alcanca, fora, codigos } = sigef.alvoDaDeclaracao(daParcela, b.tag);
@@ -2047,12 +2047,12 @@ app.post('/parcela/sigef_declaracao', async (req, res) => {
       // analista clicar, a situação pode ter deixado de existir — outra pessoa baixou, ou ele
       // mesmo já declarou noutra aba.
       return res.status(409).json({ data: null, error: {
-        message: 'Nenhuma PC desta parcela está nessa situação agora. Recarregue a tela.' } });
+        message: 'Nenhuma PC desta parcial está nessa situação agora. Recarregue a tela.' } });
     }
     if (!sigef.podeDeclararParcela(quem, alcanca, papel.perfilEfetivo(quem))) {
       await cli.query('ROLLBACK');
       return res.status(403).json({ data: null, error: {
-        message: 'Só o analista responsável por esta parcela pode declarar.' } });
+        message: 'Só o analista responsável por esta parcial pode declarar.' } });
     }
 
     const decl = sigef.montarDeclaracao({
@@ -2735,7 +2735,7 @@ app.post('/ci/decidir', async (req, res) => {
       decisao: b.decisao, texto: b.texto, autor,
     });
     if (jaDecidido)
-      return res.status(409).json({ data: null, error: { message: 'Esta parcela já saiu da fila — recarregue a tela.' } });
+      return res.status(409).json({ data: null, error: { message: 'Esta parcial já saiu da fila — recarregue a tela.' } });
 
     // Uma notificação POR ENCAMINHAMENTO. Ver o comentário de `agruparPorParcela`.
     //
@@ -2755,7 +2755,7 @@ app.post('/ci/decidir', async (req, res) => {
       if (!g.analista_id) continue;
       const aprovou = b.decisao === 'de_acordo';
       const manif = String(b.texto || '').trim();
-      const onde = `Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
+      const onde = `Parcial ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
                    `${g.entidade ? ` (${g.entidade})` : ''}.`;
       const quem = `Decidido por ${autor.nome}.`;
       // ⚠️ A DECISÃO VIAJA POR EXTENSO, e não só a observação (25/08/2026). O texto do rádio
@@ -2828,7 +2828,7 @@ app.post('/ci/responder', async (req, res) => {
         await notif.criarVarios(pool, tecnicos.rows.map(t => t.id), {
           tipo: 'diligencia',
           titulo: 'Analista respondeu ao Controle Interno',
-          mensagem: `${g.tr} · Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
+          mensagem: `${g.tr} · Parcial ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
                     `${g.entidade ? ` (${g.entidade})` : ''}.\n\n${String(b.texto || '').trim()}`,
           link: '#ci', ref_tipo: 'pc',
           ref_id: `${g.pcs[0]}|ci_resposta|${g.rodada || 1}`,
@@ -2890,7 +2890,7 @@ app.post('/ci/reabrir', async (req, res) => {
     // tela e o clique. Responder 200 faria a tela dizer "pronto" sobre coisa nenhuma.
     if (jaReaberto)
       return res.status(409).json({ data: null, error: {
-        message: 'Esta parcela não está encerrada no C.I. — recarregue a tela.' } });
+        message: 'Esta parcial não está encerrada no C.I. — recarregue a tela.' } });
 
     // Uma notificação POR PARCELA, como nas outras duas transições. A parcela 1 da
     // 2020TR000657 tem 7 PCs, e sete avisos idênticos matam o sino.
@@ -2902,9 +2902,9 @@ app.post('/ci/reabrir', async (req, res) => {
       if (!g.analista_id) continue;
       const manif = String(b.texto || '').trim();
       const corpo = [
-        `Parcela ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}`
+        `Parcial ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}`
           + `${g.entidade ? ` (${g.entidade})` : ''}.`,
-        'O processo voltou pelo SGPe depois de o C.I. ter encerrado esta parcela, '
+        'O processo voltou pelo SGPe depois de o C.I. ter encerrado esta parcial, '
           + 'e ela volta para você. A baixa continua valendo.',
         `Reaberta por ${autor.nome}.`,
         `Motivo do C.I.:\n${manif}`,
@@ -6057,7 +6057,7 @@ app.post('/pc/:codigo_pc/invalidar', async (req, res) => {
       analista_id: a.pc.analista_id ?? null,
       executado_por: a.quem.id,
       observacao: `${a.quem.nome} invalidou a PC ${a.pc.codigo_pc}`
-        + ` (parcela ${a.pc.parcial_num ?? '—'}, ${a.pc.baixada ? 'BAIXADA' : 'aberta'}`
+        + ` (parcial ${a.pc.parcial_num ?? '—'}, ${a.pc.baixada ? 'BAIXADA' : 'aberta'}`
         + `${a.pc.codigo_nl ? ', NL ' + a.pc.codigo_nl : ''}): ${a.motivo}`,
       // A foto do que a PC era, para o desfazer ter contra o que conferir.
       estado_anterior: {
@@ -6349,7 +6349,7 @@ app.post('/parcela/ci_lote', async (req, res) => {
       return res.status(409).json({
         data: { recusadas, aceitas: aceitas.map(a => a.num) },
         error: {
-          message: `${recusadas.length} de ${parciais.length} parcelas não podem ser encaminhadas. ` +
+          message: `${recusadas.length} de ${parciais.length} parciais não podem ser encaminhadas. ` +
                    `Nada foi gravado — recarregue a TR e tente de novo.`,
           recusadas
         }
@@ -6383,7 +6383,7 @@ app.post('/parcela/ci_lote', async (req, res) => {
         valor_novo: 'enviado_ci = true',
         analista_id: b.analista_id ?? null,
         observacao: autoria.observacaoCom(
-          `em lote com outras ${nums.length - 1} parcela${nums.length - 1 === 1 ? '' : 's'} desta TR · ${n} PC${n > 1 ? 's' : ''}`,
+          `em lote com outras ${nums.length - 1} ${nums.length - 1 === 1 ? 'parcial' : 'parciais'} desta TR · ${n} PC${n > 1 ? 's' : ''}`,
           b._autoria, b._autoria?.executor_nome),
         executado_por: b._autoria?.executado_por ?? null
       });

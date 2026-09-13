@@ -144,13 +144,13 @@ secao('6. O AVISO ANTES DE ENVIAR');
                pc({ codigo_pc: 'C' }), pc({ codigo_pc: 'D' })];
   const a = dp.avisoPedido(pcs);
   conf(a.total === 4 && a.voltam === 2 && a.ficam_baixadas === 2, 'conta o que volta e o que fica');
-  conf(/2 parciais baixadas permanecem no seu nome/.test(a.texto_baixadas),
+  conf(/2 PCs baixadas permanecem no seu nome/.test(a.texto_baixadas),
        'e diz que as baixadas permanecem no nome dele');
   conf(/produtividade não é afetada/.test(a.texto_baixadas), 'com a garantia da produtividade');
   conf(a.texto_ci === null, 'sem C.I., nao inventa aviso');
 
   const umaSo = dp.avisoPedido([pc({ baixada: true }), pc({})]);
-  conf(/1 parcial baixada permanece/.test(umaSo.texto_baixadas), 'no singular quando e uma so');
+  conf(/1 PC baixada permanece/.test(umaSo.texto_baixadas), 'no singular quando e uma so');
 
   const nenhuma = dp.avisoPedido([pc({}), pc({})]);
   conf(/Nenhuma parcial baixada/.test(nenhuma.texto_baixadas), 'e diz quando nao ha baixada nenhuma');
@@ -163,7 +163,7 @@ secao('6. O AVISO ANTES DE ENVIAR');
   const plural = dp.avisoPedido([pc({ baixada: true, ci_situacao: 'na_fila' }),
                                  pc({ baixada: true, ci_situacao: 'na_fila' }), pc({})]);
   conf(!/parcialis/.test(plural.texto_baixadas + plural.texto_ci), 'e nunca escreve "parcialis"');
-  conf(/2 parciais no Controle Interno BLOQUEIAM/.test(plural.texto_ci), 'o verbo tambem vai ao plural');
+  conf(/2 PCs no Controle Interno BLOQUEIAM/.test(plural.texto_ci), 'o verbo tambem vai ao plural');
 }
 
 secao('7. O C.I. BLOQUEIA O PEDIDO — E E A MESMA TRAVA DA DEVOLUCAO DIRETA');

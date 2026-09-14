@@ -298,14 +298,15 @@ function db(resposta) {
     // ⚠️ A DECISÃO VIAJA POR EXTENSO desde 25/08/2026, e não só a observação. O texto do
     // rádio É o recado: a observação virou opcional nas duas decisões, e sem esta linha a
     // devolução chegaria como um título sem conteúdo.
-    conf(/Parecer para correção, verificar o processo no SGPe\./.test(rota),
-         'a devolucao diz por extenso o que o C.I. decidiu');
-    conf(/Parecer do analista em acordo, baixado\./.test(rota),
-         'e a aprovacao tambem');
-    // ⚠️ E O BLOCO DA OBSERVAÇÃO SÓ APARECE QUANDO HÁ OBSERVAÇÃO. Um rótulo seguido de vazio
+    // ⚠️ DESDE 14/09/2026 e a OPCAO que viaja — rotulo e apoio, das duas decisoes, pela lista
+    // unica de lib/ci.js.
+    conf(/const decisaoTxt = `\$\{ci\.OPCOES\[opcao\]\.rot\}\. \$\{ci\.OPCOES\[opcao\]\.apoio\}`/.test(rota),
+         'a notificacao diz por extenso a opcao do C.I., das duas decisoes');
+    conf(/const aprovou = opcao === 'de_acordo'/.test(rota), 'e o titulo sai da opcao');
+    // ⚠️ E O BLOCO DO COMPLEMENTO SÓ APARECE QUANDO HÁ COMPLEMENTO. Um rótulo seguido de vazio
     // parece que algo se perdeu no caminho.
-    conf(/\.concat\(manif \? \[`Observação do C\.I\.:/.test(rota),
-         'e a observacao so entra quando existe');
+    conf(/\.concat\(manif \? \[`Complemento do C\.I\.:/.test(rota),
+         'e o complemento so entra quando existe');
 
     // ⚠️ O LINK LEVA A PARCELA. `#planilha` puro abria a tela inteira e deixava a pessoa
     // procurar entre 54 TRs qual delas voltou.

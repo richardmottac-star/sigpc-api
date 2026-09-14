@@ -2705,8 +2705,10 @@ app.post('/ci/decidir', async (req, res) => {
     // conferência dela sai junto — quem escolhe as PCs agora é o banco, pela parcela.
     const erro = ci.validar({ ...b, codigos_pc: ['-'] });
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
-    if (!ci.DECISOES.includes(b.decisao))
-      return res.status(400).json({ data: null, error: { message: 'decisao é obrigatória' } });
+    // ⚠️ A OPÇÃO É OBRIGATÓRIA (14/09/2026) — De acordo ou Com pendência. O complemento sozinho
+    // não registra a decisão. `opcaoDe` ainda aceita o `decisao` antigo, da tela sem recarregar.
+    const opcao = ci.opcaoDe(b);
+    if (!opcao) return res.status(400).json({ data: null, error: { message: ci.MSG_SEM_OPCAO } });
 
     // Quem decide é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
     const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
@@ -2739,7 +2741,7 @@ app.post('/ci/decidir', async (req, res) => {
 
     const { pcs, jaDecidido } = await ci.decidir(pool, {
       setorial_id: b.setorial_id || 'FCEE', tr: b.tr, parcial_num: b.parcial_num,
-      decisao: b.decisao, texto: b.texto, autor,
+      decisao: ci.OPCOES[opcao].decisao, opcao, texto: b.texto, autor,
     });
     if (jaDecidido)
       return res.status(409).json({ data: null, error: { message: 'Esta parcial já saiu da fila — recarregue a tela.' } });
@@ -2760,25 +2762,19 @@ app.post('/ci/decidir', async (req, res) => {
     // da vista dele, e o retorno não chega. Encerrar bem é notícia tanto quanto voltar.
     for (const g of ci.agruparPorParcela(pcs)) {
       if (!g.analista_id) continue;
-      const aprovou = b.decisao === 'de_acordo';
+      const aprovou = opcao === 'de_acordo';
       const manif = String(b.texto || '').trim();
       const onde = `Parcial ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}` +
                    `${g.entidade ? ` (${g.entidade})` : ''}.`;
       const quem = `Decidido por ${autor.nome}.`;
-      // ⚠️ A DECISÃO VIAJA POR EXTENSO, e não só a observação (25/08/2026). O texto do rádio
-      // é o recado: *"Parecer para correção, verificar o processo no SGPe"* já diz o que
-      // fazer. Antes o corpo trazia só a manifestação, que era obrigatória; ela virou
-      // opcional na tela nova, e sem esta linha a devolução chegaria como um aviso sem
-      // conteúdo — "C.I. devolveu · 2020TR000657", e nada mais.
+      // ⚠️ A OPÇÃO VIAJA POR EXTENSO — rótulo e apoio (14/09/2026). É o recado: sem ela a
+      // devolução chegaria como um aviso sem conteúdo, "C.I. devolveu · 2020TR000657" e nada mais.
       //
-      // ⚠️ E O BLOCO DA OBSERVAÇÃO SÓ APARECE QUANDO HÁ OBSERVAÇÃO. Um rótulo
-      // "Observação do C.I.:" seguido de vazio é pior que a ausência dele: parece que algo se
-      // perdeu no caminho.
-      const decisaoTxt = aprovou
-        ? 'Parecer do analista em acordo, baixado.'
-        : 'Parecer para correção, verificar o processo no SGPe.';
+      // ⚠️ E O BLOCO DO COMPLEMENTO SÓ APARECE QUANDO HÁ COMPLEMENTO. Um rótulo seguido de vazio
+      // é pior que a ausência dele: parece que algo se perdeu no caminho.
+      const decisaoTxt = `${ci.OPCOES[opcao].rot}. ${ci.OPCOES[opcao].apoio}`;
       const corpo = [onde, decisaoTxt, quem]
-        .concat(manif ? [`Observação do C.I.:\n${manif}`] : []).join('\n\n');
+        .concat(manif ? [`Complemento do C.I.:\n${manif}`] : []).join('\n\n');
 
       await notif.criar(pool, {
         destinatario_id: g.analista_id,
@@ -2848,7 +2844,7 @@ app.post('/ci/responder', async (req, res) => {
   }
 });
 
-// POST /ci/reabrir  body { tr, parcial_num, setorial_id?, texto, autor_id }
+// POST /ci/reabrir  body { tr, parcial_num, setorial_id?, opcao, texto?, autor_id }
 //
 // ⚠️ MESMA UNIDADE DE `/ci/decidir`: a parcela. (26/08/2026) Reabrir é desfazer uma decisão
 // do C.I., e a decisão passou a ser da parcela — reabrir por PC deixaria de volta o problema
@@ -2860,11 +2856,10 @@ app.post('/ci/responder', async (req, res) => {
 // 26/08/2026 não havia caminho nenhum — `decidir` só lê `na_fila`, `responder` só lê
 // `com_analista`, e a PC ficava no chip Encerradas para sempre.
 //
-// ⚠️ O MOTIVO É OBRIGATÓRIO, e vai para a `ci_mensagem`. Não é formalidade: estas PCs têm
-// ZERO mensagens no acervo inteiro, e uma pendência que reaparece na fila de uma analista
-// meses depois do encerramento, sem uma linha dizendo por quê, é um recado que não chegou.
-// É por isso que aqui vale o `exigeTexto`, como na resposta do analista, e não a observação
-// opcional das duas decisões.
+// ⚠️ A OPÇÃO É OBRIGATÓRIA, e o motivo livre saiu (14/09/2026). O técnico escolhe uma das duas
+// opções — as mesmas da decisão — e pode complementar. Sem complemento, o apoio da opção é a
+// mensagem que vai para a `ci_mensagem`: a pendência que reaparece na fila de uma analista meses
+// depois do encerramento nunca chega sem uma linha dizendo o que fazer.
 //
 // ⚠️ SÓ O CONTROLE INTERNO — SUPERADMIN INCLUÍDO NA RECUSA. Vem em par com `podeDecidir`:
 // se ele não pode encerrar, não pode desencerrar. A regra mora em `ciFila.podeReabrir`, que
@@ -2878,8 +2873,10 @@ app.post('/ci/reabrir', async (req, res) => {
     const b = req.body || {};
     if (!b.tr || b.parcial_num === undefined || b.parcial_num === null || b.parcial_num === '')
       return res.status(400).json({ data: null, error: { message: 'tr e parcial_num são obrigatórios.' } });
-    const erro = ci.validar({ ...b, codigos_pc: ['-'], exigeTexto: true });
+    const erro = ci.validar({ ...b, codigos_pc: ['-'] });
     if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+    const opcao = ci.ehOpcao(b.opcao) ? b.opcao : null;
+    if (!opcao) return res.status(400).json({ data: null, error: { message: ci.MSG_SEM_OPCAO } });
 
     // Quem reabre é conferido pelo BANCO, a partir do id — não pelo `perfil` do corpo.
     const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(b.autor_id) || 0]);
@@ -2891,7 +2888,7 @@ app.post('/ci/reabrir', async (req, res) => {
 
     const { pcs, jaReaberto } = await ci.reabrir(pool, {
       setorial_id: b.setorial_id || 'FCEE', tr: b.tr, parcial_num: b.parcial_num,
-      texto: b.texto, autor,
+      texto: b.texto, autor, opcao,
     });
     // ⚠️ 409, e não 200 com zero: a parcela pode ter sido reaberta por outro técnico entre a
     // tela e o clique. Responder 200 faria a tela dizer "pronto" sobre coisa nenhuma.
@@ -2911,11 +2908,11 @@ app.post('/ci/reabrir', async (req, res) => {
       const corpo = [
         `Parcial ${g.parcial_num} — ${g.pcs.length} PC${g.pcs.length > 1 ? 's' : ''}`
           + `${g.entidade ? ` (${g.entidade})` : ''}.`,
-        'O processo voltou pelo SGPe depois de o C.I. ter encerrado esta parcial, '
-          + 'e ela volta para você. A baixa continua valendo.',
+        'O C.I. reabriu esta parcial, que estava encerrada, e ela volta para você. '
+          + 'A baixa continua valendo.',
+        `${ci.OPCOES[opcao].rot}. ${ci.OPCOES[opcao].apoio}`,
         `Reaberta por ${autor.nome}.`,
-        `Motivo do C.I.:\n${manif}`,
-      ].join('\n\n');
+      ].concat(manif ? [`Complemento do C.I.:\n${manif}`] : []).join('\n\n');
 
       await notif.criar(pool, {
         destinatario_id: g.analista_id,

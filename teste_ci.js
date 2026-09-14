@@ -359,8 +359,11 @@ console.log('\n═══ 16. A ROTA POST /ci/reabrir ═══');
   const rota = src.slice(ini, src.indexOf("app.get('/limite_tr_excecao'"));
   const cod = rota.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
 
-  conf(/ci\.validar\(\{ \.\.\.b, codigos_pc: \['-'\], exigeTexto: true \}\)/.test(cod),
-       'o motivo e OBRIGATORIO — vai para a ci_mensagem');
+  // ⚠️ MUDOU EM 14/09/2026: o motivo livre saiu. O tecnico escolhe uma das duas opcoes — as
+  // mesmas da decisao — e o texto virou complemento opcional.
+  conf(!/exigeTexto/.test(cod), 'o texto deixou de ser obrigatorio — virou complemento');
+  conf(/ci\.ehOpcao\(b\.opcao\)/.test(cod) && /ci\.MSG_SEM_OPCAO/.test(cod),
+       'a OPCAO e obrigatoria, e a recusa diz que o complemento sozinho nao registra');
   // ⚠️ O `codigos_pc: ['-']` NAO E' GAMBIARRA — e' o que sobrou de `ci.validar` depois de a
   // lista de PCs sair do corpo. Quem escolhe as PCs agora e' o BANCO, pela parcela; o que a
   // rota ainda precisa validar e' a decisao e o tamanho do texto. Um placeholder explicito

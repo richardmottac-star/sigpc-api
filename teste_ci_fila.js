@@ -322,10 +322,10 @@ console.log('\n═══ 12. OS ROTULOS DO HISTORICO ═══');
   conf(Object.keys(CF.ROTULO_EVENTO).length === 1, 'um rotulo de evento so',
        Object.keys(CF.ROTULO_EVENTO).join(', '));
   conf(CF.ROTULO_EVENTO.ci_decidiu === 'decidiu no Controle Interno', 'e e o ci_decidiu');
-  // O texto das duas decisoes mora num lugar so — ele vai para o radio, para a notificacao e
-  // para a trilha. Escrever a mesma frase em tres lugares garante que um fique para tras.
-  conf(CF.ROTULO_DECISAO.de_acordo === 'Parecer do analista em acordo, baixado', 'o rotulo do de acordo');
-  conf(CF.ROTULO_DECISAO.ressalva === 'Parecer para correção, verificar o processo no SGPe', 'e o da correcao');
+  // O texto das duas decisoes mora num lugar so — lib/ci.js, OPCOES, desde 14/09/2026: as
+  // mesmas duas opcoes na decisao e na reabertura. O rotulo daqui e lido de la.
+  conf(CF.ROTULO_DECISAO.de_acordo === 'De acordo', 'o rotulo do de acordo');
+  conf(CF.ROTULO_DECISAO.ressalva === 'Com pendência', 'e o da devolucao, "Com pendência"');
 }
 
 console.log('\n═══ 13. TRAVAS NO server.js ═══');

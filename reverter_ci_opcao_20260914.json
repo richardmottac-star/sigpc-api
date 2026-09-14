@@ -1,0 +1,35 @@
+{
+  "quando": "2026-09-14T04:02:39.779Z",
+  "modo": "gravacao",
+  "script": "migracao_ci_opcao_20260914.js",
+  "ddl_executado": [
+    "ALTER TABLE ci_mensagem ADD COLUMN IF NOT EXISTS opcao text",
+    "COMMENT ON COLUMN ci_mensagem.opcao IS 'Opcao do C.I. nesta mensagem: de_acordo ou com_pendencia. Nula nas do analista e nas anteriores a 14/09/2026.'",
+    "ALTER TABLE ci_mensagem ADD CONSTRAINT ci_msg_opcao CHECK (opcao IS NULL OR opcao IN ('de_acordo', 'com_pendencia'))"
+  ],
+  "foto_antes": {
+    "total": 230,
+    "md5": "9c9f1d576e8af9e7a2c384f43f9db588"
+  },
+  "foto_depois": {
+    "total": 230,
+    "md5": "9c9f1d576e8af9e7a2c384f43f9db588"
+  },
+  "desfazer_em_sql": [
+    "BEGIN;",
+    "ALTER TABLE ci_mensagem DROP CONSTRAINT IF EXISTS ci_msg_opcao;",
+    "ALTER TABLE ci_mensagem RENAME COLUMN opcao TO opcao_backup_20260914;",
+    "COMMIT;"
+  ],
+  "conferencias_ok": [
+    "total de mensagens inalterado: 230 -> 230",
+    "nenhum dado mudou: md5 das 9 colunas anteriores igual",
+    "coluna opcao: text, nula, padrao —",
+    "opcao vazia em todas as 230 mensagens: 0 preenchidas",
+    "CHECK ci_msg_opcao existe e foi validado contra as 230 linhas",
+    "o CHECK recusa um valor fora de de_acordo/com_pendencia (provado e desfeito)",
+    "e aceita os valores validos (provado e desfeito)",
+    "depois das provas, o md5 continua igual a foto"
+  ],
+  "conferencias_falhas": []
+}

@@ -1487,6 +1487,12 @@ app.get('/prestacoes_contas', async (req, res) => {
     // Link do SGPe junto com os dados — ver o cabeçalho de lib/sgpe-lote.js. Só cache, nunca
     // consulta o SGPe: quem consulta é o job. Chave do mapa = o valor CRU da linha.
     const links = await linksDeLinhas(pool, rows, ['processo_pc', 'processo_mae']);
+    // ⚠️ O ESTADO DO ARQUIVAMENTO SÓ VEM COM `?arquivamento=1` (13/09/2026). É uma consulta a
+    // mais, recortada nas TRs das linhas, e pendura `arquivamento` em cada PC — pronta,
+    // arquivada ou bloqueada, com o motivo. Opt-in de propósito: o relatório do CGE pede as
+    // 16 mil PCs desta rota e não precisa disto. A regra é a do lib/arquivamento.js.
+    if (req.query.arquivamento === '1' || req.query.arquivamento === 'true')
+      await arquivamento.anexarEstado(pool, rows);
     res.json({ data: rows, count: parseInt(countRes.rows[0].count), links, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
@@ -6653,6 +6659,13 @@ app.get('/parcela/acoes', async (req, res) => {
         desfazer_puxar_ci: desfazer,
         // Cadastrar PC é por TR, não por PC — a tela usa isto para acender o item do menu.
         cadastrar_pc: pe === 'superadmin' || String(pc.analista_id ?? '') === String(quem.id),
+        // ⚠️ ARQUIVAR E DESARQUIVAR (13/09/2026) — o servidor diz se dá e por que não dá, com a
+        // MESMA regra do POST /parcela/arquivar (lib/arquivamento.js, bloqueioDeFatos). A tela
+        // só desenha: a faixa "pronta para arquivar", as conferências do modal da final e o
+        // motivo quando o botão fica apagado.
+        ...(await arquivamento.estadoParcela(cli, {
+          quem, setorial_id: pc.setorial_id, tr: pc.tr, parcial_num: pc.parcial_num,
+        }) || { arquivar: null, desarquivar: null }),
       }, error: null,
     });
   } catch (e) {
@@ -6891,6 +6904,26 @@ app.post('/parcela/desfazer_puxar_ci', async (req, res) => {
 // nunca vem do corpo.
 // ⚠️ IDEMPOTENTES: repetir devolve o estado atual (`ja_estava: true`), sem erro e sem regravar,
 // e a transação termina em ROLLBACK porque não há o que confirmar.
+
+// GET /arquivamento?usuario_id=N&analista_id=&grupo= — a lista por parcial e as três contagens
+// (prontas, parciais arquivadas, TRs encerradas). Só leitura. O analista vê as dele; o
+// coordenador, o grupo dele; o superadmin, tudo — pelo perfil EFETIVO, lido do banco. Serve à
+// Produtividade (bloco Arquivamento) e à tela da coordenação. Entram as parciais que o C.I. já
+// devolveu, e as arquivadas. "C.I. devolveu" sem data nas encerradas pela carga de 16/08 vem com
+// `ci_devolveu_carga: true` — a data não é inventada (decisão do Richard).
+app.get('/arquivamento', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, req.query.usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    const r = await arquivamento.listar(cli, {
+      quem, analista_id: req.query.analista_id, grupo: req.query.grupo });
+    if (r.erro) return res.status(r.status).json({ data: null, error: { message: r.erro } });
+    res.json({ data: r.data, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
 
 // POST /parcela/arquivar — body { tr, parcial_num, setorial_id?, usuario_id, baixa_secretario_em?, obs? }
 // `baixa_secretario_em` (AAAA-MM-DD) é obrigatória só na parcial da PC final.

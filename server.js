@@ -64,6 +64,7 @@ const pcNova = require('./lib/pc-nova');
 const solCor = require('./lib/solicitacao-correcao');
 const sigef = require('./lib/sigef');
 const dispensa = require('./lib/dispensa');
+const arquivamento = require('./lib/arquivamento');
 
 const app = express();
 app.use(cors());
@@ -6872,6 +6873,74 @@ app.post('/parcela/desfazer_puxar_ci', async (req, res) => {
         ci_situacao: ciVolta,
       }, count: restauradas.length, error: null,
     });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// ══════════════════════════════════════
+//  ARQUIVAMENTO — fase 2 (13/09/2026)
+// ══════════════════════════════════════
+// A regra inteira mora em lib/arquivamento.js; aqui só a transação, o usuário lido do BANCO e a
+// resposta. As funções da lib não fazem BEGIN nem COMMIT — é o que deixa testá-las contra o
+// banco dentro de BEGIN/ROLLBACK (armadilha 10).
+//
+// ⚠️ ARQUIVAR NÃO CONTA PRODUTIVIDADE e não toca baixada, status, parecer_tipo nem data_baixa.
+// ⚠️ QUEM É: `executado_por` (o carimbo do "ver como") ou `usuario_id`, lido do banco — o perfil
+// nunca vem do corpo.
+// ⚠️ IDEMPOTENTES: repetir devolve o estado atual (`ja_estava: true`), sem erro e sem regravar,
+// e a transação termina em ROLLBACK porque não há o que confirmar.
+
+// POST /parcela/arquivar — body { tr, parcial_num, setorial_id?, usuario_id, baixa_secretario_em?, obs? }
+// `baixa_secretario_em` (AAAA-MM-DD) é obrigatória só na parcial da PC final.
+app.post('/parcela/arquivar', async (req, res) => {
+  const b = req.body || {};
+  const quemId = b.executado_por ?? b.usuario_id ?? b.analista_id;
+  if (await barrouPreparacao(res, quemId)) return;
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, quemId);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+    const r = await arquivamento.arquivar(cli, {
+      quem, setorial_id: b.setorial_id, tr: b.tr, parcial_num: b.parcial_num,
+      data_secretario: b.baixa_secretario_em, obs: b.obs });
+    if (r.erro) { await cli.query('ROLLBACK');
+      return res.status(r.status).json({ data: null, error: { message: r.erro } }); }
+    await cli.query(r.data.ja_estava ? 'ROLLBACK' : 'COMMIT');
+    res.json({ data: r.data, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// POST /parcela/desarquivar — body { tr, parcial_num, setorial_id?, usuario_id, motivo }
+// Só coordenador e superadmin; motivo de ao menos 15 caracteres. Desarquivar a final apaga a
+// data do Secretário e devolve a origem_baixa; desarquivar uma parcial de TR arquivada leva a
+// final junto — a TR não fica arquivada com parcial ativa.
+app.post('/parcela/desarquivar', async (req, res) => {
+  const b = req.body || {};
+  const quemId = b.executado_por ?? b.usuario_id ?? b.analista_id;
+  if (await barrouPreparacao(res, quemId)) return;
+  const erro = faltaChave(b);
+  if (erro) return res.status(400).json({ data: null, error: { message: erro } });
+  const cli = await pool.connect();
+  try {
+    await cli.query('BEGIN');
+    const quem = await lerUsuario(cli, quemId);
+    if (!quem) { await cli.query('ROLLBACK');
+      return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } }); }
+    const r = await arquivamento.desarquivar(cli, {
+      quem, setorial_id: b.setorial_id, tr: b.tr, parcial_num: b.parcial_num, motivo: b.motivo });
+    if (r.erro) { await cli.query('ROLLBACK');
+      return res.status(r.status).json({ data: null, error: { message: r.erro } }); }
+    await cli.query(r.data.ja_estava ? 'ROLLBACK' : 'COMMIT');
+    res.json({ data: r.data, error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });

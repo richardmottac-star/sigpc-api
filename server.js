@@ -81,12 +81,23 @@ app.use(compression());
 
 app.use(express.json({ limit: '5mb' }));
 
+// ⚠️ O `connectionTimeoutMillis` É O QUE IMPEDE A API DE CONGELAR (15/09/2026). Sem ele, quem
+// pede conexão ao pool cheio espera PARA SEMPRE. Foi o que derrubou o sistema: o "Montar o
+// termo" dispara um `/busca_global` por TR, cada um segurava 1 conexão e pedia uma 2ª ao pool
+// (`linksDeLinhas(pool, ...)`) — com 10 TRs, as 10 do pool presas esperando umas pelas outras,
+// e toda rota que toca o banco parada até o restart. Com o limite, o pior caso vira erro em
+// 10s e o `finally` devolve as conexões. A regra continua: DENTRO de uma rota que pegou `cli`,
+// use `cli` — nunca `pool` com `await`.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('railway.internal')
     ? false
-    : { rejectUnauthorized: false }
+    : { rejectUnauthorized: false },
+  max: 20,
+  connectionTimeoutMillis: 10000,
 });
+// Conexão ociosa que o Postgres derruba emite 'error' no pool; sem ouvinte, derruba o processo.
+pool.on('error', (e) => console.error('Pool: conexão ociosa caiu:', e.message));
 
 // ══════════════════════════════════════
 //  HEALTH CHECK
@@ -609,7 +620,7 @@ app.post('/usuarios/mesclar', async (req, res) => {
   try {
     const { id_novo, id_existente, autor_id } = req.body || {};
 
-    const q = await pool.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
+    const q = await cli.query(`SELECT id, nome, perfil, grupo, papel_ativo FROM usuarios WHERE id = $1`, [parseInt(autor_id) || 0]);
     const autor = q.rows[0];
     if (!autor || !['coordenador', 'superadmin'].includes(papel.perfilEfetivo(autor)))
       return res.status(403).json({ data: null, error: { message: 'Só coordenador ou superadmin pode mesclar cadastros.' } });
@@ -4461,7 +4472,7 @@ app.post('/transferencias/:id/desfazer', async (req, res) => {
     const pOrig = transf.partirRotulo(l.valor_anterior);
     // ⚠️ AS DUAS PONTAS NUMA CONSULTA SÓ, e o `data_saida` vem junto: é ele que decide se a
     // origem é avisada. Dois SELECTs para a mesma pergunta seriam duas fontes.
-    const { rows: pontasD } = await pool.query(
+    const { rows: pontasD } = await cli.query(
       `SELECT id, nome, grupo, data_saida FROM usuarios WHERE id = ANY($1::int[])`,
       [[pDest ? pDest.id : 0, pOrig ? pOrig.id : 0]]);
     const uDest = pontasD.filter((x) => pDest && x.id === pDest.id);
@@ -4601,7 +4612,9 @@ app.get('/busca_global', async (req, res) => {
     const devolvidaEm = new Map(dev.map(d => [d.tr, d.criado_em]));
 
     const cards = bg.montarCards(rows, setCasaram, hoje, devolvidaEm);
-    const links = await linksDeLinhas(pool, rows, ['processo_pc', 'processo_mae']);
+    // ⚠️ `cli`, NUNCA `pool`: esta rota já segura uma conexão. Pedir a 2ª ao pool travou a API
+    // inteira em 15/09/2026 (ver o comentário do `new Pool`).
+    const links = await linksDeLinhas(cli, rows, ['processo_pc', 'processo_mae']);
 
     res.json({ data: { termo, total_trs: trsTodas.length, mostrando: cards.length,
                        teto: bg.MAX_TRS, cards }, links, error: null });
@@ -5314,7 +5327,7 @@ app.post('/solicitacao_devolucao', async (req, res) => {
 
     // Avisa a coordenação DEPOIS do COMMIT. Cai para o superadmin se o grupo não tem
     // coordenador — `coordenadoresDoGrupo` já faz isso.
-    const destinos = await notif.coordenadoresDoGrupo(pool, quem.grupo);
+    const destinos = await notif.coordenadoresDoGrupo(cli, quem.grupo);
     notif.criarVarios(pool, destinos, {
       tipo: 'aprovacao',
       titulo: `Pedido de devolução — TR ${b.tr}`,

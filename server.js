@@ -7,7 +7,7 @@ const {
   ProcessoNaoEncontrado, SessaoExpirada, ORGAOS, SIGLAS_AMBIGUAS,
 } = require('./lib/sgpe-link');
 const { resolverNoSgpe, temSessaoSgpe } = require('./lib/sgpe-dwr');
-const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa } = require('./lib/sgpe-lote');
+const { linksDeLinhas, montarLinks, gravarResolvido, gravarNegativa, chavesDeValores } = require('./lib/sgpe-lote');
 const sgpePortal = require('./lib/sgpe-portal');
 const vinculo = require('./lib/sgpe-vinculo');
 
@@ -65,6 +65,8 @@ const solCor = require('./lib/solicitacao-correcao');
 const sigef = require('./lib/sigef');
 const dispensa = require('./lib/dispensa');
 const arquivamento = require('./lib/arquivamento');
+const gestao = require('./lib/gestao');
+const sgpeSit = require('./lib/sgpe-situacao');
 
 const app = express();
 app.use(cors());
@@ -5037,6 +5039,92 @@ app.get('/sgpe/consulta', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /sgpe/situacao?processo=SCC 00004118/2023
+// POST /sgpe/situacao/atualizar   body { processo, usuario_id }
+//
+// A POSIÇÃO GRAVADA de um processo — a que o rodízio (`job_sgpe_situacao.js`) mantém em
+// `sgpe_situacao` — e a fila de tramitação de `sgpe_tramitacao`. Serve à ficha da TR na Gestão.
+//
+// ⚠️ A CHAVE É A DO RODÍZIO: `chavesDeValores` → (sigla, numero, ano), a mesma que o job usa
+// para gravar. Procurar por outra normalização acharia outra linha, ou nenhuma.
+//
+// ⚠️ O "ATUALIZAR AGORA" GRAVA PELO MESMO SQL DO JOB (`lib/sgpe-situacao.js`), e só isso — é o
+// rodízio antecipado para UM processo, não um segundo caminho de escrita. Ele NÃO grava falha
+// de rede: a leitura anterior fica, e a tela diz que o portal não respondeu.
+//
+// ⚠️ DOIS MINUTOS DE CORTESIA: consultado com sucesso há menos que isso, devolve a leitura
+// gravada sem ir ao portal. O portal é público e sem contrato (ver a pausa do job) — um clique
+// repetido não pode virar rajada.
+const SGPE_ATUALIZAR_JANELA_MS = 2 * 60 * 1000;
+
+async function sgpeSituacaoDe(db, bruto) {
+  const p = chavesDeValores([bruto]).get(bruto) || null;
+  if (!p) return { processo: bruto, valido: false, situacao: null, tramitacoes: [], link: null };
+  const { rows: [s] } = await db.query(
+    `SELECT resultado, situacao_portal, estado_portal, posicao, setor_sigla, setor_nome, dias_no_setor,
+            desde::text AS desde, tramitacoes, assunto, erro_motivo, checado_em
+       FROM sgpe_situacao WHERE sigla = $1 AND numero_oficial = $2 AND ano = $3`, [p.sigla, p.numero, p.ano]);
+  const { rows: tram } = await db.query(
+    `SELECT ordem, setor_sigla, setor_nome, dt_recebto::text AS dt_recebto,
+            dt_encaminha::text AS dt_encaminha, permanencia_dias, quem_encaminhou
+       FROM sgpe_tramitacao WHERE sigla = $1 AND numero_oficial = $2 AND ano = $3
+      ORDER BY ordem DESC LIMIT 50`, [p.sigla, p.numero, p.ano]);
+  let link = null;
+  try { link = (await montarLinks(db, [bruto])).links[bruto] || null; } catch (_) { link = null; }
+  return { processo: formatarProcesso(p), valido: true, situacao: s || null, tramitacoes: tram, link };
+}
+
+app.get('/sgpe/situacao', async (req, res) => {
+  try {
+    const bruto = String(req.query.processo == null ? '' : req.query.processo).trim();
+    if (!bruto) return res.status(400).json({ data: null, error: { message: 'Informe o processo.' } });
+    res.json({ data: await sgpeSituacaoDe(pool, bruto), error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+app.post('/sgpe/situacao/atualizar', async (req, res) => {
+  const b = req.body || {};
+  const bruto = String(b.processo == null ? '' : b.processo).trim();
+  if (!bruto) return res.status(400).json({ data: null, error: { message: 'Informe o processo.' } });
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, b.executado_por ?? b.usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    const p = chavesDeValores([bruto]).get(bruto);
+    if (!p) return res.status(400).json({ data: null, error: {
+      message: 'Este número não é um processo do SGPe que o sistema reconheça.' } });
+
+    const { rows: [ant] } = await cli.query(
+      'SELECT resultado, checado_em FROM sgpe_situacao WHERE sigla = $1 AND numero_oficial = $2 AND ano = $3',
+      [p.sigla, p.numero, p.ano]);
+    if (ant && ant.resultado === sgpeSit.RESULTADOS.OK
+        && Date.now() - new Date(ant.checado_em).getTime() < SGPE_ATUALIZAR_JANELA_MS) {
+      return res.json({ data: { ...(await sgpeSituacaoDe(cli, bruto)), atualizado: false,
+        aviso: 'Consultado há menos de 2 minutos — esta é a leitura de agora há pouco.' }, error: null });
+    }
+
+    const r = await sgpePortal.consultar(p.sigla, p.numero, p.ano);
+    if (r.erro === sgpePortal.ERROS.ENTRADA_INVALIDA)
+      return res.status(400).json({ data: null, error: { message: 'Informe sigla, número e ano.' } });
+    if (r.erro === sgpePortal.ERROS.REDE)
+      return res.status(502).json({ data: null, error: {
+        message: 'O portal do SGPe não respondeu. A última posição gravada continua valendo — tente de novo em instantes.' } });
+
+    const linha = sgpeSit.linhaDaSituacao(p, r);
+    await cli.query('BEGIN');
+    await cli.query(sgpeSit.SQL_GRAVAR_SITUACAO, sgpeSit.paramsSituacao(linha));
+    if (r.ok) for (const t of (r.tramitacoes || [])) await cli.query(sgpeSit.SQL_GRAVAR_TRAMITE, sgpeSit.paramsTramite(p, t));
+    await cli.query('COMMIT');
+    res.json({ data: { ...(await sgpeSituacaoDe(cli, bruto)), atualizado: true }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
 // POST /sgpe/link_manual  body { processo, url, usuario_id, codigo_pc? }
 // Só quando o automático não resolveu — é a segunda etapa, nunca a primeira.
 app.post('/sgpe/link_manual', async (req, res) => {
@@ -6932,6 +7020,31 @@ app.get('/arquivamento', async (req, res) => {
     res.json({ data: r.data, error: null });
   } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
+// GET /gestao?usuario_id=N&analista_id= — a tela Gestão do analista (17/09/2026). Só leitura.
+// A regra mora em `lib/gestao.js`: a etapa de cada PC e da TR, o prazo (pelo CORTE_PRAZO) e as
+// contagens do funil, por ano — a tela não soma nada. O estado do arquivamento vem da MESMA
+// `arquivamento.anexarEstado` da Minha Planilha, e a posição no SGPe da `sgpe_situacao` que o
+// rodízio grava. O analista vê a dele; coordenador e superadmin escolhem pelo `analista_id`,
+// pelo perfil EFETIVO lido do banco.
+app.get('/gestao', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const quem = await lerUsuario(cli, req.query.usuario_id);
+    const e = await gestao.escopo(cli, quem, req.query.analista_id);
+    if (e.erro) return res.status(e.status).json({ data: null, error: { message: e.erro } });
+    const data = await gestao.ler(cli, { analista_id: e.analista_id, anexarEstado: arquivamento.anexarEstado });
+    const valores = [];
+    for (const t of data.trs) {
+      valores.push({ processo_mae: t.processo_mae });
+      for (const p of t.pcs) valores.push({ processo_pc: p.processo_pc });
+    }
+    const links = await linksDeLinhas(cli, valores, ['processo_pc', 'processo_mae']);
+    res.json({ data: { ...data, analista_id: e.analista_id }, links, error: null });
+  } catch (err) {
+    res.status(500).json({ data: null, error: { message: err.message } });
   } finally { cli.release(); }
 });
 

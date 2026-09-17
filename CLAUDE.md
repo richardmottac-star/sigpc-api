@@ -7,6 +7,31 @@ Sistema de Gestão de Prestações de Contas do Grupo de Trabalho da FCEE
 **Última sessão:** 28/08/2026 — ver `SESSAO.md`. **TRÊS escritas em 27/08 (as quatro colunas
 do SIGEF) e UMA em 28/08 (a dispensa).**
 
+> ## ▶ 17/09/2026 — A TELA GESTÃO DO ANALISTA. Nenhuma escrita no banco nesta sessão.
+>
+> **Três rotas novas** (sem publicar até o Richard mandar):
+>
+> | rota | o que faz |
+> |---|---|
+> | `GET /gestao?usuario_id=&analista_id=` | a tela Gestão: TRs e PCs do analista, etapa, prazo e contagens por ano — **só leitura** |
+> | `GET /sgpe/situacao?processo=` | a posição e a tramitação que o rodízio gravou em `sgpe_situacao`/`sgpe_tramitacao` |
+> | `POST /sgpe/situacao/atualizar` | o "Atualizar agora": consulta o portal para UM processo e grava pelo **mesmo SQL do job** |
+>
+> A regra mora em **`lib/gestao.js`** (suíte `teste_gestao.js`, 80 checagens). As cinco etapas da
+> PC: `analise` · `baixada` · `no_ci` · `devolvida` · `arquivada`; a da TR é a da PC mais atrasada,
+> e `encerrada` quando todas estão arquivadas.
+>
+> ⚠️ **"Foi ao C.I." é a mesma pergunta do arquivamento** (`enviado_ci` E `ci_situacao` preenchida).
+> ⚠️ **O prazo usa o `CORTE_PRAZO`:** data anterior sai `importado` e nunca `vencido`.
+> ⚠️ **O estado do arquivamento é o de `arquivamento.anexarEstado`** — o mesmo da Minha Planilha.
+> ⚠️ **O "Atualizar agora" não grava falha de rede** (responde 502 antes do `BEGIN`) e tem **2 minutos
+> de cortesia** com o portal: consultado com sucesso há menos que isso, devolve o que está gravado.
+> ⚠️ **O rodízio (`job_sgpe_situacao.js`) precisa estar AGENDADO** no Railway para a coluna "Onde
+> está no SGPe" andar sozinha — até 17/09 só havia rodadas manuais (30–31/08).
+>
+> Falhas que JÁ EXISTIAM, conferidas contra o código anterior: `teste_sgpe_portal.js` **2** (o
+> `index.html` mudou depois de 03/09) e `teste_sgpe_situacao.js` **1** (espera lote 300; o job usa 600).
+
 > ## ▶ 28/08/2026 — A DISPENSA, E A PRODUTIVIDADE CONCILIADA COM O SIGEF
 >
 > ### A produtividade mudou de número

@@ -286,15 +286,20 @@ conf(/portaria/.test(rotaDev), 'trazendo a portaria de quem saiu, para o balao')
 
 
 S('17. A PORTARIA DO DESTINO, QUE DEFINE A VIGENCIA');
-// ⚠️ SEM ELA O TERMO NAO SAI, e por isso a transferencia tambem nao — decisao do Richard em
-// 01/09. A vigencia e o que o termo afirma ("a partir de tal data o analista assume"), e um
-// termo sem vigencia nao diz de quando vale.
+// ⚠️ A PORTARIA DEIXOU DE BARRAR A TRANSFERENCIA — decisao do Richard em 22/09/2026, que reve
+// a dele de 01/09. Ela travava o MOVIMENTO DO ACERVO, que e trabalho, por causa de um
+// DOCUMENTO que pode ser emitido depois. A exigencia mudou de lugar, nao sumiu: quem cobra e o
+// `trfTermo` da tela, que recusa dizendo qual campo do cadastro falta.
 const rotaT = rota.slice(rota.indexOf("app.post('/transferencia',"), rota.indexOf("app.get('/transferencias'"));
 conf(/FROM substituicao/.test(rotaT), 'a rota consulta a substituicao primeiro');
 conf(/WHERE substituto_id = \$1/.test(rotaT), 'casando pelo analista de DESTINO');
-conf(/falta: 'portaria_destino'/.test(rotaT), 'e recusa com 400 quando nao ha portaria');
-conf(/status\(400\)[\s\S]{0,300}?Informe o número e a data/.test(rotaT),
-     'dizendo que o numero e a data tem de ser informados');
+conf(!/falta: 'portaria_destino'/.test(rotaT),
+     'e a falta da portaria NAO recusa mais a transferencia');
+conf(!/status\(400\)[\s\S]{0,300}?Informe o número e a data/.test(rotaT),
+     'nem devolve 400 pedindo numero e data');
+// ⚠️ MAS ELA CONTINUA SENDO LIDA E GRAVADA quando existe: e o que permite o termo sair
+// identico anos depois, pela foto do repasse, mesmo que a `substituicao` mude.
+conf(/portaria, portariaEm,/.test(rotaT), 'a portaria continua viajando para o historico');
 // ⚠️ ARMADILHA 25: o `pg` devolve coluna `date` como objeto Date, e String(Date).slice(0,10)
 // da "Fri Aug 21", nao "2026-08-21". Cai nela ao escrever esta rota, e a conversao passou a
 // ser do POSTGRES.
@@ -801,11 +806,11 @@ S('26. A ORIGEM ESTOQUE — encaminhar PC sem dono (22/09/2026)');
        'e o deId do estoque e NULO — 0 viraria "analista inexistente"');
   conf(/doEstoque[\s\S]{0,80}SQL_MOVER_ESTOQUE/.test(rotaT),
        'o UPDATE do estoque so roda quando a origem e o estoque');
-  // ⚠️ SEM ANALISTA DE ORIGEM NAO HA TERMO DE REPASSE A DOCUMENTAR, entao a portaria deixa de
-  // ser exigida — senao 35 analistas em atividade, que nao substituiram ninguem, ficariam de
-  // fora do caminho novo.
-  conf(/if \(!doEstoque && \(!portaria \|\| !portariaEm\)\)/.test(rotaT),
-       'a portaria do destino so e exigida no repasse entre analistas');
+  // ⚠️ A PORTARIA NAO E EXIGIDA EM CAMINHO NENHUM (22/09/2026). Comecou saindo so do estoque,
+  // no inicio do dia, e algumas horas depois o Richard tirou tambem do repasse entre
+  // analistas: "so atrapalha, esta ficando muito burocratico". Quem cobra e o termo.
+  conf(!/!portaria \|\| !portariaEm/.test(rotaT),
+       'a portaria nao barra nem o repasse nem o encaminhamento do estoque');
   // ⚠️ O DESTINO PODE SER O SUPERADMIN: ele analisa acervo como qualquer analista e entra na
   // produtividade pela mesma regra. O que continua barrado e coordenador e Controle Interno.
   conf(/uPara\.perfil !== 'analista' && uPara\.perfil !== 'superadmin'/.test(rotaT),

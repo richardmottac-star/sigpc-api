@@ -3733,16 +3733,19 @@ app.post('/transferencia', async (req, res) => {
     // substituiu alguém tem linha na `substituicao` — 35 dos analistas em atividade não têm.
     // Quando a portaria existir, ela continua viajando no histórico e o termo sai igual.
 
-    // ⚠️ SEM ELA O TERMO NÃO SAI, E POR ISSO A TRANSFERÊNCIA TAMBÉM NÃO — decisão do Richard,
-    // 01/09/2026. A vigência é o que o termo afirma ("a partir de tal data o analista
-    // assume"), e um termo sem vigência não diz de quando vale. Recusar aqui é melhor que
-    // gravar o repasse e descobrir depois que ele não pode ser documentado.
-    if (!doEstoque && (!portaria || !portariaEm)) {
-      return res.status(400).json({ data: null, error: {
-        message: `Não há portaria de designação registrada para ${uPara.nome}. `
-          + 'Informe o número e a data de publicação da portaria.',
-        falta: 'portaria_destino' } });
-    }
+    // ⚠️ A FALTA DA PORTARIA NÃO BARRA MAIS A TRANSFERÊNCIA — decisão do Richard, 22/09/2026,
+    // que revê a regra dele de 01/09.
+    //
+    // Até aqui o repasse era recusado sem a portaria do destino, porque o TERMO precisa dela
+    // para afirmar a vigência. Na prática isso virou burocracia no lugar errado: travava o
+    // movimento do acervo — que é trabalho — por causa de um documento que pode ser emitido
+    // depois, quando o cadastro estiver completo.
+    //
+    // ⚠️ E O TERMO CONTINUA EXIGINDO, no `trfTermo` da tela: lá a recusa faz sentido e diz qual
+    // campo falta, porque um termo sem vigência não diz de quando vale. São duas perguntas
+    // diferentes — mover o acervo e documentar o movimento — e agora cada uma é respondida no
+    // seu lugar. Quando a portaria existe, ela continua viajando no histórico de cada PC, e o
+    // termo sai idêntico ao de antes.
 
     await cli.query('BEGIN');
 

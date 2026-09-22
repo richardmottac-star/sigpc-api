@@ -4850,19 +4850,46 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     const pc = alvo[0];
     const antes = pc[b.campo];
     const novo = procEdit.montar(b);
-    if (antes === novo) {
+
+    // ── quais PCs mudam ──────────────────────────────────────────────────────
+    //
+    // ⚠️ DUAS REGRAS DE ESCOPO, E ELAS SÃO DIFERENTES PORQUE OS DOIS CAMPOS SÃO DIFERENTES —
+    // corrigido em 22/09/2026, a partir de um caso real da Sandra (G1).
+    //
+    // O QUE ACONTECIA: o escopo era `${campo} IS NOT DISTINCT FROM antes`, comparando TEXTO
+    // CRU. Na 2021TR001666 a parcial tinha `FCEE4360/2021` (grudado) e a final
+    // `SDR25 00000831/2013`. Ela corrigiu pelo lápis, o servidor gravou — **1 PC** — e a TR
+    // continuou mostrando o processo velho, porque quem aparece no cartão é a outra linha.
+    // Da cadeira dela: "faz a ação e ao salvar não altera". E o acervo tem 5.430 valores na
+    // forma grudada, então o caso não é raro.
+    //
+    // ⚠️ `processo_mae` VALE PARA A TR INTEIRA. O modelo do sistema é `TR ──── processo mãe
+    // (1:1)`: uma TR tem UM processo mãe. Se duas linhas da mesma TR discordam, uma delas
+    // está errada por definição — e corrigir a mãe é dizer qual é a certa.
+    //
+    // ⚠️ `processo_pc` CONTINUA POR FAMÍLIA, mas comparada pela CHAVE e não pelo texto: é a
+    // mesma `vinculo.chave` que a faixa de vinculação usa dos dois lados, e é ela que faz
+    // `FCEE4360/2021` e `FCEE 4360/2021` serem o mesmo processo. Sem isso, a grafia divide a
+    // família e a correção deixa irmãs para trás — que é exatamente o defeito de cima.
+    const { rows: daTr } = await cli.query(
+      `SELECT codigo_pc, ${b.campo} AS valor FROM prestacoes_contas
+        WHERE setorial_id='FCEE' AND tr = $1
+        FOR UPDATE`, [pc.tr]);
+    const chaveAntes = vinculo.chave(antes);
+    const escopo = b.campo === 'processo_mae'
+      ? daTr
+      : daTr.filter(r => vinculo.chave(r.valor) === chaveAntes);
+
+    // ⚠️ SÓ ENTRA NO UPDATE O QUE AINDA NÃO ESTÁ CERTO, e é o que permite a correção ser
+    // repetida para terminar o serviço: na 2021TR001666 a parcial já estava boa e a final
+    // não. Com o `antes === novo` de antes desta correção, o servidor respondia "não mudou" e
+    // ia embora — deixando a final errada para sempre, porque clicar de novo dava o mesmo
+    // "não mudou".
+    const codigos = escopo.filter(r => r.valor !== novo).map(r => r.codigo_pc);
+    if (!codigos.length) {
       await cli.query('ROLLBACK');
       return res.json({ data: { texto: novo, mudou: false, ...(await resolverProcesso(novo)) }, error: null });
     }
-
-    // ── quais PCs mudam ──────────────────────────────────────────────────────
-    // A correção vale para TODAS as PCs que hoje têm o mesmo texto errado na mesma TR: o erro
-    // é do processo, não da PC, e corrigir uma a uma deixaria as irmãs erradas.
-    const { rows: irmas } = await cli.query(
-      `SELECT codigo_pc FROM prestacoes_contas
-        WHERE setorial_id='FCEE' AND tr = $1 AND ${b.campo} IS NOT DISTINCT FROM $2
-        FOR UPDATE`, [pc.tr, antes]);
-    const codigos = irmas.map(r => r.codigo_pc);
 
     // ── o processo passa a conviver com outra parcial? INFORMA, não bloqueia ──
     // Só faz sentido para processo_pc: o processo_mae não agrupa parcial nenhuma.
@@ -4918,7 +4945,10 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     // Resolver o link vem DEPOIS do COMMIT: a correção do dado não pode depender do SGPe
     // estar no ar. Se o link não vier agora, a tela oferece colar — e o texto já está salvo.
     const resolucao = await resolverProcesso(novo);
-    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, convive, ...resolucao }, error: null });
+    // ⚠️ A TR VAI NA RESPOSTA (22/09/2026) para a tela poder dizer "em 2 PCs da TR X". Sem o
+    // número, o aviso de sucesso não diferencia "corrigi a TR inteira" de "corrigi uma linha" —
+    // e era justamente essa dúvida que fazia a correção parecer que não tinha salvado.
+    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, tr: pc.tr, convive, ...resolucao }, error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });

@@ -141,5 +141,47 @@ conf(gravacoes.length === 3, 'as tres gravacoes tem clausula de protecao');
 conf(gravacoes.every(g => /'MANUAL'/.test(g)), 'e as TRES protegem MANUAL');
 conf(/gravarNegativa[\s\S]{0,700}?'MANUAL'/.test(lote), 'inclusive a negativa, que e a que apagaria o link');
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  O ESCOPO DA CORRECAO — o defeito da Sandra, 22/09/2026
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ O CASO REAL, e ele esta nos dados: na 2021TR001666 a parcial tinha `FCEE4360/2021`
+// (grudado) e a final `SDR25 00000831/2013`. A analista corrigiu a mae pelo lapis, o servidor
+// gravou UMA PC — o historico registra "1 PC" — e a TR continuou mostrando o processo velho,
+// porque quem aparece no cartao e a outra linha. Da cadeira dela: "faz a acao e ao salvar nao
+// altera". O acervo tem 5.430 valores na forma grudada, entao o caso nao e raro.
+console.log('\n═══ O ESCOPO DA CORRECAO (22/09/2026) ═══');
+{
+  // ⚠️ A MAE VALE PARA A TR INTEIRA. O modelo e `TR ──── processo mae (1:1)`: se duas linhas
+  // da mesma TR discordam, uma esta errada por definicao.
+  conf(/b\.campo === 'processo_mae'\s*\n?\s*\? daTr/.test(rota.replace(/\r\n/g, '\n')),
+       'a correcao do processo MAE alcanca todas as PCs da TR');
+
+  // ⚠️ E O PROCESSO DA PC CONTINUA POR FAMILIA, mas comparado pela CHAVE — a mesma
+  // `vinculo.chave` que a faixa de vinculacao aplica dos dois lados. E ela que faz
+  // `FCEE4360/2021` e `FCEE 4360/2021` serem o mesmo processo.
+  conf(/daTr\.filter\(r => vinculo\.chave\(r\.valor\) === chaveAntes\)/.test(rota),
+       'e a do processo da PC compara pela chave, nao pelo texto cru');
+  conf(!/IS NOT DISTINCT FROM \$2/.test(rota),
+       'a comparacao por texto cru saiu da rota');
+
+  // ⚠️ SO ENTRA NO UPDATE O QUE AINDA NAO ESTA CERTO — e e isso que deixa a correcao ser
+  // REPETIDA para terminar o servico. Com o `antes === novo` de antes, clicar de novo na PC
+  // ja corrigida respondia "nao mudou" e ia embora, deixando a irma errada para sempre.
+  conf(/const codigos = escopo\.filter\(r => r\.valor !== novo\)/.test(rota),
+       'o UPDATE toca so o que ainda esta diferente');
+  conf(!/if \(antes === novo\)/.test(rota),
+       'e a saida antecipada por "o alvo ja esta certo" saiu — ela escondia a irma errada');
+  conf(/if \(!codigos\.length\)[\s\S]{0,200}?mudou: false/.test(rota),
+       'quando NADA falta corrigir, ai sim responde que nao mudou');
+
+  // As duas leituras continuam travadas (regra 12): a PC alvo e as linhas da TR que o UPDATE
+  // vai reescrever.
+  conf((rotaCodigo.match(/FOR UPDATE/g) || []).length === 2,
+       'as duas leituras seguem com FOR UPDATE');
+  conf(/codigo_pc = ANY\(\$1\)/.test(rota), 'e o UPDATE continua por lista explicita de chaves');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

@@ -3674,7 +3674,11 @@ app.post('/transferencia', async (req, res) => {
         message: 'A transferência é exclusiva do superadmin.' } });
     }
 
-    const deId = parseInt(b.de_id);
+    // ⚠️ `deId` NULO É A ORIGEM ESTOQUE (22/09/2026) — PC sem dono indo direto para um
+    // analista. É `null` e não 0 de propósito: 0 passaria por `parseInt` de um id inválido e
+    // viraria "analista inexistente" lá embaixo, escondendo o caminho novo atrás de um erro.
+    const doEstoque = transf.ehEstoque(b.de_id);
+    const deId = doEstoque ? null : parseInt(b.de_id);
     const paraId = parseInt(b.para_id);
     const setorial_id = b.setorial_id || 'FCEE';
     const trs = transf.trsLimpas(b.trs);
@@ -3682,17 +3686,22 @@ app.post('/transferencia', async (req, res) => {
     // ── As duas pontas existem? ─────────────────────────────────────────────
     const { rows: pontas } = await cli.query(
       `SELECT id, nome, perfil, grupo, ativo, data_saida FROM usuarios WHERE id = ANY($1::int[])`,
-      [[deId, paraId]]);
-    const uDe = pontas.find((x) => x.id === deId);
+      [[deId, paraId].filter((x) => x != null)]);
+    const uDe = doEstoque ? null : pontas.find((x) => x.id === deId);
     const uPara = pontas.find((x) => x.id === paraId);
-    if (!uDe) return res.status(400).json({ data: null, error: { message: 'O analista de origem não existe.' } });
+    if (!doEstoque && !uDe) return res.status(400).json({ data: null, error: { message: 'O analista de origem não existe.' } });
     if (!uPara) return res.status(400).json({ data: null, error: { message: 'O analista de destino não existe.' } });
 
     // ⚠️ O DESTINO TEM DE SER ANALISTA ATIVO, e "ativo" aqui são DUAS colunas: `ativo = true`
     // E `data_saida IS NULL`. Os sete dispensados continuam com `ativo = true` por decisão do
     // Richard — quem saiu precisa terminar o que ficou em curso —, então deduzir a dispensa do
     // `ativo` deixaria passar justamente as sete pessoas para quem não se pode mandar PC.
-    if (uPara.perfil !== 'analista') {
+    // ⚠️ O SUPERADMIN TAMBÉM PODE RECEBER (22/09/2026, pedido do Richard). Ele analisa acervo
+    // como qualquer analista — tem PCs próprias e entra na produtividade pela mesma regra que
+    // a tela usa (`contaProdutividade`: fora coordenador e Controle Interno). Barrá-lo aqui
+    // obrigava o caminho torto que ele vinha fazendo: assumir a TR pelo Estoque para só então
+    // repassar — e a marca de que ELE assumiu ficava na trilha.
+    if (uPara.perfil !== 'analista' && uPara.perfil !== 'superadmin') {
       return res.status(400).json({ data: null, error: {
         message: `${uPara.nome} não é analista — o destino tem de ser um analista ativo.` } });
     }
@@ -3717,11 +3726,18 @@ app.post('/transferencia', async (req, res) => {
     const portaria = subs.length ? subs[0].portaria : String(b.portaria || '').trim();
     const portariaEm = subs.length ? subs[0].data_publicacao : String(b.portaria_em || '').trim();
 
+    // ⚠️ DO ESTOQUE NÃO SE EXIGE PORTARIA — decisão do Richard, 22/09/2026. A exigência existe
+    // porque o TERMO DE REPASSE afirma uma vigência ("a partir de tal data o analista assume o
+    // acervo de fulano"), e sem analista de origem não há repasse a documentar: é acervo sem
+    // dono saindo da fila. Exigir aqui travaria quase todo encaminhamento, porque só quem
+    // substituiu alguém tem linha na `substituicao` — 35 dos analistas em atividade não têm.
+    // Quando a portaria existir, ela continua viajando no histórico e o termo sai igual.
+
     // ⚠️ SEM ELA O TERMO NÃO SAI, E POR ISSO A TRANSFERÊNCIA TAMBÉM NÃO — decisão do Richard,
     // 01/09/2026. A vigência é o que o termo afirma ("a partir de tal data o analista
     // assume"), e um termo sem vigência não diz de quando vale. Recusar aqui é melhor que
     // gravar o repasse e descobrir depois que ele não pode ser documentado.
-    if (!portaria || !portariaEm) {
+    if (!doEstoque && (!portaria || !portariaEm)) {
       return res.status(400).json({ data: null, error: {
         message: `Não há portaria de designação registrada para ${uPara.nome}. `
           + 'Informe o número e a data de publicação da portaria.',
@@ -3741,19 +3757,28 @@ app.post('/transferencia', async (req, res) => {
     if (alheias.length) {
       await cli.query('ROLLBACK');
       return res.status(409).json({ data: null, error: {
-        message: `${alheias.length} ${alheias.length === 1 ? 'TR não é' : 'TRs não são'} de `
-          + `${uDe.nome}, ou não ${alheias.length === 1 ? 'tem' : 'têm'} PC aberta: `
-          + alheias.join(', '),
+        message: doEstoque
+          ? `${alheias.length} ${alheias.length === 1 ? 'TR não tem' : 'TRs não têm'} PC livre `
+            + `no estoque: ${alheias.join(', ')}`
+          : `${alheias.length} ${alheias.length === 1 ? 'TR não é' : 'TRs não são'} de `
+            + `${uDe.nome}, ou não ${alheias.length === 1 ? 'tem' : 'têm'} PC aberta: `
+            + alheias.join(', '),
         trs_recusadas: alheias } });
     }
 
     const previstas = transf.pcsQueMovem(foto, deId);
     const ficam = transf.pcsQueFicam(foto, deId);
 
-    // ── 3. O UPDATE — só as abertas do `de_id` ──────────────────────────────
+    // ── 3. O UPDATE — só as abertas do `de_id`, ou as livres quando vem do estoque ──
+    //
+    // ⚠️ SÃO DOIS UPDATEs E NÃO UM COM `CASE`: o do estoque também mexe em `status` e em
+    // `dt_inicio_analise`, que no repasse entre analistas NÃO podem ser tocados — a análise já
+    // corria e o relógio do prazo não reinicia. Um SQL só, com condicionais dentro, esconderia
+    // essa diferença justamente onde ela importa.
     const nomeNovo = assumir.nomeCurto(uPara.nome);
-    const { rows: movidas } = await cli.query(transf.SQL_MOVER,
-      [setorial_id, trs, deId, paraId, nomeNovo]);
+    const { rows: movidas } = doEstoque
+      ? await cli.query(transf.SQL_MOVER_ESTOQUE, [setorial_id, trs, paraId, nomeNovo])
+      : await cli.query(transf.SQL_MOVER, [setorial_id, trs, deId, paraId, nomeNovo]);
 
     // ── 4. O histórico — uma linha por PC movida ────────────────────────────
     //
@@ -3765,7 +3790,7 @@ app.post('/transferencia', async (req, res) => {
     let idsHist = [];
     if (movidas.length) {
       const { rowCount, rows: hRows } = await cli.query(transf.SQL_HIST, transf.paramsHistorico({
-        movidas, foto, deId, paraId, deNome: uDe.nome, paraNome: uPara.nome,
+        movidas, foto, deId, paraId, deNome: uDe ? uDe.nome : null, paraNome: uPara.nome,
         usuarioId: b.usuario_id, motivo: b.motivo, portaria, portariaEm,
       }));
       nHist = rowCount;
@@ -3816,8 +3841,16 @@ app.post('/transferencia', async (req, res) => {
     // botão "Abrir o termo de repasse" do sino carrega.
     const repasseId = idsHist.length ? Math.min(...idsHist) : null;
     if (repasseId) {
+      // ⚠️ VINDO DO ESTOQUE, `deNome` É NULO E O AVISO DA ORIGEM NÃO SAI — pela mesma guarda
+      // que já poupa o dispensado dentro do `notificarRepasse`. Não há pessoa a avisar de que
+      // "o acervo saiu da sua planilha": ele não era de ninguém.
+      //
+      // ⚠️ E A CHAMADA CONTINUA CRUA, sem `uDe ? ... : false`: a `emExercicio` já começa por
+      // `!!u`, então ela responde por nulo. Um ternário aqui seria uma SEGUNDA regra para a
+      // mesma pergunta — e seria a cópia que ficaria velha.
       notificarRepasse(pool, {
-        repasseId, deId, deNome: uDe.nome, deEmExercicio: transf.emExercicio(uDe),
+        repasseId, deId, deNome: uDe ? uDe.nome : null,
+        deEmExercicio: transf.emExercicio(uDe),
         paraId, paraNome: uPara.nome, grupo: uPara.grupo,
         pcs: movidas.length, trs: [...new Set(movidas.map((m) => m.tr))].length,
         vencidas, quando: new Date(),
@@ -3825,7 +3858,8 @@ app.post('/transferencia', async (req, res) => {
     }
 
     res.json({ data: {
-      de: { id: deId, nome: uDe.nome }, para: { id: paraId, nome: uPara.nome },
+      de: uDe ? { id: deId, nome: uDe.nome } : { id: null, nome: 'Estoque', estoque: true },
+      para: { id: paraId, nome: uPara.nome },
       portaria, portaria_em: portariaEm,
       trs, transferidas: movidas.length, previstas: previstas.length,
       ficaram_baixadas: ficam.length, historico: nHist,

@@ -688,5 +688,131 @@ S('25. O REPASSE DESFEITO SAI DA FILA DE CIENCIA (01/09/2026)');
   conf(rotaD.indexOf('SQL_NOTIF_DO_REPASSE') < rotaD.indexOf("cli.query('COMMIT')"),
        'e o faz DENTRO da transacao, para o ROLLBACK devolver o aviso');
 }
+
+S('26. A ORIGEM ESTOQUE — encaminhar PC sem dono (22/09/2026)');
+{
+  // ⚠️ A FOTO DO ESTOQUE tem os quatro casos que a regra precisa separar: a livre de verdade,
+  // a sem dono que NAO esta livre (o vao de 16/08), a baixada sem dono, e a que ja tem dono.
+  const FOTO_E = [
+    { codigo_pc: 'PC-LIVRE-1', tr: 'E1', parcial_num: '1', setorial_id: 'FCEE', analista_id: null, analista_nome: null,     baixada: false, status: 'livre',   dt_assumida: null, dt_inicio_analise: null },
+    { codigo_pc: 'PC-LIVRE-2', tr: 'E1', parcial_num: '2', setorial_id: 'FCEE', analista_id: null, analista_nome: null,     baixada: false, status: 'livre',   dt_assumida: null, dt_inicio_analise: null },
+    { codigo_pc: 'PC-SEMDONO', tr: 'E1', parcial_num: '3', setorial_id: 'FCEE', analista_id: null, analista_nome: null,     baixada: false, status: 'analise', dt_assumida: null, dt_inicio_analise: null },
+    { codigo_pc: 'PC-BAIXADA', tr: 'E1', parcial_num: '4', setorial_id: 'FCEE', analista_id: null, analista_nome: null,     baixada: true,  status: 'baixada', dt_assumida: null, dt_inicio_analise: null },
+    { codigo_pc: 'PC-COMDONO', tr: 'E2', parcial_num: '1', setorial_id: 'FCEE', analista_id: 7,    analista_nome: 'Marisa', baixada: false, status: 'analise', dt_assumida: null, dt_inicio_analise: null },
+  ];
+
+  conf(transf.ehEstoque('estoque') && transf.ehEstoque('ESTOQUE') && transf.ehEstoque(' Estoque '),
+       'ehEstoque reconhece a origem, sem depender de caixa nem de espaco');
+  conf(!transf.ehEstoque('4') && !transf.ehEstoque('') && !transf.ehEstoque(null),
+       'e um id de analista NAO e estoque');
+
+  // ⚠️ A VALIDACAO NAO PODE EXIGIR `de_id` NUMERICO quando a origem e o estoque — era a
+  // primeira porta, e ela recusava o caminho novo antes de qualquer consulta.
+  conf(transf.validar({ de_id: 'estoque', para_id: 7, trs: ['E1'], usuario_id: 4 }) === null,
+       'o corpo com de_id=estoque passa na validacao');
+  conf(transf.validar({ de_id: 'estoque', trs: ['E1'], usuario_id: 4 }) !== null,
+       'mas o destino continua obrigatorio');
+  // ⚠️ E A CONFERENCIA de/para NAO PODE DISPARAR no estoque: `de` ali e 0, e um destino de id 0
+  // nao existe — sem a ressalva, a unica forma de ela acusar seria um caso impossivel.
+  conf(transf.validar({ de_id: 'estoque', para_id: 0, trs: ['E1'], usuario_id: 4 })
+       === 'Informe para quem vai o acervo.',
+       'com destino vazio a recusa e a do destino, nao a de origem igual a destino');
+
+  // ── O QUE SE MOVE ────────────────────────────────────────────────────────
+  const movem = transf.pcsQueMovem(FOTO_E, null).map((l) => l.codigo_pc);
+  conf(movem.length === 2 && movem.includes('PC-LIVRE-1') && movem.includes('PC-LIVRE-2'),
+       'do estoque movem-se SO as livres', movem.join(','));
+  conf(!movem.includes('PC-SEMDONO'),
+       'a sem dono com status analise NAO se move — e o vao de 16/08, e quem fecha e a PC_LIVRE_SQL');
+  conf(!movem.includes('PC-BAIXADA'), 'a baixada sem dono nao se move');
+  conf(!movem.includes('PC-COMDONO'), 'e a que ja tem dono, tambem nao');
+  conf(transf.pcsQueFicam(FOTO_E, null).length === 0,
+       'no estoque nao ha "as que ficam" da origem: nao existe pessoa de origem');
+
+  // ── A TR QUE NAO TEM O QUE ENCAMINHAR ────────────────────────────────────
+  conf(transf.trsAlheias(['E1'], FOTO_E, null).length === 0, 'a TR com PC livre e aceita');
+  conf(transf.trsAlheias(['E2'], FOTO_E, null).join(',') === 'E2',
+       'a TR so com PC de dono e recusada, com a lista');
+  conf(transf.trsAlheias(['E1', 'E9'], FOTO_E, null).join(',') === 'E9',
+       'e a TR que nem esta na foto tambem');
+
+  // ── O HISTORICO ──────────────────────────────────────────────────────────
+  const ps = transf.paramsHistorico({
+    movidas: [{ codigo_pc: 'PC-LIVRE-1', tr: 'E1', parcial_num: '1' }],
+    foto: FOTO_E, deId: null, paraId: 7, deNome: null, paraNome: 'Marisa Silva',
+    usuarioId: 4, motivo: '', portaria: null, portariaEm: null,
+  });
+  conf(ps[4][0] === transf.ROTULO_ESTOQUE, 'o valor_anterior e "— · estoque"', ps[4][0]);
+  conf(ps[5][0] === '7 · Marisa', 'e o valor_novo e o rotulo do destino', ps[5][0]);
+  // ⚠️ O MESMO ROTULO DO DESFAZER, de proposito: e o que faz a ida e a volta aparecerem como
+  // um par na trilha. Se divergirem, a mesma PC teria dois nomes para o mesmo lugar.
+  const pd = transf.paramsDesfeita({
+    linhas: [{ codigo_pc: 'X', tr: 'E1', parcial_num: '1', analista_atual: 7, repasse_id: 1 }],
+    lote: { valor_anterior: '4 · Richard', valor_novo: '7 · Marisa', criado_em: new Date('2026-09-22') },
+    usuarioId: 4, motivo: '',
+  });
+  conf(pd[5][0] === transf.ROTULO_ESTOQUE,
+       'e e o MESMO rotulo que o desfazer ja grava como destino');
+  conf(/encaminhada do estoque para Marisa Silva/.test(ps[7][0]),
+       'a observacao diz ENCAMINHADA do estoque, e nao "transferida de"', ps[7][0]);
+
+  // ── A CONFERENCIA ────────────────────────────────────────────────────────
+  const movidas = [{ codigo_pc: 'PC-LIVRE-1', tr: 'E1', parcial_num: '1' },
+                   { codigo_pc: 'PC-LIVRE-2', tr: 'E1', parcial_num: '2' }];
+  const bom = FOTO_E.map((l) => (l.codigo_pc.startsWith('PC-LIVRE')
+    ? { ...l, analista_id: 7, analista_nome: 'Marisa', status: 'analise' } : l));
+  conf(transf.conferir({ foto: FOTO_E, depois: bom, movidas, deId: null, paraId: 7 }).length === 0,
+       'o caminho feliz passa nas conferencias');
+
+  // ⚠️ PC COM DONO **E** LIVRE e o defeito que ninguem ve: ela aparece no Estoque para outro
+  // analista assumir por cima do primeiro. A conferencia existe para isso nao passar calado.
+  const meio = FOTO_E.map((l) => (l.codigo_pc === 'PC-LIVRE-1'
+    ? { ...l, analista_id: 7, analista_nome: 'Marisa', status: 'livre' }
+    : (l.codigo_pc === 'PC-LIVRE-2'
+        ? { ...l, analista_id: 7, analista_nome: 'Marisa', status: 'analise' } : l)));
+  const pr = transf.conferir({ foto: FOTO_E, depois: meio, movidas, deId: null, paraId: 7 });
+  conf(pr.some((x) => /PC-LIVRE-1 continua livre/.test(x)),
+       'e acusa a PC que ficou com dono E livre', pr.join(' | '));
+
+  // ── O SQL ────────────────────────────────────────────────────────────────
+  const sqlE = transf.SQL_MOVER_ESTOQUE;
+  conf(/status = 'analise'/.test(sqlE), 'o UPDATE do estoque tira a PC do livre');
+  conf(/dt_inicio_analise = COALESCE\(dt_inicio_analise, NOW\(\)\)/.test(sqlE),
+       'e comeca o relogio da analise, que ali nunca comecou');
+  conf(/analista_id IS NULL AND status = 'livre'/.test(sqlE),
+       'e o filtro e a PC_LIVRE_SQL, a definicao unica de livre');
+  // ⚠️ E O REPASSE ENTRE ANALISTAS CONTINUA SEM TOCAR NOS DOIS: a analise ja corria, e
+  // reiniciar o relogio do prazo daria folego novo a uma PC parada ha meses.
+  conf(!/status = /.test(transf.SQL_MOVER) && !/dt_inicio_analise/.test(transf.SQL_MOVER),
+       'o UPDATE do repasse NAO mexe em status nem em dt_inicio_analise');
+
+  // ── OS AVISOS ────────────────────────────────────────────────────────────
+  const ad = transf.avisoDestino({ pcs: 2, trs: 1, deNome: null, quando: new Date('2026-09-22'), vencidas: 0 });
+  conf(/Encaminhadas do estoque/.test(ad.mensagem) && !/Repassadas de/.test(ad.mensagem),
+       'o aviso do destino fala em encaminhamento, e nao procura uma pessoa de origem', ad.mensagem);
+  const ac = transf.avisoCoord({ pcs: 2, grupo: '3', deNome: null, paraNome: 'Marisa', quando: new Date('2026-09-22') });
+  conf(/Encaminhamento do estoque/.test(ac.titulo) && /do estoque passaram para Marisa/.test(ac.mensagem),
+       'e o da coordenacao separa encaminhamento de repasse ja no titulo', ac.titulo);
+
+  // ── A ROTA ───────────────────────────────────────────────────────────────
+  conf(/const doEstoque = transf\.ehEstoque\(b\.de_id\)/.test(rotaT),
+       'a rota decide a origem pela lib, e nao por conta propria');
+  conf(/const deId = doEstoque \? null : parseInt\(b\.de_id\)/.test(rotaT),
+       'e o deId do estoque e NULO — 0 viraria "analista inexistente"');
+  conf(/doEstoque[\s\S]{0,80}SQL_MOVER_ESTOQUE/.test(rotaT),
+       'o UPDATE do estoque so roda quando a origem e o estoque');
+  // ⚠️ SEM ANALISTA DE ORIGEM NAO HA TERMO DE REPASSE A DOCUMENTAR, entao a portaria deixa de
+  // ser exigida — senao 35 analistas em atividade, que nao substituiram ninguem, ficariam de
+  // fora do caminho novo.
+  conf(/if \(!doEstoque && \(!portaria \|\| !portariaEm\)\)/.test(rotaT),
+       'a portaria do destino so e exigida no repasse entre analistas');
+  // ⚠️ O DESTINO PODE SER O SUPERADMIN: ele analisa acervo como qualquer analista e entra na
+  // produtividade pela mesma regra. O que continua barrado e coordenador e Controle Interno.
+  conf(/uPara\.perfil !== 'analista' && uPara\.perfil !== 'superadmin'/.test(rotaT),
+       'o destino aceita analista e superadmin, e recusa o resto');
+  conf(/ativo \|\| uPara\.data_saida/.test(rotaT),
+       'e o dispensado continua recusado como destino');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

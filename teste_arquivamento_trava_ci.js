@@ -172,5 +172,63 @@ S('8. E O SETOR CHEGA EM CADA PC DA LISTAGEM');
        'e os campos do objeto existem nos dois lados', Object.keys(JSONB).join(','));
 }
 
+S('9. A LEITURA VENCIDA NAO TRAVA — o fato novo vence a foto velha');
+{
+  // ⚠️ O CASO DA MARISA, 24/09/2026 (parcial 2 da 2020TR000655): o C.I. registrou "concorda com o
+  // parecer, arquive a parcial" as 13h41, e a leitura do SGPe que a tela usava era das 11h04 —
+  // **2h37 ANTES**. A tela mostrava, na mesma altura, a mensagem do C.I. mandando arquivar e a
+  // faixa dizendo que nao dava. Ela esperou UM DIA, ate o rodizio reler o processo.
+  const LIDO = '2026-09-24T14:04:00Z';   // 11h04 de Brasilia
+  const antes = arq.bloqueio([pc({ ...NO_CI, sgpe_lido_em: LIDO, ci_encerrado_em: '2026-09-24T16:41:55Z' })]);
+  conf(antes === null, 'devolutiva DEPOIS da leitura: a parcial nao trava', String(antes));
+  // ⚠️ E NAO E "o C.I. decidiu, entao libera": o processo pode ter voltado ao C.I. depois da
+  // decisao, e ai a foto mais nova e que esta certa.
+  const depois = arq.bloqueio([pc({ ...NO_CI, sgpe_lido_em: LIDO, ci_encerrado_em: '2026-09-24T10:00:00Z' })]);
+  conf(!!depois, 'devolutiva ANTES da leitura: continua travando — a leitura e que manda');
+  conf(!!arq.bloqueio([pc({ ...NO_CI, sgpe_lido_em: LIDO })]),
+       'sem devolutiva gravada, a leitura manda sozinha');
+  conf(!!arq.bloqueio([pc({ ...NO_CI, ci_encerrado_em: '2026-09-24T16:41:55Z' })]),
+       'e sem hora de leitura nao da para comparar: a trava fica');
+  conf(/function leituraVencida/.test(FONTE), 'a regra tem nome proprio, para ser achada por quem varrer');
+  // A leitura chega pelos DOIS caminhos: `sgpe_lido_em` nas PCs travadas, `lido_em_iso` no jsonb.
+  const e = arq.estadoDaLinha(linha({ ci_col_em: '2026-09-24T16:41:55Z',
+    ci_no_sgpe: { ...JSONB, lido_em_iso: LIDO } }));
+  conf(e.estado === 'pronta', 'e pela leitura da tela vale a mesma regra', e.estado);
+}
+
+S('10. "HA 0 DIAS" NAO SE DIZ');
+{
+  const hoje = arq.bloqueio([pc({ ...NO_CI, sgpe_dias: 0 })]);
+  conf(!/0 dia/.test(hoje), 'com a data na frase, quem chegou hoje nao ganha contagem de dias', hoje);
+  conf(/desde 09\/04\/2026\./.test(hoje), 'a data sozinha fecha a frase');
+  const semData = arq.bloqueio([pc({ ...NO_CI, sgpe_dias: 0, sgpe_desde: null })]);
+  conf(/chegou hoje/.test(semData), 'e sem data, o texto diz "chegou hoje"', semData);
+  conf(/— 1 dia\./.test(arq.bloqueio([pc({ ...NO_CI, sgpe_dias: 1 })])), 'um dia continua "1 dia"');
+}
+
+S('11. A POSICAO DO SGPe VEM SEMPRE — e a mesma faixa confirma');
+{
+  // ⚠️ ATE 27/09 A CTE SO TRAZIA LINHA QUANDO O PROCESSO ESTAVA NO C.I., porque so a trava a
+  // usava. Sem a posicao no estado `pronta`, quem ainda nao arquivou teria de abrir o SGPe para
+  // descobrir que ja pode — e a faixa que barrou nao teria como confirmar.
+  const pos = { setor: 'FCEE/SEPCO', setor_nome: 'Prestação de Contas', desde: '25/09/2026',
+                dias: 2, no_ci: false, lido_em: '27/09/2026 17:06' };
+  const e = arq.estadoDaLinha(linha({ sgpe_pos: pos }));
+  conf(e.estado === 'pronta', 'quem saiu do C.I. fica pronta', e.estado);
+  conf(e.sgpe && e.sgpe.setor === 'FCEE/SEPCO', 'e o estado leva a posicao do SGPe para a tela');
+  conf(e.sgpe.no_ci === false, 'com o \'no_ci\' JA DECIDIDO — a tela nunca pergunta o que e CONIN');
+  conf(arq.estadoDaLinha(linha({})).sgpe === null, 'sem leitura, a posicao vai nula');
+  const q = arq.sqlEstado('q.tr = $1');
+  const cte = q.split('arq_sgpe AS (')[1].split('arq_tr AS (')[0];
+  conf(/AS sgpe_pos/.test(cte), 'a CTE devolve a posicao');
+  conf(/CASE WHEN .* THEN jsonb_build_object/.test(cte), 'e a trava vira um CASE, nao um recorte');
+  // ⚠️ SEM O RECORTE NO WHERE, o DISTINCT ON podia escolher uma irma que ja saiu, numa parcela
+  // cujo processo ainda esta no C.I. — e a trava sumiria sozinha. Por isso a prioridade no ORDER.
+  conf(/ORDER BY q\.setorial_id, q\.tr, q\.parcial_num,\s*\(.*CONIN.*\) DESC/s.test(cte),
+       'e a PC no C.I. vem primeiro no DISTINCT ON');
+  conf(/asg\.ci_no_sgpe, asg\.sgpe_pos/.test(q), 'as duas colunas chegam na consulta');
+  conf(/sgpe: e\.sgpe/.test(FONTE), 'e a posicao viaja em `anexarEstado`, com o resto do estado');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exitCode = falhou ? 1 : 0;

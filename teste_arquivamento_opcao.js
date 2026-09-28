@@ -99,8 +99,14 @@ S('4. A TELA DEIXA DE AFIRMAR O ACORDO QUE NINGUEM DEU');
        'a frase do acordo registrado continua existindo');
   conf(/ci_opcao_deduzida \? ' · deduzida' : ''/.test(html), 'a pilula marca a deducao');
   conf(/sem técnico registrado/.test(html), 'e ha a etiqueta que explica a ausencia do nome');
-  conf(/function pCiConversaHtml\(msgs, deduzida\)/.test(html),
+  // ⚠️ O TERCEIRO PARAMETRO CHEGOU EM 23/09 com a trava do C.I., e o silencio passou a ter TRES
+  // motivos: nao houve conversa (carga de 16/08), ela ainda nao comecou, ou o C.I. nao escreveu
+  // porque ainda esta com o processo. Esta checagem media a assinatura de duas — era ela que
+  // estava velha, nao a tela.
+  conf(/function pCiConversaHtml\(msgs, deduzida(, noCi)?\)/.test(html),
        'a conversa vazia sabe distinguir "nao houve" de "ainda nao"');
+  conf(/o processo ainda está com eles no SGPe/.test(html),
+       'e o terceiro motivo, de 23/09, continua escrito');
   // ⚠️ O FLUXO NAO MUDA: o botao de arquivar continua no mesmo lugar, para os dois casos.
   conf(/Arquivar parcial/.test(html), 'e o caminho do arquivamento segue igual');
 }

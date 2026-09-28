@@ -4823,6 +4823,55 @@ async function resolverProcesso(texto) {
 // O 409 saiu junto porque só existia para oferecer o `juntar`: mantê-lo bloquearia a correção
 // legítima sem caminho de saída. Colidir em (tr, processo_pc) deixou de ser sinal de defeito —
 // virou `convive`, que INFORMA e não decide nada.
+// GET /prestacoes_contas/:codigo_pc/processo_escopo?campo=processo_pc
+//
+// O QUE ESTA CORREÇÃO VAI ALCANÇAR — perguntado pelo modal ANTES de salvar (27/09/2026).
+//
+// ⚠️ ELA EXISTE PARA A ESCOLHA SER INFORMADA, e não para a tela decidir. Quando o número atual
+// está em mais de uma parcial da TR, o analista precisa ver QUAIS antes de escolher entre
+// corrigir só a dele e corrigir todas — foi o caso do Valderi, que corrigia a parcial 3 e
+// mudava a 2 e a 4 sem saber.
+//
+// ⚠️ E É LEITURA PURA, sem lock e sem transação: quem escreve é o PATCH, e ele relê tudo
+// dentro do BEGIN. Esta resposta é para desenhar a pergunta, não para decidir a escrita — se
+// o acervo mudar entre uma coisa e outra, quem manda é a leitura de lá.
+app.get('/prestacoes_contas/:codigo_pc/processo_escopo', async (req, res) => {
+  try {
+    const campo = String(req.query.campo || 'processo_pc');
+    if (!['processo_pc', 'processo_mae'].includes(campo))
+      return res.status(400).json({ data: null, error: { message: 'campo inválido' } });
+
+    const { rows: alvo } = await pool.query(
+      `SELECT codigo_pc, tr, parcial_num, processo_pc, processo_mae FROM prestacoes_contas
+        WHERE codigo_pc = $1`, [req.params.codigo_pc]);
+    if (!alvo.length) return res.status(404).json({ data: null, error: { message: 'PC não encontrada.' } });
+    const pc = alvo[0];
+
+    const { rows: daTr } = await pool.query(
+      `SELECT codigo_pc, parcial_num, ${campo} AS valor FROM prestacoes_contas
+        WHERE setorial_id='FCEE' AND tr = $1`, [pc.tr]);
+    const chave = vinculo.chave(pc[campo]);
+    const mesma = daTr.filter((r) => vinculo.chave(r.valor) === chave);
+    const naParcela = mesma.filter((r) => String(r.parcial_num) === String(pc.parcial_num));
+    const outras = [...new Set(mesma.filter((r) => String(r.parcial_num) !== String(pc.parcial_num))
+      .map((r) => r.parcial_num))].sort((x, y) => {
+        const nx = parseInt(String(x).replace(/\D/g, ''), 10), ny = parseInt(String(y).replace(/\D/g, ''), 10);
+        if (Number.isNaN(nx) || Number.isNaN(ny)) return String(x).localeCompare(String(y));
+        return nx - ny;
+      });
+
+    res.json({ data: {
+      tr: pc.tr, parcial_num: pc.parcial_num, campo, valor: pc[campo] || null,
+      // Quantas PCs mudam em cada escolha — é o número que o modal mostra ao lado de cada opção.
+      pcs_na_parcela: naParcela.length,
+      pcs_na_tr: mesma.length,
+      outras_parciais: outras,
+      // A mãe não tem escolha: uma TR tem UM processo mãe, e corrigir é dizer qual é o certo.
+      escolhe: campo === 'processo_pc' && outras.length > 0,
+    }, error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
 app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
   const cli = await pool.connect();
   try {
@@ -4867,18 +4916,34 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     // (1:1)`: uma TR tem UM processo mãe. Se duas linhas da mesma TR discordam, uma delas
     // está errada por definição — e corrigir a mãe é dizer qual é a certa.
     //
-    // ⚠️ `processo_pc` CONTINUA POR FAMÍLIA, mas comparada pela CHAVE e não pelo texto: é a
-    // mesma `vinculo.chave` que a faixa de vinculação usa dos dois lados, e é ela que faz
-    // `FCEE4360/2021` e `FCEE 4360/2021` serem o mesmo processo. Sem isso, a grafia divide a
-    // família e a correção deixa irmãs para trás — que é exatamente o defeito de cima.
+    // ⚠️ `processo_pc` ALCANÇA A PARCELA, E NÃO A TR — corrigido em 27/09/2026, a partir de um
+    // caso do Valderi (G1). Até aqui o escopo era "todas as PCs da TR com esta chave", e ele
+    // ATRAVESSAVA PARCIAIS: na 2022TR000848 as parciais 2, 3 e 4 estavam com `SCC 3123/2023`,
+    // e corrigir uma mudava as três. Da cadeira dele: "quando tento alterar ele muda nas três
+    // PCs". É o defeito espelhado do de 22/09 — lá a correção alcançava de menos, aqui de mais.
+    //
+    // ⚠️ E NÃO BASTA ESTREITAR PARA "SÓ ESTA PC": um processo do SGPe PODE carregar várias
+    // parcelas do SIGEF (armadilha 14 — 113 pares medidos no estoque da CGE), e no acervo há
+    // **138 pares (TR, processo) com mais de uma parcial**, em 96 TRs. Quando o
+    // compartilhamento é legítimo e o número muda, o analista quer corrigir todas de uma vez.
+    // Por isso o alcance é ESCOLHA DELE: o padrão é a parcela, e `alcance: 'tr'` estende.
+    //
+    // ⚠️ O PADRÃO VALE TAMBÉM PARA QUEM NÃO MANDAR NADA. Uma tela antiga, ou uma chamada por
+    // fora, cai no comportamento novo — o escopo largo nunca é o silencioso.
     const { rows: daTr } = await cli.query(
-      `SELECT codigo_pc, ${b.campo} AS valor FROM prestacoes_contas
+      `SELECT codigo_pc, parcial_num, ${b.campo} AS valor FROM prestacoes_contas
         WHERE setorial_id='FCEE' AND tr = $1
         FOR UPDATE`, [pc.tr]);
     const chaveAntes = vinculo.chave(antes);
+    // ⚠️ A COMPARAÇÃO CONTINUA PELA CHAVE, e não pelo texto: é a `vinculo.chave` que faz
+    // `FCEE4360/2021` e `FCEE 4360/2021` serem o mesmo processo. Sem ela a grafia divide a
+    // família e a correção deixa irmãs da MESMA parcela para trás — o defeito de 22/09.
+    const mesmaChave = daTr.filter(r => vinculo.chave(r.valor) === chaveAntes);
     const escopo = b.campo === 'processo_mae'
       ? daTr
-      : daTr.filter(r => vinculo.chave(r.valor) === chaveAntes);
+      : String(b.alcance) === 'tr'
+        ? mesmaChave
+        : mesmaChave.filter(r => String(r.parcial_num) === String(pc.parcial_num));
 
     // ⚠️ SÓ ENTRA NO UPDATE O QUE AINDA NÃO ESTÁ CERTO, e é o que permite a correção ser
     // repetida para terminar o serviço: na 2021TR001666 a parcial já estava boa e a final
@@ -4897,6 +4962,14 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     // ⚠️ NADA aqui escreve. É texto para a tela mostrar depois de salvar, e o analista
     // precisa saber — mas saber não é o mesmo que ter de decidir, e decidir não é o mesmo
     // que o servidor reescrever a numeração por ele.
+    // As OUTRAS parciais da TR que estão com o mesmo número ANTIGO e não foram tocadas.
+    // ⚠️ Pelo valor ANTIGO, não pelo novo: `convive` (abaixo) responde outra pergunta — com
+    // quem o número NOVO passa a conviver. As duas coisas já foram confundidas uma vez.
+    const foraDaParcela = (b.campo === 'processo_pc' && String(b.alcance) !== 'tr')
+      ? [...new Set(mesmaChave.filter(r => String(r.parcial_num) !== String(pc.parcial_num))
+          .map(r => r.parcial_num))]
+      : [];
+
     let convive = null;
     if (b.campo === 'processo_pc') {
       const { rows: outras } = await cli.query(
@@ -4948,7 +5021,12 @@ app.patch('/prestacoes_contas/:codigo_pc/processo', async (req, res) => {
     // ⚠️ A TR VAI NA RESPOSTA (22/09/2026) para a tela poder dizer "em 2 PCs da TR X". Sem o
     // número, o aviso de sucesso não diferencia "corrigi a TR inteira" de "corrigi uma linha" —
     // e era justamente essa dúvida que fazia a correção parecer que não tinha salvado.
-    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, tr: pc.tr, convive, ...resolucao }, error: null });
+    // ⚠️ O QUE FICOU DE FORA VAI NA RESPOSTA. Sem isto, quem corrigiu a parcial 3 de uma TR
+    // em que as parciais 2 e 4 têm o mesmo número sai achando que corrigiu tudo — e a dúvida
+    // de "será que salvou?" volta pelo outro lado.
+    res.json({ data: { texto: novo, mudou: true, pcs: codigos.length, tr: pc.tr, convive,
+      alcance: b.campo === 'processo_mae' ? 'tr' : (String(b.alcance) === 'tr' ? 'tr' : 'parcela'),
+      parcial_num: pc.parcial_num, fora_da_parcela: foraDaParcela, ...resolucao }, error: null });
   } catch (e) {
     try { await cli.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });

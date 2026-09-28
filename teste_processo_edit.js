@@ -183,5 +183,43 @@ console.log('\n═══ O ESCOPO DA CORRECAO (22/09/2026) ═══');
   conf(/codigo_pc = ANY\(\$1\)/.test(rota), 'e o UPDATE continua por lista explicita de chaves');
 }
 
+secao('9. O ESCOPO DA CORRECAO E A PARCELA (27/09/2026)');
+// ⚠️ CASO DO VALDERI (G1): na 2022TR000848 as parciais 2, 3 e 4 estao com SCC 3123/2023, e
+// corrigir uma mudava as tres. "Quando tento alterar ele muda nas tres PCs." E o defeito
+// espelhado do de 22/09 — la a correcao alcancava de menos, aqui de mais.
+{
+  const rota = src.slice(src.indexOf("app.patch('/prestacoes_contas/:codigo_pc/processo'"),
+                         src.indexOf('// GET /sgpe/vinculo'));
+  conf(/const mesmaChave = daTr\.filter/.test(rota), 'a familia continua sendo comparada pela CHAVE');
+  conf(/String\(r\.parcial_num\) === String\(pc\.parcial_num\)/.test(rota),
+       'e o escopo de processo_pc recorta pela PARCELA');
+  // ⚠️ O PADRAO VALE PARA QUEM NAO MANDAR NADA: uma tela antiga cai no comportamento novo.
+  conf(/String\(b\.alcance\) === 'tr'\s*\?\s*mesmaChave/.test(rota),
+       "o escopo largo so acontece com alcance: 'tr' — explicito");
+  conf(!/\balcance\b.*\|\|\s*'tr'/.test(rota), 'e nunca por omissao');
+  // ⚠️ A MAE NAO TEM ESCOLHA: uma TR tem UM processo mae, e corrigir e dizer qual e o certo.
+  conf(/b\.campo === 'processo_mae'\s*\?\s*daTr/.test(rota), 'processo_mae continua valendo para a TR inteira');
+  conf(/fora_da_parcela: foraDaParcela/.test(rota), 'a resposta diz o que ficou DE FORA');
+  conf(/String\(b\.alcance\) !== 'tr'\)\s*$/m.test(rota) || /foraDaParcela = \(b\.campo === 'processo_pc' && String\(b\.alcance\) !== 'tr'\)/.test(rota),
+       'e so ha "fora" quando o alcance foi a parcela');
+  // ⚠️ PELO VALOR ANTIGO, e nao pelo novo: `convive` responde outra pergunta.
+  conf(/const foraDaParcela[\s\S]{0,400}mesmaChave\.filter/.test(rota),
+       'o "fora" sai da familia do valor ANTIGO, nao do novo');
+}
+
+secao('10. A ROTA QUE O MODAL PERGUNTA ANTES DE SALVAR');
+{
+  const r = src.slice(src.indexOf("app.get('/prestacoes_contas/:codigo_pc/processo_escopo'"),
+                      src.indexOf("app.patch('/prestacoes_contas/:codigo_pc/processo'"));
+  conf(r.length > 200, 'a rota existe');
+  conf(/pcs_na_parcela/.test(r) && /pcs_na_tr/.test(r), 'devolve a contagem das duas escolhas');
+  conf(/outras_parciais/.test(r), 'e quais sao as outras parciais');
+  conf(/escolhe: campo === 'processo_pc' && outras\.length > 0/.test(r),
+       'so ha escolha quando o numero esta em outra parcial');
+  // ⚠️ LEITURA PURA: quem escreve rele tudo dentro do BEGIN. Esta resposta desenha a pergunta.
+  conf(!/BEGIN|FOR UPDATE|UPDATE |INSERT /.test(r), 'e ela nao escreve nem trava nada');
+  conf(/vinculo\.chave/.test(r), 'a comparacao e a mesma do PATCH');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exit(falhou ? 1 : 0);

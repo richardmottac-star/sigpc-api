@@ -6609,6 +6609,125 @@ app.post('/parcela/ci_sgpe', async (req, res) => {
   } finally { cli.release(); }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  O MESMO, EM LOTE  (28/09/2026)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ NO SERVIDOR, E NAO NA TELA. São 562 parcelas com a passagem provada, e a Geisa tem 40
+// numa TR só: a tela disparando 40 conferências e 40 escritas em série é exatamente o que a
+// armadilha 16 proíbe — rede caindo no meio deixaria metade feita, e a contagem viraria dela.
+// Aqui é uma chamada para conferir e uma para gravar, numa transação só.
+//
+// ⚠️ E A CONFERÊNCIA EM LOTE NÃO DECIDE NADA SOZINHA: ela devolve, por parcela, o mesmo
+// "pode" e o mesmo "motivo" da rota individual. A tela desenha a lista; quem escolhe é a pessoa.
+
+/** A conferência de uma parcela, reaproveitada pelas duas rotas em lote. Não escreve. */
+async function ciSgpeConferir(db, { setorial_id, tr, parcial_num, quem, perfil }) {
+  const { rows: pcs } = await db.query(
+    `SELECT codigo_pc, tr, parcial_num, analista_id, baixada, parecer_tipo, ci_situacao,
+            arquivada, processo_pc
+       FROM prestacoes_contas
+      WHERE setorial_id = $1 AND tr = $2 AND parcial_num = $3 AND ${inval.ativa('')}
+      ORDER BY codigo_pc`, [setorial_id, tr, String(parcial_num)]);
+  if (!pcs.length) return { parcial_num: String(parcial_num), pode: false, motivo: 'Parcial não encontrada.' };
+
+  const perm = ciSgpe.podeRegistrar(quem, perfil, pcs);
+  const impedimento = ciSgpe.estadoPermite(pcs);
+  const bruto = (pcs.find((p) => p.processo_pc) || {}).processo_pc || '';
+  const chave = bruto ? chavesDeValores([bruto]).get(bruto) : null;
+  let prova = { prova: false, entrada: null, saida: null, motivo: ciSgpe.MOTIVOS.SEM_PROCESSO };
+  if (chave) {
+    const [t, s2] = await Promise.all([
+      db.query(ciSgpe.SQL_TRAMITACAO, [chave.sigla, chave.numero, chave.ano]),
+      db.query(ciSgpe.SQL_SITUACAO, [chave.sigla, chave.numero, chave.ano]),
+    ]);
+    prova = ciSgpe.analisarTramitacao(t.rows, s2.rows[0] && s2.rows[0].setor_sigla);
+  }
+  return {
+    parcial_num: String(parcial_num), pcs: pcs.length, processo: bruto || null,
+    entrada: prova.entrada, saida: prova.saida,
+    pode: !!(perm.pode && !impedimento && prova.prova),
+    motivo: perm.pode ? (impedimento || prova.motivo) : perm.motivo,
+    analista_id: pcs[0].analista_id ?? null, ci_situacao: pcs[0].ci_situacao || null,
+  };
+}
+
+// POST /parcela/ci_sgpe/conferir  body { tr, setorial_id?, parciais: [], usuario_id }
+app.post('/parcela/ci_sgpe/conferir', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const setorial_id = b.setorial_id || 'FCEE';
+    const parciais = [...new Set((Array.isArray(b.parciais) ? b.parciais : []).map(String))];
+    if (!b.tr || !parciais.length)
+      return res.status(400).json({ data: null, error: { message: 'tr e parciais são obrigatórios' } });
+    if (parciais.length > 120)
+      return res.status(400).json({ data: null, error: { message: 'No máximo 120 parciais por vez.' } });
+
+    const quem = await lerUsuario(pool, b.usuario_id);
+    const perfil = papel.perfilEfetivo(quem);
+    const linhas = [];
+    for (const n of parciais) linhas.push(await ciSgpeConferir(pool, { setorial_id, tr: b.tr, parcial_num: n, quem, perfil }));
+    // Ordem numérica: como texto, a parcial 10 viria antes da 2.
+    linhas.sort((a, c) => (parseInt(a.parcial_num, 10) || 0) - (parseInt(c.parcial_num, 10) || 0));
+    res.json({ data: { tr: b.tr, setorial_id, linhas,
+      podem: linhas.filter((l) => l.pode).length, pcs: linhas.filter((l) => l.pode).reduce((n, l) => n + (l.pcs || 0), 0) },
+      error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
+// POST /parcela/ci_sgpe/lote  body { tr, setorial_id?, parciais: [], usuario_id }
+app.post('/parcela/ci_sgpe/lote', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const setorial_id = b.setorial_id || 'FCEE';
+    const parciais = [...new Set((Array.isArray(b.parciais) ? b.parciais : []).map(String))];
+    if (!b.tr || !parciais.length)
+      return res.status(400).json({ data: null, error: { message: 'tr e parciais são obrigatórios' } });
+    if (parciais.length > 120)
+      return res.status(400).json({ data: null, error: { message: 'No máximo 120 parciais por vez.' } });
+    if (await barrouPreparacao(res, b.usuario_id)) return;
+
+    const quem = await lerUsuario(cli, b.usuario_id);
+    if (!quem) return res.status(401).json({ data: null, error: { message: 'Usuário não identificado.' } });
+    const perfil = papel.perfilEfetivo(quem);
+
+    // ⚠️ UMA TRANSAÇÃO PARA O LOTE INTEIRO. A recusa de uma parcela NÃO derruba as outras — ela
+    // volta na lista de recusadas, com o motivo. O que não pode é metade gravada e metade não
+    // por causa de rede, que é o defeito que a devolução e o assumir tiveram em 12/08.
+    await cli.query('BEGIN');
+    const feitas = [], recusadas = [];
+    for (const n of parciais) {
+      // Relê DENTRO da transação, com lock — a conferência de antes serviu para desenhar.
+      await cli.query(
+        `SELECT 1 FROM prestacoes_contas
+          WHERE setorial_id = $1 AND tr = $2 AND parcial_num = $3 AND ${inval.ativa('')} FOR UPDATE`,
+        [setorial_id, b.tr, n]);
+      const c = await ciSgpeConferir(cli, { setorial_id, tr: b.tr, parcial_num: n, quem, perfil });
+      if (!c.pode) { recusadas.push({ parcial_num: n, motivo: c.motivo }); continue; }
+      const { rows: mudou } = await cli.query(ciSgpe.SQL_REGISTRAR,
+        [setorial_id, b.tr, n, c.entrada || c.saida, quem.id, c.saida]);
+      await registrarHistorico(cli, {
+        tr: b.tr, parcial_num: n, setorial_id,
+        evento: 'ci_pelo_sgpe',
+        valor_anterior: c.ci_situacao, valor_novo: 'encerrado',
+        analista_id: c.analista_id,
+        observacao: `Devolutiva registrada pela tramitação do SGPe · ${c.processo} · entrou no C.I. em `
+          + `${c.entrada || '—'} e saiu em ${c.saida} · ${mudou.length} PC${mudou.length > 1 ? 's' : ''}`
+          + ` · em lote de ${parciais.length} · registrado por ${quem.nome}`,
+        executado_por: (c.analista_id != null && String(c.analista_id) !== String(quem.id)) ? quem.id : null,
+      });
+      feitas.push({ parcial_num: n, pcs: mudou.length, entrada: c.entrada, saida: c.saida });
+    }
+    await cli.query('COMMIT');
+    res.json({ data: { tr: b.tr, feitas, recusadas,
+      pcs: feitas.reduce((n, f) => n + f.pcs, 0) }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
+});
+
 app.post('/parcela/ci', async (req, res) => {
   const b = req.body || {};
   if (await barrouPreparacao(res, b.analista_id)) return;

@@ -128,5 +128,24 @@ S('6. AS DUAS ROTAS');
   conf(/ROLLBACK/.test(post), 'e qualquer recusa desfaz a transacao');
 }
 
+S('7. O LOTE — no servidor, e nao na tela');
+{
+  const conf2 = SRC.slice(SRC.indexOf("app.post('/parcela/ci_sgpe/conferir'"), SRC.indexOf("app.post('/parcela/ci_sgpe/lote'"));
+  const lote = SRC.slice(SRC.indexOf("app.post('/parcela/ci_sgpe/lote'"), SRC.indexOf("app.post('/parcela/ci',"));
+  // ⚠️ SAO 562 PARCELAS, e a Geisa tem 40 numa TR so. A tela disparando 40 conferencias e 40
+  // escritas em serie e o que a armadilha 16 proibe: rede caindo no meio deixa metade feita.
+  conf(conf2.length > 300 && !/UPDATE |INSERT |BEGIN/.test(soCodigo(conf2)), 'conferir le e nao escreve nada');
+  conf(/BEGIN/.test(lote) && /COMMIT/.test(lote), 'e o lote grava numa transacao so');
+  conf(/FOR UPDATE/.test(lote), 'com lock nas linhas');
+  // ⚠️ A RECUSA DE UMA NAO DERRUBA AS OUTRAS: ela volta na lista, com o motivo.
+  conf(lote.includes("recusadas.push") && lote.includes("continue;"), 'a recusa de uma parcela nao derruba o lote');
+  conf(/feitas, recusadas/.test(lote), 'e a resposta separa o que foi feito do que nao foi');
+  // ⚠️ A CONFERENCIA DE ANTES SERVIU PARA DESENHAR: quem manda na escrita e o que se le aqui.
+  conf(lote.includes("ciSgpeConferir(cli"), 'o lote rele a prova DENTRO da transacao');
+  conf(/No máximo 120 parciais/.test(lote) && /No máximo 120 parciais/.test(conf2), 'e ha teto por chamada');
+  conf(/evento: 'ci_pelo_sgpe'/.test(lote), 'o historico de cada uma usa o evento proprio');
+  conf(/em lote de/.test(lote), 'e registra que veio de um lote, com o tamanho');
+}
+
 console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══`);
 process.exitCode = falhou ? 1 : 0;

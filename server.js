@@ -65,6 +65,7 @@ const solCor = require('./lib/solicitacao-correcao');
 const sigef = require('./lib/sigef');
 const dispensa = require('./lib/dispensa');
 const arquivamento = require('./lib/arquivamento');
+const ciSgpe = require('./lib/ci-sgpe');
 const gestao = require('./lib/gestao');
 const sgpeSit = require('./lib/sgpe-situacao');
 
@@ -6473,6 +6474,139 @@ app.post('/pc/:id/engenharia', async (req, res) => {
     try { await cli.query('ROLLBACK') } catch (_) {}
     res.status(500).json({ data: null, error: { message: e.message } });
   } finally { cli.release() }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  A DEVOLUTIVA DO C.I. PROVADA PELA TRAMITAÇÃO DO SGPe  (28/09/2026)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A regra inteira mora em `lib/ci-sgpe.js` — inclusive o porquê. Aqui ficam as duas rotas.
+//
+// ⚠️ SÃO DUAS, E NÃO UMA, de propósito: a primeira CONFERE e não escreve nada, e é ela que a
+// tela chama para desenhar a pergunta com as datas à vista. A segunda registra. Um botão que
+// só descobre o impedimento depois do clique é o beco da armadilha 15.
+
+// GET /parcela/ci_sgpe?tr=&parcial_num=&setorial_id=&usuario_id=
+app.get('/parcela/ci_sgpe', async (req, res) => {
+  try {
+    const q = req.query || {};
+    const setorial_id = q.setorial_id || 'FCEE';
+    if (!q.tr || q.parcial_num == null)
+      return res.status(400).json({ data: null, error: { message: 'tr e parcial_num são obrigatórios' } });
+
+    const { rows: pcs } = await pool.query(
+      `SELECT codigo_pc, tr, parcial_num, analista_id, baixada, parecer_tipo, ci_situacao,
+              arquivada, processo_pc
+         FROM prestacoes_contas
+        WHERE setorial_id = $1 AND tr = $2 AND parcial_num = $3 AND ${inval.ativa('')}
+        ORDER BY codigo_pc`, [setorial_id, q.tr, String(q.parcial_num)]);
+    if (!pcs.length) return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada.' } });
+
+    const quem = await lerUsuario(pool, q.usuario_id);
+    const perfil = papel.perfilEfetivo(quem);
+    const perm = ciSgpe.podeRegistrar(quem, perfil, pcs);
+    const impedimento = ciSgpe.estadoPermite(pcs);
+
+    // O processo da parcela. Se as PCs discordarem, vale a primeira — elas compartilham o
+    // processo por definição, e a divergência é assunto do lápis, não daqui.
+    const bruto = (pcs.find((p) => p.processo_pc) || {}).processo_pc || '';
+    const chave = bruto ? chavesDeValores([bruto]).get(bruto) : null;
+    let tram = [], sit = null;
+    if (chave) {
+      const [t, s2] = await Promise.all([
+        pool.query(ciSgpe.SQL_TRAMITACAO, [chave.sigla, chave.numero, chave.ano]),
+        pool.query(ciSgpe.SQL_SITUACAO, [chave.sigla, chave.numero, chave.ano]),
+      ]);
+      tram = t.rows; sit = s2.rows[0] || null;
+    }
+    const prova = bruto
+      ? ciSgpe.analisarTramitacao(tram, sit && sit.setor_sigla)
+      : { prova: false, entrada: null, saida: null, motivo: ciSgpe.MOTIVOS.SEM_PROCESSO };
+
+    res.json({ data: {
+      tr: q.tr, parcial_num: String(q.parcial_num), setorial_id, pcs: pcs.length,
+      processo: bruto || null,
+      setor_atual: sit ? sit.setor_sigla : null, setor_nome: sit ? sit.setor_nome : null,
+      lido_em: sit ? sit.checado_em : null,
+      tramitacoes: tram.length,
+      ...prova,
+      // `pode` é a conjunção das três: quem clica, o estado da parcela e a prova do SGPe.
+      pode: !!(perm.pode && !impedimento && prova.prova),
+      motivo: perm.pode ? (impedimento || prova.motivo) : perm.motivo,
+    }, error: null });
+  } catch (e) { res.status(500).json({ data: null, error: { message: e.message } }); }
+});
+
+// POST /parcela/ci_sgpe  body { tr, parcial_num, setorial_id?, usuario_id }
+app.post('/parcela/ci_sgpe', async (req, res) => {
+  const cli = await pool.connect();
+  try {
+    const b = req.body || {};
+    const setorial_id = b.setorial_id || 'FCEE';
+    if (!b.tr || b.parcial_num == null)
+      return res.status(400).json({ data: null, error: { message: 'tr e parcial_num são obrigatórios' } });
+    if (await barrouPreparacao(res, b.usuario_id)) return;
+
+    await cli.query('BEGIN');
+    // ⚠️ RELÊ TUDO DENTRO DA TRANSAÇÃO, com lock: a conferência da rota GET serve para
+    // DESENHAR a pergunta, e entre uma coisa e outra o rodízio pode ter relido o processo e
+    // achado que ele voltou ao C.I. Quem manda na escrita é o que se lê aqui.
+    const { rows: pcs } = await cli.query(
+      `SELECT codigo_pc, tr, parcial_num, analista_id, baixada, parecer_tipo, ci_situacao,
+              arquivada, processo_pc
+         FROM prestacoes_contas
+        WHERE setorial_id = $1 AND tr = $2 AND parcial_num = $3 AND ${inval.ativa('')}
+        ORDER BY codigo_pc FOR UPDATE`, [setorial_id, b.tr, String(b.parcial_num)]);
+    if (!pcs.length) { await cli.query('ROLLBACK');
+      return res.status(404).json({ data: null, error: { message: 'Parcial não encontrada.' } }); }
+
+    const quem = await lerUsuario(cli, b.usuario_id);
+    const perfil = papel.perfilEfetivo(quem);
+    const perm = ciSgpe.podeRegistrar(quem, perfil, pcs);
+    if (!perm.pode) { await cli.query('ROLLBACK');
+      return res.status(perm.status).json({ data: null, error: { message: perm.motivo } }); }
+
+    const impedimento = ciSgpe.estadoPermite(pcs);
+    if (impedimento) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: impedimento } }); }
+
+    const bruto = (pcs.find((p) => p.processo_pc) || {}).processo_pc || '';
+    const chave = bruto ? chavesDeValores([bruto]).get(bruto) : null;
+    if (!chave) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: ciSgpe.MOTIVOS.SEM_PROCESSO } }); }
+    const [t, s2] = await Promise.all([
+      cli.query(ciSgpe.SQL_TRAMITACAO, [chave.sigla, chave.numero, chave.ano]),
+      cli.query(ciSgpe.SQL_SITUACAO, [chave.sigla, chave.numero, chave.ano]),
+    ]);
+    const prova = ciSgpe.analisarTramitacao(t.rows, s2.rows[0] && s2.rows[0].setor_sigla);
+    if (!prova.prova) { await cli.query('ROLLBACK');
+      return res.status(409).json({ data: null, error: { message: prova.motivo } }); }
+
+    const { rows: mudou } = await cli.query(ciSgpe.SQL_REGISTRAR,
+      [setorial_id, b.tr, String(b.parcial_num), prova.entrada || prova.saida, quem.id, prova.saida]);
+
+    // ⚠️ O EVENTO TEM NOME PRÓPRIO — `ci_pelo_sgpe` —, e não é `ci_decidiu`: quem varrer o
+    // histórico atrás de decisão do Controle Interno NÃO pode encontrar isto no meio. A
+    // diferença entre "o C.I. decidiu" e "o SGPe mostra que o processo voltou" é o coração
+    // desta frente.
+    await registrarHistorico(cli, {
+      tr: b.tr, parcial_num: String(b.parcial_num), setorial_id,
+      evento: 'ci_pelo_sgpe',
+      valor_anterior: pcs[0].ci_situacao || null,
+      valor_novo: 'encerrado',
+      analista_id: pcs[0].analista_id ?? null,
+      observacao: `Devolutiva registrada pela tramitação do SGPe · ${bruto} · entrou no C.I. em `
+        + `${prova.entrada || '—'} e saiu em ${prova.saida} · ${mudou.length} PC`
+        + `${mudou.length > 1 ? 's' : ''} · registrado por ${quem.nome}`,
+      executado_por: (pcs[0].analista_id != null && String(pcs[0].analista_id) !== String(quem.id)) ? quem.id : null,
+    });
+    await cli.query('COMMIT');
+    res.json({ data: { pcs: mudou.length, processo: bruto, entrada: prova.entrada, saida: prova.saida,
+      codigos: mudou.map((r) => r.codigo_pc) }, error: null });
+  } catch (e) {
+    try { await cli.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ data: null, error: { message: e.message } });
+  } finally { cli.release(); }
 });
 
 app.post('/parcela/ci', async (req, res) => {

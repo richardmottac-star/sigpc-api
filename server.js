@@ -2330,6 +2330,26 @@ app.patch('/notificacao/:id', async (req, res) => {
   }
 });
 
+// POST /notificacao/marcar_lidas  body { destinatario_id, ids: [] }
+//
+// O QUE O SINO ACABOU DE MOSTRAR — 27/09/2026. O painel chama isto pouco depois de abrir, com
+// os ids que estao na tela.
+//
+// ⚠️ NAO E O `marcar_todas` COM OUTRO NOME: aquele alcanca a caixa inteira, inclusive o que a
+// pessoa nunca viu. Este alcanca so o que passou na frente dela, e e por isso que a lista de
+// ids vem da tela em vez de o servidor decidir sozinho.
+app.post('/notificacao/marcar_lidas', async (req, res) => {
+  try {
+    const { destinatario_id, ids } = req.body || {};
+    if (!destinatario_id)
+      return res.status(400).json({ data: null, error: { message: 'destinatario_id é obrigatório' } });
+    const n = await notif.marcarLidas(pool, destinatario_id, ids);
+    res.json({ data: { marcadas: n }, error: null });
+  } catch (e) {
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
 // POST /notificacao/marcar_todas  body { destinatario_id }
 app.post('/notificacao/marcar_todas', async (req, res) => {
   try {

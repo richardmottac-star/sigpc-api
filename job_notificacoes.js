@@ -90,7 +90,15 @@ const notificacao = require('./lib/notificacao');
 // O que some é o AVISO, não o fato: a decisão em si (quem aprovou, quando, com que motivo)
 // fica em `solicitacao_vaga`, permanente. Por isso não há botão de excluir por item — como
 // nos pedidos expirados, o registro pode servir de prova.
-const DIAS_GUARDA_LIDA = 15;
+// ⚠️ 15 -> 60 EM 27/09/2026, e o motivo e o sino passar a marcar como lido AO ABRIR (decisao
+// do Richard, opcao "a"). Com a marcacao no clique, "lida" significava lida; ao abrir, passa a
+// significar "esteve na sua frente" — e apagar isso em 15 dias faria sumir recado que ninguem
+// leu de fato. Sessenta dias e tempo de quem voltou de ferias reencontrar o que perdeu.
+//
+// ⚠️ ISTO AFROUXA O DEDUPE DA COBRANCA, e para melhor: o dedupe mora na propria tabela, entao
+// a linha durar mais significa o job LEMBRAR por mais tempo que ja avisou. O teto de
+// DILIG_COBRANCA_ATE continua mandando.
+const DIAS_GUARDA_LIDA = 60;
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════

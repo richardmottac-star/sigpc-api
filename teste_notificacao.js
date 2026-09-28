@@ -181,7 +181,10 @@ function db(resposta) {
          'o relogio conta a partir da leitura, e o parametro leva o tipo escrito');
     conf(!/criado_em/.test(sql), 'a data de criacao nao entra na conta');
 
-    conf(J.DIAS_GUARDA_LIDA === 15, 'o prazo e 15 dias, no mesmo bloco do CORTE_PRAZO');
+    // ⚠️ 15 -> 60 EM 27/09/2026, e a checagem mudou porque a DECISAO mudou: o sino passou a
+    // marcar como lido AO ABRIR, entao "lida" deixou de significar "lida" e passou a significar
+    // "esteve na sua frente". Apagar isso em 15 dias faria sumir recado que ninguem leu.
+    conf(J.DIAS_GUARDA_LIDA === 60, 'o prazo e 60 dias, no mesmo bloco do CORTE_PRAZO');
 
     const quebrado = { query: async () => { throw new Error('nope') } };
     conf(await N.limparLidas(quebrado, 15) === 0, 'falha no banco devolve 0 sem derrubar o job');
@@ -191,8 +194,15 @@ function db(resposta) {
   {
     const d = db({ rows: [] });
     await N.listar(d, 57, 15);
-    conf(/ORDER BY \(lida_em IS NULL AND urgente\) DESC, criado_em DESC/.test(d.ch[0].sql),
-         'o que e urgente e ainda nao foi lido nao pode cair na pagina 2');
+    // ⚠️ A URGENCIA GANHOU PRAZO em 27/09/2026. Sem ele, o urgente nao lido ficava no topo PARA
+    // SEMPRE, porque ninguem marca aviso antigo como lido: 465 avisos grudados, em 49 das 56
+    // pessoas, o mais velho de 12/08 — e o recado do dia nascia na NONA linha da caixa da Geisa.
+    conf(/ORDER BY \(lida_em IS NULL AND urgente AND criado_em > NOW\(\)/.test(d.ch[0].sql),
+         'o urgente RECENTE e nao lido nao pode cair na pagina 2');
+    conf(d.ch[0].sql.includes(`INTERVAL '1 day' * ${N.URGENTE_DIAS}`),
+         'e a janela sai da constante, nao de um numero solto na consulta');
+    conf(N.URGENTE_DIAS === 7, 'que hoje e de 7 dias');
+    conf(/criado_em DESC/.test(d.ch[0].sql), 'passado o prazo, quem manda e a data');
 
     const teto = db({ rows: [] });
     await N.listar(teto, 57, 99999);

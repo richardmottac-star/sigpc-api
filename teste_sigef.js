@@ -16,10 +16,14 @@ const conf = (x, r, d) => { x ? ok++ : falhou++; console.log(`  ${x ? 'OK  ' : '
 const secao = (t) => console.log(`\n=== ${t} ===`);
 
 // As quatro formas de PC que importam. Datas ANTES do corte, salvo onde dito.
-const VERMELHA = { codigo_pc: 'A', tipo: 'parcial', baixada: true, sigef_status: null, data_baixa: '2026-06-30' };
-const AZUL     = { codigo_pc: 'B', tipo: 'final',   baixada: true, sigef_status: null, data_baixa: '2026-06-30' };
+// ⚠️ AS BAIXADAS GANHARAM `parecer_tipo` EM 30/09/2026, quando a regua passou a exigir o
+// parecer (itens A2, A5 e E3 do documento). Nao e detalhe de duble: quem grava o parecer grava
+// a baixa no MESMO UPDATE, entao PC baixada SEM parecer so existe na carga historica — 24 no
+// acervo inteiro. Um duble sem parecer representaria a excecao, e nao a PC de todo dia.
+const VERMELHA = { codigo_pc: 'A', tipo: 'parcial', baixada: true, parecer_tipo: 'Parecer Regular', sigef_status: null, data_baixa: '2026-06-30' };
+const AZUL     = { codigo_pc: 'B', tipo: 'final',   baixada: true, parecer_tipo: 'Parecer Regular', sigef_status: null, data_baixa: '2026-06-30' };
 const AMBAR    = { codigo_pc: 'C', tipo: 'parcial', baixada: false, sigef_status: 'Baixa Regular', data_baixa: null };
-const OK_PC    = { codigo_pc: 'D', tipo: 'parcial', baixada: true, sigef_status: 'Baixa Regular', data_baixa: '2026-06-30' };
+const OK_PC    = { codigo_pc: 'D', tipo: 'parcial', baixada: true, parecer_tipo: 'Parecer Regular', sigef_status: 'Baixa Regular', data_baixa: '2026-06-30' };
 
 secao('1. AS TRES SITUACOES');
 {
@@ -91,9 +95,13 @@ secao('3-B. A PRODUTIVIDADE CONCILIADA COM O SIGEF');
   const baixadaOk = { ...OK_PC };                                  // baixada, sem tag
   const soCi = { codigo_pc: 'E', tipo: 'parcial', baixada: false, enviado_ci: true, sigef_status: null, data_baixa: null };
 
-  // A base nao mudou: PC distinta com baixada OU enviado_ci.
-  conf(s.baseProdutividade(baixadaOk) === true, 'baixada entra na base');
-  conf(s.baseProdutividade(soCi) === true, 'enviada ao C.I. sem baixa TAMBEM entra na base');
+  // ⚠️ A BASE MUDOU EM 30/09/2026: era `baixada OU enviado_ci`, e passou a ser `baixada E COM
+  // PARECER`. Nao e defeito corrigido — e a regua do documento de 18/09 (itens A2, A5 e E3),
+  // confirmada pela coordenacao: encaminhar ao Controle Interno deixou de ser producao.
+  conf(s.baseProdutividade(baixadaOk) === true, 'baixada com parecer entra na base');
+  conf(s.baseProdutividade(soCi) === false, 'enviada ao C.I. sem baixa NAO entra mais');
+  conf(s.baseProdutividade({ baixada: true, parecer_tipo: null }) === false,
+       'e baixada SEM parecer tambem nao — as 24 da carga historica');
   conf(s.baseProdutividade({ baixada: false, enviado_ci: false }) === false, 'nem baixada nem no C.I. fica fora');
 
   // ⚠️ O DESCONTO: as duas pendencias saem enquanto nao houver declaracao.
@@ -114,12 +122,14 @@ secao('3-B. A PRODUTIVIDADE CONCILIADA COM O SIGEF');
   conf(s.contaProdutividade(AMBAR) === false, 'entao nao conta');
   conf(s.descontadaPeloSigef(AMBAR) === false, 'e NAO e "descontada" — nunca esteve na conta');
   // Se o analista registrar o parecer aqui, ela entra pelo caminho normal.
-  conf(s.contaProdutividade({ ...AMBAR, baixada: true }) === true,
+  conf(s.contaProdutividade({ ...AMBAR, baixada: true, parecer_tipo: 'Parecer Regular' }) === true,
        'confirmado o parecer, a ambar entra pelo caminho de sempre');
+  // ⚠️ E BAIXAR SEM PARECER NAO BASTA: o que conta e o parecer, nao a marca de baixada.
+  conf(s.contaProdutividade({ ...AMBAR, baixada: true }) === false, 'baixar sem parecer nao a traz');
 
   // Nada muda para quem nao tem tag.
   conf(s.contaProdutividade(baixadaOk) === true, 'PC sem tag continua contando');
-  conf(s.contaProdutividade(soCi) === true, 'e a que so foi ao C.I. tambem');
+  conf(s.contaProdutividade(soCi) === false, 'e a que so foi ao C.I. deixou de contar');
 
   // ⚠️ A LISTA DE DESCONTO TEM DUAS TAGS, e so duas. Um dia alguem vai querer por a ambar
   // aqui "para ficar completo" — e ai a PC seria descontada de uma conta em que nunca entrou.
@@ -143,8 +153,11 @@ secao('3-C. O SQL DA PRODUTIVIDADE');
   for (const t of s.TAGS_QUE_DESCONTAM) conf(listaNotIn.includes(t), `a tag ${t} sai da conta`);
   conf(!listaNotIn.includes(s.TAGS.ABERTA_COM_BAIXA_SIGEF), 'a ambar NAO esta na lista de desconto');
   conf(!listaNotIn.includes(s.TAGS.REGISTRO_DECLARADO), 'nem a declarada');
-  conf(/baixada = true OR p\.enviado_ci = true/.test(s.SQL_BASE_PRODUTIVIDADE),
-       'a base e baixada OU enviado_ci — a regra do projeto, intacta');
+  conf(/baixada = true AND p\.parecer_tipo IS NOT NULL/.test(s.SQL_BASE_PRODUTIVIDADE),
+       'a base e baixada E com parecer — a regua de 18/09/2026');
+  // ⚠️ O `enviado_ci` NAO PODE VOLTAR AQUI. Se voltar, o encaminhamento conta de novo e a
+  // tela passa a dizer um numero que o documento acordado nao sustenta.
+  conf(!/enviado_ci/.test(s.SQL_BASE_PRODUTIVIDADE), 'e o enviado_ci saiu da base');
   conf(s.SQL_CONTA_PRODUTIVIDADE.includes(s.SQL_BASE_PRODUTIVIDADE.trim()),
        'e a conta e construida SOBRE a base, nao reescrita ao lado');
 }
@@ -156,8 +169,11 @@ secao('3-D. A CONTA "ATE UMA DATA" — as DUAS pernas da regra');
   // forma estrutural, a PC que conta SO por ter ido ao C.I.: ela tem `dt_envio_ci`, nao
   // `data_baixa`. Era metade da regra escrita, e a rota dizia implementa-la inteira.
   conf(/data_baixa <= \$1/.test(b), 'a perna da baixa corta por data_baixa');
-  conf(/enviado_ci = true and p\.dt_envio_ci <= \$1/i.test(b), 'a perna do C.I. corta por dt_envio_ci');
-  conf(/ OR /i.test(b), 'e as duas sao ligadas por OR — a regra escrita');
+  // ⚠️ A PERNA DO C.I. SAIU EM 30/09/2026, junto com a da base. Enquanto ela existiu, a regra
+  // tinha dois fatos com duas datas; hoje a producao e um fato so, e ele tem uma data so.
+  conf(!/dt_envio_ci/.test(b), 'e a perna do C.I. nao existe mais');
+  conf(/parecer_tipo IS NOT NULL/.test(b), 'o parecer entra na conta ate-a-data');
+  conf(!/ OR /i.test(b), 'e nao ha mais OR — e uma perna so');
   conf(!/dt_envio_ci <= \$1[\s\S]*data_baixa <= \$1[\s\S]*dt_envio_ci/.test(b), 'sem perna repetida');
 
   // ⚠️ A PERNA DA BAIXA NAO PODE GANHAR `baixada = true`. A rota e CUMULATIVA: quem responde
@@ -168,7 +184,7 @@ secao('3-D. A CONTA "ATE UMA DATA" — as DUAS pernas da regra');
 
   // O parametro e respeitado: trocar o placeholder troca em todas as ocorrencias.
   const b2 = s.sqlBaseAte('$7');
-  conf(!/\$1/.test(b2) && (b2.match(/\$7/g) || []).length === 2, 'o placeholder e parametrizavel');
+  conf(!/\$1/.test(b2) && (b2.match(/\$7/g) || []).length === 1, 'o placeholder e parametrizavel');
 
   // A conta e a descontada se constroem SOBRE a base — nao sao reescritas ao lado.
   conf(s.sqlContaAte('$1').includes(b), 'a conta ate-a-data usa a mesma base');
@@ -181,7 +197,8 @@ secao('3-E. PC NA ENGENHARIA NAO CONTA (11/09/2026)');
   const naEng = { ...OK_PC, eng_situacao: 'na_engenharia', eng_enviada_em: '2026-09-09' };
   conf(s.contaProdutividade(OK_PC) === true, 'a baixada sem tag conta');
   conf(s.contaProdutividade(naEng) === false, 'a mesma PC na engenharia NAO conta — mesmo baixada');
-  conf(s.contaProdutividade({ ...naEng, eng_situacao: null }) === true, 'voltou da engenharia, conta de novo');
+  conf(s.contaProdutividade({ ...naEng, eng_situacao: null, parecer_tipo: 'Parecer Regular' }) === true,
+       'voltou da engenharia, conta de novo');
   // ⚠️ IS DISTINCT FROM: eng_situacao e NULL em quase todas; `<>` zeraria a produtividade.
   conf(s.SQL_CONTA_PRODUTIVIDADE.includes(s.SQL_FORA_ENGENHARIA), 'o card desconta a engenharia');
   conf(/IS DISTINCT FROM 'na_engenharia'/.test(s.SQL_FORA_ENGENHARIA), 'e protege o NULL com IS DISTINCT FROM');
@@ -214,7 +231,7 @@ secao('4. QUEM PODE DECLARAR');
 
 secao('4B. BAIXA ANTERIOR AO GT, E NL COM RESIDUAL (30/08/2026)');
 {
-  const base = { baixada: true, tipo: 'parcial', sigef_status: 'SV', data_baixa: '2026-06-30' };
+  const base = { baixada: true, parecer_tipo: 'Parecer Regular', tipo: 'parcial', sigef_status: 'SV', data_baixa: '2026-06-30' };
   // A data e a data_baixa_sigef, NUNCA a data_baixa: esta ultima e 30/06/2026 em 3.604 PCs
   // (o dia da carga) e classificaria o acervo inteiro pelo dia da importacao.
   conf(s.INICIO_GT === '2025-08-12', 'o GT comecou em 12/08/2025 — Portaria FCEE no 227');

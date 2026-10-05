@@ -115,10 +115,16 @@ secao('7. A TELA');
 {
   const html = fs.readFileSync('../sigpc-gt/index.html', 'utf8');
   conf(/function ehDispensado\(u\)/.test(html), 'a tela tem o predicado da dispensa');
-  conf(/function contaMeta\(u\)/.test(html), 'e o da meta');
-  // ⚠️ A META DO DISPENSADO VIRA ZERO — e com ela o percentual, o anel e o "faltam N".
-  conf(/contaMeta\(u\) \? \(metaPorId\[analistaId\] \|\| 0\) : 0/.test(html),
-       'o dispensado nao recebe meta no calculo');
+  // ⚠️ A REGRA DA META MUDOU EM 30/09/2026, e com ela estas duas checagens. Ate aqui a tela
+  // zerava a meta do dispensado (`contaMeta`), decisao de 28/08. A regua do documento de
+  // 18/09, confirmada pela coordenacao, diz o oposto: a meta dele CONGELA na data da portaria
+  // (itens B4 e B8) e ele continua somando no grupo — tirar a meta dele fazia a soma do grupo
+  // cair sem que ninguem tivesse deixado de trabalhar.
+  conf(!/function contaMeta\(u\)/.test(html), 'a contaMeta saiu da tela');
+  conf(/const meta = metaPorId\[analistaId\] \|\| 0/.test(html),
+       'e a meta vem da regua, inclusive para o dispensado');
+  // Quem continua respondendo pela dispensa e o `ehDispensado`, que marca a pessoa nas listas.
+  conf(/A `contaMeta` SAIU EM 30\/09\/2026/.test(html), 'com a nota dizendo onde a regra foi parar');
   conf(/function tagPessoa\(u, opts\)/.test(html), 'ha UM componente de tag de pessoa');
   conf(/Dispensado<\/span>/.test(html), 'com a tag cinza "Dispensado"');
   conf(/Substituto<\/span>/.test(html), 'e a tag verde "Substituto"');

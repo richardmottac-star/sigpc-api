@@ -64,6 +64,7 @@ const pcNova = require('./lib/pc-nova');
 const solCor = require('./lib/solicitacao-correcao');
 const sigef = require('./lib/sigef');
 const dispensa = require('./lib/dispensa');
+const meta = require('./lib/meta');
 const arquivamento = require('./lib/arquivamento');
 const ciSgpe = require('./lib/ci-sgpe');
 const gestao = require('./lib/gestao');
@@ -186,6 +187,87 @@ app.get('/substituicao', async (req, res) => {
     // quebrar: ela simplesmente não pinta tag nenhuma.
     if (/relation .* does not exist/i.test(e.message))
       return res.json({ data: [], count: 0, error: null });
+    res.status(500).json({ data: null, error: { message: e.message } });
+  }
+});
+
+
+// ══════════════════════════════════════
+//  A RÉGUA DE PRODUTIVIDADE
+// ══════════════════════════════════════
+//
+// GET /produtividade/regua?ate=YYYY-MM-DD&de=YYYY-MM-DD
+//
+// A META DE CADA INTEGRANTE, PRONTA — com a origem do número ao lado.
+//
+// ⚠️ A TELA NÃO CALCULA META (armadilha 16). Até 30/09/2026 ela somava as linhas de
+// `metas_analistas` por `analista_id` e decidia sozinha que o dispensado recebia zero. A
+// régua do documento de 18/09 diz o contrário — a meta dele CONGELA na data de saída, e ele
+// continua somando no grupo —, e uma conta escrita na tela é uma conta que nenhum teste do
+// servidor alcança.
+//
+// ⚠️ `metas_analistas` E `usuarios.meta_mensal` NÃO SÃO LIDAS AQUI, e isso é deliberado:
+// elas ficam como registro do que valia antes. Duas fontes vivas para o mesmo número é o
+// defeito que a segunda cópia sempre cria — a lição do MAPA_PLAN_EST e das duas definições
+// de "livre" que abriram o vão das 87 PCs.
+//
+// ⚠️ E É UMA LEITURA SÓ, para os dois lados da conta chegarem do mesmo instante: a lista de
+// quem é apurado e as portarias que dão as datas.
+app.get('/produtividade/regua', async (req, res) => {
+  try {
+    // O fim do mês corrente quando não vier nada — é o que faz a meta subir 10 por mês sem
+    // ninguém digitar (item 2 do documento).
+    const dia = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const ate = dia(req.query.ate) || meta.ateHoje();
+    // ⚠️ `de` É A LEITURA DO PERÍODO, e só o relatório do CGE a pede (itens C1, D1 e E1 da
+    // resposta de 17/09): o trimestre ao lado do acumulado. Sem ele a rota responde só o
+    // acumulado, que é o que a Produtividade e o Board mostram.
+    const de = dia(req.query.de);
+    const [us, subs] = await Promise.all([
+      pool.query(`SELECT id, nome, perfil, grupo, ativo FROM usuarios`),
+      pool.query(dispensa.SQL_SUBSTITUICOES),
+    ]);
+    const metas = meta.metasDe(us.rows, subs.rows, ate, de);
+    const total = Object.values(metas).reduce((a, m) => a + m.meta, 0);
+    // A meta de cada GRUPO, somada aqui e não na tela: o Board precisa dela para pôr a meta
+    // em linha própria, e somar lá seria a tela refazendo a conta do servidor.
+    const grupoDe = {};
+    for (const u of us.rows) grupoDe[Number(u.id)] = u.grupo == null ? null : String(u.grupo);
+    const porGrupo = {}, porGrupoPeriodo = {};
+    for (const m of Object.values(metas)) {
+      const g = grupoDe[m.analista_id];
+      if (g == null) continue;
+      porGrupo[g] = (porGrupo[g] || 0) + m.meta;
+      if (m.meta_periodo != null) porGrupoPeriodo[g] = (porGrupoPeriodo[g] || 0) + m.meta_periodo;
+    }
+    res.json({ data: {
+      ate,
+      de,
+      metas,
+      total_meta: total,
+      total_meta_periodo: de
+        ? Object.values(metas).reduce((a, m) => a + (m.meta_periodo || 0), 0)
+        : null,
+      meta_por_grupo: porGrupo,
+      meta_periodo_por_grupo: de ? porGrupoPeriodo : null,
+      apurados: Object.keys(metas).length,
+      // ⚠️ A RÉGUA VIAJA COM OS NÚMEROS. É o que o botão "Fonte" da tela mostra quando
+      // alguém perguntar de onde saiu a meta dele — número que a pessoa não consegue
+      // conferir é número em que ela não pode confiar.
+      regra: {
+        documento: 'REGRA_PRODUTIVIDADE_GT_IMPLANTACAO, de 18/09/2026, confirmada pela coordenação em 27/09/2026',
+        inicio: '2025-08-01',
+        por_mes: '12 de ago a dez/2025 · zero em jan/2026 · 10 de fev/2026 em diante',
+        proporcional: 'por dias, sobre base 30, para quem entrou ou saiu no meio',
+        dispensado: 'a meta congela na data de saída, e ele continua somando no grupo',
+        datas: 'as portarias de substituição; sem portaria, integrante desde 01/08/2025',
+        fora: 'coordenador e Controle Interno não entram na apuração',
+        duas_leituras: 'o acumulado desde 01/08/2025 e o período fechado — o trimestre do relatório da CGE',
+        sem_data_confiavel: 'as baixas de origem ' + meta.ORIGENS_SEM_DATA_CONFIAVEL.join(' e ')
+          + ' têm a data da carga, não a do trabalho: entram no acumulado e ficam fora do trimestre',
+      },
+    }, error: null });
+  } catch (e) {
     res.status(500).json({ data: null, error: { message: e.message } });
   }
 });

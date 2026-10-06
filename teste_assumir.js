@@ -20,8 +20,8 @@ conf(as.nomeCurto('Sandra Paul') === 'Sandra Paul', 'e os de nome composto ficam
 conf(as.nomeCurto('Fulano de Tal Silva') === 'Fulano', 'quem nao esta no mapa entra pelo primeiro nome');
 conf(as.nomeCurto('  Richard Motta Coelho  ') === 'Richard', 'espaco em volta nao atrapalha');
 conf(as.nomeCurto('') === null && as.nomeCurto(null) === null, 'vazio devolve null');
-conf(Object.keys(as.MAPA_NOME).length === 10,
-     'o mapa tem 10: os 8 que a tela tinha + Goreti e Janaina, medidos em 16/08');
+conf(Object.keys(as.MAPA_NOME).length === 11,
+     'o mapa tem 11: os 8 da tela + Goreti e Janaina (16/08) + Clara Cristina (06/10)');
 
 // ⚠️ AS TRES CHAVES QUE NUNCA DISPARAVAM — corrigido em 16/08/2026.
 //
@@ -50,7 +50,11 @@ conf(as.nomeCurto('Janaína Frederico Dittrich') === 'Janaina',
 // ⚠️ NENHUMA CHAVE PODE SER UM NOME CURTO SOLTO. Uma chave que nao existe em `usuarios.nome`
 // nao da erro — so devolve outro nome. Este teste e a trava contra a volta do defeito: toda
 // chave tem de ter sobrenome, ou ser um cadastro que realmente e assim tao curto.
-const CADASTROS_CURTOS = ['Sandra Paul', 'Grace Oliveira'];   // conferidos no banco em 16/08
+// ⚠️ CADASTROS DE DUAS PALAVRAS, conferidos no banco. A Clara entrou em 06/10/2026: o
+// cadastro dela era 'Cris' e foi corrigido para 'Clara Cristina', com as 208 PCs do acervo
+// indo junto. Sem a entrada no mapa, a proxima TR assumida gravaria "Clara" e ela passaria a
+// ter dois rotulos no proprio acervo.
+const CADASTROS_CURTOS = ['Sandra Paul', 'Grace Oliveira', 'Clara Cristina'];
 Object.keys(as.MAPA_NOME).forEach(k => {
   conf(k.split(' ').length >= 3 || CADASTROS_CURTOS.includes(k),
        `a chave "${k}" e um usuarios.nome, nao um apelido`);

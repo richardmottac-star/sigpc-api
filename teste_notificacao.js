@@ -432,6 +432,22 @@ function db(resposta) {
          'e o banco fora do ar devolve lista vazia, nao estoura');
   }
 
+  console.log('\n═══ A JANELA DE 24 H DO SINO (07/10/2026) ═══');
+  {
+    const fnSrc = fs.readFileSync('./lib/notificacao.js', 'utf8');
+    const k = fnSrc.indexOf('async function listar(');
+    const fn = fnSrc.slice(k, fnSrc.indexOf('/**', k));
+    // ⚠️ O SINO DEIXOU DE ESCONDER NA HORA o que acabou de marcar como lido. Dois analistas no
+    // mesmo dia disseram "nao recebi" sobre aviso que tinham aberto minutos antes.
+    conf(/INTERVAL .1 hour./.test(fn), 'a consulta do sino tem a janela em horas');
+    conf(N.HORAS_AINDA_NO_SINO === 24, 'e a janela e de 24 horas');
+    // ⚠️ A JANELA NAO DESFAZ A MARCACAO: continua lida, o contador continua caindo e o relogio
+    // dos dias de guarda continua correndo. Muda so o que o sino DESENHA.
+    conf(/lida_em IS NULL/.test(fn), 'as nao lidas continuam entrando pela regra de sempre');
+    const limpar = fnSrc.slice(fnSrc.indexOf('async function limparLidas('));
+    conf(/lida_em IS NOT NULL/.test(limpar), 'e o expurgo continua olhando lida_em, nao a janela');
+  }
+
   console.log(`\n═══ RESULTADO: ${ok} passaram · ${falhou} falharam ═══\n`);
   process.exit(falhou ? 1 : 0);
 })();

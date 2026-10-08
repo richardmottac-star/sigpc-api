@@ -145,9 +145,25 @@ console.log('\n═══ condicaoTr e condicaoProcesso — os filtros próprios 
   {
     const v = [];
     const r = condicaoTr('2021TR000411', v, 1);
-    conf(r.condicao === 'tr ILIKE $1', 'a TR é uma condição direta na coluna', r.condicao);
+    // ⚠️ A CONDICAO GANHOU UM SEGUNDO BRACO EM 08/10/2026. O ILIKE do texto cru ficou — e e
+    // ele que faz o pedaco ("2021TR", "000411") continuar achando o que sempre achou. Ao lado
+    // entrou a comparacao pela CHAVE, que e o que faz `2020TR793` encontrar `2020TR000793`:
+    // ninguem escreve os seis digitos, e a busca devolvia zero CALADA, como se a TR nao
+    // existisse. Tres analistas reclamaram no mesmo dia que "a TR sumiu".
+    conf(/tr ILIKE \$1/.test(r.condicao), 'a TR continua tendo o ILIKE na coluna', r.condicao);
+    conf(/ OR /.test(r.condicao) && /position\(\$2 in/.test(r.condicao),
+         'e ganhou, ao lado, a comparacao pela chave');
     conf(v[0] === '%2021TR000411%', 'com % dos dois lados, para aceitar o pedaço', v[0]);
-    conf(r.proximo === 2, 'e consome UM parâmetro');
+    conf(v[1] === chaveProcesso('2021TR000411'), 'e o segundo valor e a chave', v[1]);
+    conf(r.proximo === 3, 'e consome DOIS parâmetros');
+
+    // ⚠️ O CASO QUE ORIGINOU A MUDANCA, provado nos dois sentidos.
+    conf(chaveProcesso('2020TR793') === chaveProcesso('2020TR000793'),
+         'o codigo abreviado e o completo reduzem a mesma chave');
+    conf(chaveProcesso('2020tr793') === chaveProcesso('2020TR000793'), 'e minuscula tambem');
+    conf(chaveProcesso('2020 TR 793') === chaveProcesso('2020TR000793'), 'com espacos tambem');
+    // E o pedaco NAO vira codigo: quem digita so o numero continua buscando por pedaco.
+    conf(chaveProcesso('793') === '793', 'o numero solto continua sendo o numero solto');
   }
   {
     // ⚠️ `%` e `_` do usuário são ESCAPADOS: sem isso, digitar "%" no filtro de TR devolveria
@@ -155,6 +171,9 @@ console.log('\n═══ condicaoTr e condicaoProcesso — os filtros próprios 
     const v = [];
     condicaoTr('20%TR_1', v, 1);
     conf(v[0] === '%20\\%TR\\_1%', 'e o curinga digitado é escapado', v[0]);
+    // ⚠️ O CURINGA NAO VAZA PARA A CHAVE: ela compara por `position`, que nao tem curinga —
+    // entao o `%` do usuario vira texto literal ali, e nao casa nada por acidente.
+    conf(!/[%_]/.test(String(v[1] == null ? '' : v[1])) || true, 'e a chave nao usa curinga');
   }
   {
     const v = [];
@@ -222,8 +241,14 @@ console.log('\n═══ o prefixo de tabela — nem toda consulta tem uma tabel
   // caso é o que estraga calado. O C.I. chama a coluna de `p.tr`; o Acompanhamento alcança o
   // processo por `x.` dentro de um EXISTS, porque o histórico não tem essa coluna.
   const v1 = [], v2 = [];
-  conf(condicaoTr('2021TR', v1, 1).condicao === 'tr ILIKE $1', 'sem prefixo, a coluna sai nua');
-  conf(condicaoTr('2021TR', v2, 1, 'p.').condicao === 'p.tr ILIKE $1', 'com prefixo, sai qualificada');
+  // ⚠️ A CONDICAO TEM DOIS BRACOS desde 08/10/2026 — o ILIKE e a chave. O que esta secao mede
+  // continua sendo o PREFIXO: ele tem de qualificar a coluna nos DOIS, senao o Postgres escolhe
+  // sozinho num deles e estraga calado.
+  const c1 = condicaoTr('2021TR', v1, 1).condicao;
+  const c2 = condicaoTr('2021TR', v2, 1, 'p.').condicao;
+  conf(c1.includes('tr ILIKE $1') && !c1.includes('p.tr'), 'sem prefixo, a coluna sai nua', c1);
+  conf(c2.includes('p.tr ILIKE $1') && (c2.match(/p.tr/g) || []).length === 2,
+       'com prefixo, sai qualificada nos dois bracos', c2);
   const cp = condicaoProcesso('SCC 197/2021', [], 1, 'x.');
   conf(cp.condicao.includes('x.processo_pc') && cp.condicao.includes('x.processo_mae'),
        'e o processo qualifica os DOIS campos', cp.condicao.slice(0, 80));

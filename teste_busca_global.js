@@ -57,7 +57,13 @@ console.log('\n═══ 1b. AS TRES ENTRADAS VIRAM UMA CONDICAO, COM AND ══
   const v1 = [];
   const c1 = bg.condicaoAlvo({ tr: '2020TR000704', processo: 'SCC 197/2021' }, v1);
   conf(/ AND /.test(c1), 'TR e processo entram com AND', c1);
-  conf(v1.length === 2, 'com um parametro para cada', v1.length);
+  // ⚠️ SAO TRES DESDE 08/10/2026, e nao dois: a TR passou a entrar por DOIS bracos — o ILIKE do
+  // texto cru (que mantem a busca por pedaco) e a comparacao pela chave (que faz 
+  // encontrar ). O processo continua com um. O que importa e que os placeholders
+  // batam com a quantidade de valores: um a mais ou a menos aqui o Postgres recusa a consulta.
+  conf(v1.length === 3, 'dois parametros para a TR e um para o processo', v1.length);
+  const ph = [...new Set((c1.match(/\$\d+/g) || []))];
+  conf(ph.length === v1.length, 'e cada placeholder tem o seu valor', ph.join(',') + ' x ' + v1.length);
 
   const v2 = [];
   const c2 = bg.condicaoAlvo({ termo: 'APAE' }, v2);
